@@ -143,7 +143,7 @@ export function StartSessionButton({
           the only filled control, so the pair reads as one decision followed by
           one action rather than as two competing buttons. */}
       <div className="min-w-0">
-        <span className="block pb-1 pl-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-500">
+        <span className="block pb-1 pl-0.5 text-[9px] font-mono text-slate-500">
           Session location
         </span>
         <TerminalWorktreeLocationPicker

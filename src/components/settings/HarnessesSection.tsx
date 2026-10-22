@@ -111,7 +111,7 @@ export function HarnessesSection() {
   return (
     <div className="panel p-6 md:col-span-2 space-y-4">
       <div className="flex items-center justify-between border-b border-white/5 pb-2">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
           <Zap className="w-4 h-4 text-slate-400" /> Validation Harnesses
         </h3>
         <div className="flex items-center gap-3">
@@ -155,7 +155,7 @@ export function HarnessesSection() {
       )}
 
       <div>
-        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider" htmlFor="prepare-command">Prepare Command (optional)</label>
+        <label className="block text-xs font-mono text-slate-400 mb-1.5" htmlFor="prepare-command">Prepare Command (optional)</label>
         <div className="flex gap-2 items-center">
           <input id="prepare-command" type="text" value={s.prepareCommand} onChange={e => s.setPrepareCommand(e.target.value)} placeholder="e.g. npm ci or cargo fetch" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <ProbeStatus probe={probeFor(s.commandProbe, 'prepare')} probing={s.isProbingCommands} />
@@ -169,7 +169,7 @@ export function HarnessesSection() {
       </div>
 
       <div>
-        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider" htmlFor="test-command">Default Test Command</label>
+        <label className="block text-xs font-mono text-slate-400 mb-1.5" htmlFor="test-command">Default Test Command</label>
         <div className="flex gap-2 items-center">
           <input id="test-command" type="text" value={s.testCommand} onChange={e => s.setTestCommand(e.target.value)} placeholder="e.g. npm test or cargo test" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <ProbeStatus probe={probeFor(s.commandProbe, 'test')} probing={s.isProbingCommands} />
@@ -180,7 +180,7 @@ export function HarnessesSection() {
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 uppercase tracking-wider border-t border-white/5 pt-3">
+        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 border-t border-white/5 pt-3">
           <span>Named harnesses</span>
           <span>{gates.length > 0 ? `${gates.length} gating validation` : 'none gating — falls back to the test command'}</span>
         </div>
@@ -197,7 +197,7 @@ export function HarnessesSection() {
                   aria-label={`${name} gates validation`}
                   className="w-4 h-4 rounded border-white/20 bg-black/40 accent-accent"
                 />
-                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider hidden md:inline">gates</span>
+                <span className="text-[10px] font-mono text-slate-500 hidden md:inline">gates</span>
               </label>
               <div className="flex-1 min-w-0 font-mono text-xs text-white truncate">
                 <span className="text-cyan-400">{name}</span>: <span className="text-slate-300">{s.harnesses[name]}</span>

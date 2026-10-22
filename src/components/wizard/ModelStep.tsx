@@ -39,7 +39,7 @@ export function ModelStep({ enabled, loading, models, value, effort, effortLevel
     <div className="space-y-4" data-testid="wizard-step-model">
       <label
         htmlFor="wizard-model-input"
-        className="text-[11px] font-mono text-slate-400 uppercase tracking-widest flex items-center gap-1.5"
+        className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5"
       >
         <Zap className="w-3 h-3" /> Model
       </label>
@@ -76,7 +76,7 @@ export function ModelStep({ enabled, loading, models, value, effort, effortLevel
           <div>
             <label
               htmlFor="wizard-model-input"
-              className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1"
+              className="block text-[10px] font-mono text-slate-500 mb-1"
             >
               Or type a custom model id
             </label>
@@ -102,7 +102,7 @@ export function ModelStep({ enabled, loading, models, value, effort, effortLevel
           <div>
             <label
               htmlFor="wizard-effort-select"
-              className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-1.5"
+              className="block text-[10px] font-mono text-slate-500 mb-1 flex items-center gap-1.5"
             >
               <Gauge className="w-3 h-3" /> Default effort
             </label>

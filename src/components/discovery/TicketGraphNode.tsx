@@ -33,8 +33,11 @@ const LANE_ICON: Record<TicketLane, LucideIcon> = {
   dropped: CircleMinus,
 };
 
+/** Landed takes the neutral border: on a plan that is mostly done, an
+ *  emerald edge on every card drowns the amber of what is ready to start. The
+ *  check glyph still says it landed. */
 const TONE_BORDER: Record<RunStatusTone, string> = {
-  emerald: 'border-emerald-500/40',
+  emerald: 'border-slate-700/60',
   cyan: 'border-cyan-500/50',
   amber: 'border-amber-500/50',
   ruby: 'border-ruby-500/50',
@@ -103,8 +106,8 @@ export function TicketGraphNode({
             className={`line-clamp-2 block text-[13px] leading-snug font-medium ${
               dropped
                 ? 'text-slate-500 line-through'
-                : lane === 'landed'
-                  ? 'text-slate-300'
+                : lane === 'landed' || lane === 'blocked'
+                  ? 'text-slate-400'
                   : 'text-slate-100'
             }`}
           >

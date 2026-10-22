@@ -295,10 +295,9 @@ export function FeatureHeader({
             inline
             label="Cost"
             value={formatCost(totalCost)}
-            tone="emerald"
             tooltip={`${totalCost.toFixed(4)} USD across ${stepCount} steps`}
           />
-          <Metric inline label="Tokens" value={formatTokens(tokens)} tone="cyan" />
+          <Metric inline label="Tokens" value={formatTokens(tokens)} />
           {cacheReadTokens > 0 && (
             <Metric
               inline

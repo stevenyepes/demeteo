@@ -161,7 +161,7 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
           {showList ? (
             <div className="flex flex-col gap-1" ref={listRef}>
               {freeform && filteredOptions.length > 0 && (
-                <div className="px-3 py-2 text-[10px] text-slate-600 font-mono uppercase tracking-wider">
+                <div className="px-3 py-2 text-[10px] text-slate-600 font-mono">
                   {customValue.trim() ? `Results for "${customValue}"` : 'Available choices'}
                 </div>
               )}

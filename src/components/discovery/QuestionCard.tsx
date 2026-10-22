@@ -80,7 +80,7 @@ export function QuestionCard({
       }`}
     >
       <div className="mb-2.5 flex items-start justify-between gap-2.5">
-        <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] font-semibold text-slate-400">
           <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
           Interviewer
           {question.header && (
@@ -145,7 +145,7 @@ export function QuestionCard({
           data-testid="question-custom-answer"
           className="mt-2.5 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.06] px-3 py-2.5"
         >
-          <div className="mb-1 flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-cyan-400">
+          <div className="mb-1 flex items-center gap-1.5 font-mono text-[11px] font-semibold text-cyan-400">
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
             You answered in your own words
           </div>

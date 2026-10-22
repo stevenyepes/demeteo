@@ -11,7 +11,7 @@ export function FieldLabel({ children, icon, htmlFor, className = '' }: FieldLab
   return (
     <label
       htmlFor={htmlFor}
-      className={`flex items-center gap-1.5 text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider ${className}`}
+      className={`flex items-center gap-1.5 text-xs font-mono text-slate-400 mb-1.5 ${className}`}
     >
       {icon}
       {children}

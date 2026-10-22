@@ -50,7 +50,7 @@ export function BootstrapStepper({ phases }: { phases: BootstrapPhaseView[] }) {
 
   return (
     <div className="panel p-4 mb-6 animate-fade-in">
-      <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-[11px] mb-3">
+      <h3 className="font-heading font-semibold text-cyan-400 text-[11px] mb-3">
         {failed ? 'Bootstrap failed' : 'Bringing your pipeline online'}
       </h3>
       <div className="space-y-2">

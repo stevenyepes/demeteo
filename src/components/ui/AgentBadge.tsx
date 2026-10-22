@@ -40,7 +40,7 @@ function AgentBadgeImpl({
       ].join(' ')}
     >
       <Sparkles className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-      {!compact && <span className="uppercase tracking-wide">{label}</span>}
+      {!compact && <span className="">{label}</span>}
     </span>
   );
 }

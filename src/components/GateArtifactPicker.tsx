@@ -47,7 +47,7 @@ export function GateArtifactPicker({
       {reviewable.map(({ step, listed }) => (
         <div key={step.id} className="space-y-2">
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            <span className="text-[10px] font-bold text-slate-500">
               {step.step_id}
             </span>
             <Chip status={step.status} size="sm" />

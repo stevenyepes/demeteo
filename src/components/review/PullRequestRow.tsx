@@ -44,9 +44,10 @@ export interface PullRequestRowProps {
  * has to be read in full to find one row, which is the opposite of what a
  * review queue is for.
  *
- * The branch pair is a plain span rather than a `Chip`: chips are uppercase by
- * construction, and a branch name is a case-sensitive identifier — `Fix-Auth`
- * rendered as `FIX-AUTH` names a branch that does not exist.
+ * The branch pair is a plain span rather than a `Chip`: a chip is a state
+ * with a tone, and a branch name is an identifier with neither. It must also
+ * render verbatim — `Fix-Auth` shown as `FIX-AUTH`, as chips once did, names a
+ * branch that does not exist.
  *
  * The launch footer sits outside the link rather than inside it: a button and a
  * textarea nested in an anchor are interactive content inside interactive

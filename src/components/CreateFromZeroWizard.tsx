@@ -286,7 +286,7 @@ const CreateFromZeroWizard: React.FC = () => {
 
             {step === 'workflow' && (
               <div className="space-y-3">
-                <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
+                <label className="text-[11px] font-mono text-slate-400 block">
                   Pick a workflow
                 </label>
                 <CreateZeroWorkflowStep

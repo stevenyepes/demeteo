@@ -128,7 +128,7 @@ export function AskCanvasView({
                 <div
                   key={`stage-${column.stage}`}
                   style={{ left: column.x, top: 0, width: column.width, height: HEADER_H }}
-                  className="absolute flex items-center truncate px-2 font-heading text-[11px] font-medium uppercase tracking-wide text-slate-400"
+                  className="absolute flex items-center truncate px-2 font-heading text-[11px] font-medium text-slate-400"
                 >
                   {canvas.stages[column.stage]}
                 </div>
@@ -192,7 +192,7 @@ export function AskCanvasView({
                   <div
                     key={`lane-label-${band.lane}`}
                     style={{ left: 12, top: band.y + 4, height: LANE_LABEL_H }}
-                    className="pointer-events-none absolute flex items-center px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500"
+                    className="pointer-events-none absolute flex items-center px-2 font-mono text-[10px] text-slate-500"
                   >
                     {canvas.lanes[band.lane]}
                   </div>

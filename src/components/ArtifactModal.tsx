@@ -83,7 +83,7 @@ export function ArtifactModal({
               {basename}
             </h2>
             <p className="text-xs text-slate-400 truncate">
-              <span className="uppercase tracking-wider font-mono text-[10px] text-slate-500">
+              <span className="font-mono text-[10px] text-slate-500">
                 {ARTIFACT_KIND_LABELS[kind]}
               </span>
               {stepId ? <span> · {humanizeStepId(stepId)}</span> : null}

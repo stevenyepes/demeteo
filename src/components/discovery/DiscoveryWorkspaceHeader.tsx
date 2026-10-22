@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Code, GitBranch, Lock } from 'lucide-react';
+import { Code, GitBranch } from 'lucide-react';
 
 import { setDiscoveryBase } from '../../lib/discovery';
 import { baseBranchLabel, baseBranchLock, resolveBaseBranchInput } from '../../lib/discoveryBase';
@@ -15,6 +15,7 @@ import { BackButton } from '../ui/BackButton';
 import { Button, buttonClasses } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
+import { BaseBranchLockNote } from './BaseBranchLockNote';
 import { DiscoveryActionsMenu, type DiscoveryMenuAction } from './DiscoveryActionsMenu';
 import { OptionPill } from './OptionPill';
 import { useDiscoveryHeaderDensity } from './useDiscoveryHeaderDensity';
@@ -293,25 +294,17 @@ export function DiscoveryWorkspaceHeader({
           >
             <span data-testid="discovery-turns">{turnCountLabel(turnCount)}</span>
             {' · '}
-            <span className="text-emerald-300">{formatCost(discovery.total_cost)}</span>
+            <span className="text-slate-300">{formatCost(discovery.total_cost)}</span>
             {!narrow && (
               <>
                 {' · '}
-                <span className="text-cyan-300">{formatTokens(discovery.tokens)}</span> tokens
+                <span className="text-slate-300">{formatTokens(discovery.tokens)}</span> tokens
               </>
             )}
           </p>
         </div>
 
-        {lock.locked && (
-          <p
-            data-testid="discovery-base-locked"
-            className="m-0 flex items-start gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2.5 text-[11px] leading-relaxed text-slate-400"
-          >
-            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
-            {lock.reason}
-          </p>
-        )}
+        <BaseBranchLockNote lock={lock} />
 
         {editingBase && (
           <div className="nested-card mt-1 flex flex-col gap-2.5 px-3.5 py-3">

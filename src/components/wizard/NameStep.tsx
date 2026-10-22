@@ -27,7 +27,7 @@ export function NameStep({ value, onSubmit }: NameStepProps) {
     <div className="space-y-3" data-testid="wizard-step-name">
       <label
         htmlFor="wizard-name-input"
-        className="text-[11px] font-mono text-slate-400 uppercase tracking-widest"
+        className="text-[11px] font-mono text-slate-400"
       >
         What do you want to call this project?
       </label>

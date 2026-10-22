@@ -181,7 +181,7 @@ const ErrorToastRow: React.FC<{
     >
       <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${meta.accent}`} />
       <div className="flex-1 min-w-0">
-        <div className={`text-xs uppercase tracking-wider ${meta.accent} font-medium`}>
+        <div className={`text-xs ${meta.accent} font-medium`}>
           {meta.label}
         </div>
         <div className="text-sm text-slate-100 break-words mt-0.5">{message}</div>

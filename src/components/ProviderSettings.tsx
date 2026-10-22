@@ -75,7 +75,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
 
                 <div className="space-y-5">
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-2 uppercase tracking-wider">Provider Type</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-2">Provider Type</label>
                         <div className="flex gap-4">
                             <button 
                                 onClick={() => setProviderType('github')}
@@ -95,7 +95,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                     </div>
 
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Provider Name / Alias</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-1.5">Provider Name / Alias</label>
                         <input 
                             type="text"
                             value={name}
@@ -106,7 +106,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                     </div>
 
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Host URL (Optional)</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-1.5">Host URL (Optional)</label>
                         <div className="relative">
                             <Server className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
                             <input 
@@ -120,7 +120,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                     </div>
 
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Personal Access Token</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-1.5">Personal Access Token</label>
                         <input 
                             type="password"
                             value={pat}

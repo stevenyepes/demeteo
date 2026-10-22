@@ -28,7 +28,7 @@ export function CreateZeroAgentStep(props: CreateZeroAgentStepProps) {
     onAgentKindChange, onModelChange, onEffortChange, onClear } = props;
   return (
     <div className="space-y-4">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
+      <label className="text-[11px] font-mono text-slate-400 block">
         Which coding agent should run the feature?
       </label>
       <HarnessModelPicker

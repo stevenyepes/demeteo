@@ -65,7 +65,7 @@ const COMPONENTS_DEFAULT: Components = {
     </h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mt-3 mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-wider text-slate-300 first:mt-0">
+    <h4 className="mt-3 mb-1.5 font-heading text-[11px] font-semibold text-slate-300 first:mt-0">
       {children}
     </h4>
   ),
@@ -112,7 +112,7 @@ const COMPONENTS_DEFAULT: Components = {
   thead: ({ children }) => <thead className="bg-white/[0.03]">{children}</thead>,
   tr: ({ children }) => <tr className="border-t border-white/5 first:border-t-0">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-2.5 py-1.5 font-heading text-[11px] font-semibold tracking-wider text-slate-200 uppercase">
+    <th className="px-2.5 py-1.5 font-heading text-[11px] font-semibold text-slate-200">
       {children}
     </th>
   ),
@@ -162,7 +162,7 @@ const COMPONENTS_DENSE: Components = {
     </h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mt-2 mb-1 font-heading text-[10px] font-semibold uppercase tracking-wider text-slate-300 first:mt-0">
+    <h4 className="mt-2 mb-1 font-heading text-[10px] font-semibold text-slate-300 first:mt-0">
       {children}
     </h4>
   ),
@@ -207,7 +207,7 @@ const COMPONENTS_DENSE: Components = {
   thead: ({ children }) => <thead className="bg-white/[0.03]">{children}</thead>,
   tr: ({ children }) => <tr className="border-t border-white/5 first:border-t-0">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-2 py-1 font-heading text-[10px] font-semibold tracking-wider text-slate-200 uppercase">
+    <th className="px-2 py-1 font-heading text-[10px] font-semibold text-slate-200">
       {children}
     </th>
   ),

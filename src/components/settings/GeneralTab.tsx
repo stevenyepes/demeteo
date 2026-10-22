@@ -11,17 +11,17 @@ export function GeneralTab() {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* General Configuration */}
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
           <Globe className="w-4 h-4 text-slate-400" /> General Configuration
         </h3>
 
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Workspace Name</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Workspace Name</label>
           <input type="text" value={s.projectName} onChange={e => s.setProjectName(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring" />
         </div>
 
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Environment / Target Server</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Environment / Target Server</label>
           <div className="flex gap-2">
             <button onClick={() => s.setComputeType('local')} className={`flex-1 flex items-center justify-center gap-2 border rounded-lg py-2 px-3 text-sm transition-all ${s.computeType === 'local' ? 'bg-accent-tint border-accent-edge text-white' : 'bg-black/40 border-white/5 text-slate-400'}`}>
               <HardDrive className="w-4 h-4" /> Local Compute
@@ -50,7 +50,7 @@ export function GeneralTab() {
 
       {/* Repositories */}
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
           <Box className="w-4 h-4 text-slate-400" /> Repositories Mapped ({s.selectedRepos.length})
         </h3>
         <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1">
@@ -75,7 +75,7 @@ export function GeneralTab() {
           <div className="rounded-xl border border-ruby-500/30 bg-ruby-500/5 p-4 mb-3">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="w-4 h-4 text-ruby-400" />
-              <span className="font-heading text-sm font-semibold text-ruby-300 uppercase tracking-wider">Workspace Health Check Failed</span>
+              <span className="font-heading text-sm font-semibold text-ruby-300">Workspace Health Check Failed</span>
             </div>
             <pre className="font-mono text-xs text-ruby-200/80 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{s.healthError}</pre>
             <div className="mt-3 flex gap-2">
@@ -96,7 +96,7 @@ export function GeneralTab() {
             <div role="button" tabIndex={0} onClick={() => s.setHealthExpanded(!s.healthExpanded)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.setHealthExpanded(!s.healthExpanded); } }} className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer">
               <div className="flex items-center gap-2.5">
                 <Activity className="w-4 h-4 text-slate-400" />
-                <span className="font-heading text-sm font-semibold text-slate-200 uppercase tracking-wider">Workspace Health</span>
+                <span className="font-heading text-sm font-semibold text-slate-200">Workspace Health</span>
                 {s.healthData && s.healthData.length > 0 && (() => {
                   const hasError = s.healthData!.some(r => !r.is_cloned);
                   const hasDirty = s.healthData!.some(r => r.has_uncommitted || r.has_unpushed);

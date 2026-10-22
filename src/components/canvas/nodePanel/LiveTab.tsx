@@ -48,7 +48,7 @@ export function LiveTab({
             <span>Waiting for agent output…</span>
           </>
         ) : (
-          <span className="font-bold uppercase tracking-wider text-slate-600">
+          <span className="font-bold text-slate-600">
             No live output — this node isn&apos;t running.
           </span>
         )}
@@ -57,7 +57,7 @@ export function LiveTab({
   }
   return (
     <div className="flex h-full flex-col overflow-hidden px-5 py-4">
-      <div className="mb-2 flex shrink-0 items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+      <div className="mb-2 flex shrink-0 items-center gap-2 text-[10px] font-bold text-slate-500">
         {isStreaming && <Cpu className="h-3 w-3 animate-spin text-cyan-400" />}
         Agent reasoning
       </div>

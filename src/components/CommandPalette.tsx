@@ -10,6 +10,14 @@ interface CommandEntry {
   onSelect: () => void;
 }
 
+const CATEGORY_LABEL: Record<CommandEntry['category'], string> = {
+  project: 'Project',
+  feature: 'Feature',
+  workflow: 'Workflow',
+  action: 'Action',
+  settings: 'Settings',
+};
+
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
@@ -129,10 +137,10 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
                     {entry.description}
                   </div>
                 </div>
-                <span className={`text-[10px] font-mono uppercase tracking-wider shrink-0 ${
+                <span className={`text-[10px] font-mono shrink-0 ${
                   idx === selectedIndex ? 'text-accent-ink' : 'text-slate-600'
                 }`}>
-                  {entry.category}
+                  {CATEGORY_LABEL[entry.category]}
                 </span>
                 {idx === selectedIndex && (
                   <ArrowRight className="w-3.5 h-3.5 text-accent-ink shrink-0" />

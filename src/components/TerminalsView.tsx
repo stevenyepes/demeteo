@@ -95,7 +95,7 @@ export function TerminalsView({ active, openLauncherSignal }: TerminalsViewProps
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5 shrink-0">
               <div className="flex items-center gap-2 text-[11px] font-mono text-slate-300">
                 <BackButton />
-                <span className="uppercase tracking-wider font-semibold text-slate-400">
+                <span className="font-semibold text-slate-400">
                   Terminals
                 </span>
                 <span className="text-cyan-400">{tabs.length}</span>

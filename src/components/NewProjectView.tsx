@@ -386,7 +386,7 @@ const NewProjectView = () => {
 
                     <div className="panel p-6 space-y-5">
                         <div>
-                            <label className="text-xs font-mono text-slate-400 uppercase tracking-widest mb-2 block">Project Name</label>
+                            <label className="text-xs font-mono text-slate-400 mb-2 block">Project Name</label>
                             <input
                                 type="text"
                                 value={projectName}
@@ -398,7 +398,7 @@ const NewProjectView = () => {
                         </div>
 
                         <div>
-                            <label className="text-xs font-mono text-slate-400 uppercase tracking-widest mb-2 block">Environment / Target Server</label>
+                            <label className="text-xs font-mono text-slate-400 mb-2 block">Environment / Target Server</label>
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => setComputeType('local')}
@@ -503,7 +503,7 @@ const NewProjectView = () => {
                                         before the bootstrap clone runs. */}
                                     {showPassphraseField && (
                                         <div>
-                                            <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                                            <label className="block text-[10px] font-mono text-slate-400 mb-1.5 flex items-center gap-1.5">
                                                 <Key className="w-3 h-3" /> Private Key Passphrase
                                             </label>
                                             <input
@@ -535,7 +535,7 @@ const NewProjectView = () => {
                         </div>
 
                         <div>
-                            <label className="text-xs font-mono text-slate-400 uppercase tracking-widest mb-2 flex justify-between items-center">
+                            <label className="text-xs font-mono text-slate-400 mb-2 flex justify-between items-center">
                                 <span>Select Repositories</span>
                                 <span className="text-slate-300">{selectedRepos.length} Mapped</span>
                             </label>
@@ -579,7 +579,7 @@ const NewProjectView = () => {
                     {bootstrapStep === 'form' ? (
                         <>
                             <div className="mb-6">
-                                <h3 className="font-heading font-semibold text-slate-400 uppercase tracking-widest text-xs mb-1">AUTOMATED PROPOSAL</h3>
+                                <h3 className="font-heading font-semibold text-slate-400 text-xs mb-1">AUTOMATED PROPOSAL</h3>
                                 <h2 className="text-xl font-bold text-white">Suggested Worktree Strategy</h2>
                             </div>
 
@@ -608,13 +608,13 @@ const NewProjectView = () => {
                     ) : (
                         <>
                             <div className="mb-6 border-b border-white/5 pb-4">
-                                <h3 className="font-heading font-semibold text-slate-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                                <h3 className="font-heading font-semibold text-slate-400 text-xs mb-1">STRATEGY DETECTED</h3>
                                 <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                             </div>
 
                             <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                                 <div>
-                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Branch</label>
+                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Default Branch</label>
                                     <input 
                                         type="text" 
                                         value={defaultBranch} 
@@ -624,7 +624,7 @@ const NewProjectView = () => {
                                 </div>
 
                                 <div>
-                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Branch Prefix</label>
+                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Branch Prefix</label>
                                     <input 
                                         type="text" 
                                         value={branchPrefix} 
@@ -634,7 +634,7 @@ const NewProjectView = () => {
                                 </div>
 
                                 <div>
-                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Test Command</label>
+                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Default Test Command</label>
                                     <input 
                                         type="text" 
                                         value={testCommand} 
@@ -650,7 +650,7 @@ const NewProjectView = () => {
                                     reading as "nothing was found". Editable in Settings → Strategy. */}
                                 {detected?.validation_gates?.length ? (
                                     <div>
-                                        <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected Validation Gates</label>
+                                        <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Detected Validation Gates</label>
                                         <div className="space-y-1">
                                             {detected.validation_gates.map(name => (
                                                 <div key={name} className="flex gap-2 items-center p-2 rounded-lg border bg-emerald-500/5 border-emerald-500/20">
@@ -669,7 +669,7 @@ const NewProjectView = () => {
 
 
                                 <div>
-                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
+                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
                                     <select 
                                         value={featureLifecycle} 
                                         onChange={e => setFeatureLifecycle(e.target.value)}
@@ -683,7 +683,7 @@ const NewProjectView = () => {
 
                                 {prTemplate && (
                                     <div>
-                                        <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected PR Template</label>
+                                        <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Detected PR Template</label>
                                         <div className="w-full bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-[100px] overflow-y-auto leading-relaxed">
                                             {prTemplate}
                                         </div>

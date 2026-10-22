@@ -262,7 +262,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
               shrink below its content height and the overflow never engages. */}
           <div className="p-6 flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Environment Name</label>
+              <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Environment Name</label>
               <input
                 type="text"
                 value={form.name}
@@ -273,7 +273,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Connection Details (User@Host:Port)</label>
+              <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Connection Details (User@Host:Port)</label>
               <input
                 type="text"
                 value={form.connection}
@@ -284,7 +284,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold flex items-center">
+              <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold flex items-center">
                 <Key size={10} className="mr-1" /> Auth Method
               </label>
               <div className="flex flex-col gap-1">
@@ -315,7 +315,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             {form.authType === "key" && (
               <div className="flex flex-col gap-3">
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Private Key Path</label>
+                  <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Private Key Path</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -335,7 +335,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   )}
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Key Passphrase (Optional)</label>
+                  <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Key Passphrase (Optional)</label>
                   <input
                     type="password"
                     value={form.secret}
@@ -353,7 +353,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
 
             {form.authType === "password" && (
               <div>
-                <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">SSH Password</label>
+                <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">SSH Password</label>
                 <input
                   type="password"
                   value={form.secret}
@@ -373,7 +373,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2 font-semibold flex items-center">
+              <label className="block text-[10px] text-slate-500 mb-2 font-semibold flex items-center">
                 <Cpu size={10} className="mr-1" /> Enabled Agents
               </label>
               <div className="flex flex-wrap gap-2">
@@ -395,7 +395,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
 
             <div className="border-t border-white/5 pt-4 space-y-3">
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1 font-semibold flex items-center">
+              <label className="block text-[10px] text-slate-500 mb-1 font-semibold flex items-center">
                 <Server size={10} className="mr-1" /> Shell Environment
               </label>
 

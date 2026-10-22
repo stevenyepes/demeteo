@@ -142,7 +142,7 @@ function ShortcutRow({ entry, platform }: ShortcutRowProps): React.ReactElement 
           </span>
           {entry.badge && (
             <span
-              className={`shrink-0 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded border ${BADGE_CLASSES[entry.badge]}`}
+              className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${BADGE_CLASSES[entry.badge]}`}
             >
               {BADGE_LABEL[entry.badge]}
             </span>
@@ -366,7 +366,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
                   data-testid={`shortcut-help-group-${group.id}`}
                 >
                   <header className="px-4 py-3 border-b border-white/5 bg-white/[0.02]">
-                    <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-300 font-heading">
+                    <h3 className="text-xs font-bold text-slate-300 font-heading">
                       {group.title}
                     </h3>
                     {group.description && (

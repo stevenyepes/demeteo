@@ -57,7 +57,7 @@ export function SyncRawOutput({ text }: { text: string }) {
             <pre className="whitespace-pre-wrap break-words">{output.head}</pre>
             <p
               data-testid="sync-raw-error-elision"
-              className="my-2 select-none text-center font-sans text-[10px] font-bold uppercase tracking-widest text-slate-500"
+              className="my-2 select-none text-center font-sans text-[10px] font-bold text-slate-500"
             >
               ··· {output.hiddenLines} lines hidden ···
             </p>
@@ -70,7 +70,7 @@ export function SyncRawOutput({ text }: { text: string }) {
         data-testid="sync-raw-error-toggle"
         aria-expanded={expanded}
         onClick={() => setExpanded((was) => !was)}
-        className="mt-2 rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+        className="mt-2 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
       >
         {expanded ? 'Show the ends only' : `Show all ${output.totalLines} lines`}
       </button>

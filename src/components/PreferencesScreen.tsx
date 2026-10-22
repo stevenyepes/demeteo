@@ -203,7 +203,7 @@ const PreferencesScreen = () => {
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+                  <label className="block text-[10px] font-mono text-slate-500 mb-1.5">
                     Active directory
                   </label>
                   <p className="font-mono text-xs text-slate-300 bg-black/40 border border-white/5 rounded-lg px-3 py-2 break-all">
@@ -212,7 +212,7 @@ const PreferencesScreen = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+                  <label className="block text-[10px] font-mono text-slate-500 mb-1.5">
                     Custom path override <span className="normal-case text-slate-600">(leave blank to use default)</span>
                   </label>
                   <div className="flex gap-2">
@@ -386,7 +386,7 @@ const PreferencesScreen = () => {
                   <h3 className="text-base font-heading font-bold text-white">Demeteo</h3>
                   <span
                     data-testid="channel-badge"
-                    className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${
+                    className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold ${
                       appVersion.channel === 'nightly'
                         ? 'bg-white/5 text-slate-300 border-white/10'
                         : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'

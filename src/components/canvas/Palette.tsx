@@ -210,7 +210,7 @@ export function NodeTypePicker({
         aria-label={title}
         data-testid="node-type-picker"
       >
-        <p className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+        <p className="px-1 pb-2 text-[11px] font-medium text-slate-400">
           {title}
         </p>
         <input

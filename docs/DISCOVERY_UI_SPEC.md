@@ -989,6 +989,15 @@ flight (DSC-3 waits on an open PR), **slate** when the prerequisite has not even
 started (DSC-5, DSC-7). That distinction is visible in the tint, the node border
 and the inspector verdict colour, and it is worth preserving.
 
+> **Superseded (2026-10).** As built, Ready is **amber** and every Blocked
+> ticket is **slate**, and the board lists Ready first. Decision 61 took violet
+> out of statuses, so Ready fell to slate and a startable ticket became
+> indistinguishable from a blocked one, while the only amber on the graph sat
+> on tickets nobody could act on. Amber means a human is needed (AGENTS.md
+> §4), which describes Ready and not Blocked; a blocked ticket's note still
+> names what it waits on. Landed cards keep a neutral border and their check
+> glyph. `ticketPresentation.ts` holds the mapping.
+
 Titles: DSC-1 `Session registry keyed by client id` · DSC-2 `Authenticate clients
 by ed25519 keypair` · DSC-3 `Multiplex run streams over one connection` ·
 DSC-4 `Desktop picks a runner identity per project` · DSC-5 `Fair-share
@@ -1554,7 +1563,7 @@ The mocks obey AGENTS.md §4 exactly. Restated with the Discovery meanings:
 | **ruby** `#ef4444` / `#f87171` / `#fecaca` | error / removal | the `Removed` group label, `.was` strike-through in a diff, destructive hover on `.x`, the vision warning's background and text |
 | **slate** `#64748b` / `#94a3b8` / `#475569` / `#334155` | inert / unstarted | **Dropped** bucket, blocked-with-nothing-started, secondary copy, edges, grid dots, `.lbl` |
 
-Note the two amber/slate grades of *blocked* (§3.5.5) and that ruby appears
+Note the two amber/slate grades of *blocked* (§3.5.5, since superseded: Ready is amber, Blocked slate) and that ruby appears
 **only** for removal and error — never for a blocked or dropped ticket.
 
 ### 6.2 Reusable pieces the mocks repeat

@@ -23,7 +23,7 @@ export function GroupStep({ namespaces, loading, value, onSubmit }: GroupStepPro
 
   return (
     <div className="space-y-4" data-testid="wizard-step-group">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest">
+      <label className="text-[11px] font-mono text-slate-400">
         Namespace / group
       </label>
 
@@ -66,7 +66,7 @@ export function GroupStep({ namespaces, loading, value, onSubmit }: GroupStepPro
       <div>
         <label
           htmlFor="wizard-namespace-manual"
-          className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block mb-1"
+          className="text-[10px] font-mono text-slate-500 block mb-1"
         >
           Or type a namespace id
         </label>

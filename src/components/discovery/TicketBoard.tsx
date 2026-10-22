@@ -1,17 +1,9 @@
 import React from 'react';
 
 import { TONE_TEXT } from '../../lib/runStatus';
-import { bucketByLane, ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
+import { LANE_DOT, bucketByLane, ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
 import type { TicketView } from '../../types';
 import { TicketBoardCard } from './TicketBoardCard';
-
-const LANE_DOT = {
-  blocked: 'bg-amber-400',
-  ready: 'bg-slate-300',
-  in_flight: 'bg-cyan-400',
-  landed: 'bg-emerald-400',
-  dropped: 'bg-slate-500',
-} as const;
 
 interface TicketBoardProps {
   tickets: TicketView[];
@@ -62,7 +54,7 @@ export function TicketBoard({
                   key={view.ticket.id}
                   view={view}
                   index={index}
-                  tone={ticketTone(view, index)}
+                  tone={ticketTone(view)}
                   selected={selectedId === view.ticket.id}
                   onSelect={() => onSelect(view.ticket.id)}
                 />

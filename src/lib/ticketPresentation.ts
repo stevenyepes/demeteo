@@ -30,14 +30,32 @@ export interface LaneMeta {
   tone: RunStatusTone;
 }
 
-/** All five, always, in this order (`DISCOVERY_UI_SPEC.md` §3.5.4). */
+/**
+ * All five, always. Ready leads because it is the lane a person acts on, and
+ * it is the one amber lane for the same reason: a ready ticket waits for
+ * someone to start it, which is exactly what amber means (AGENTS.md §4). The
+ * spec painted Ready violet; decision 61 took violet out of statuses, and the
+ * slate it fell back to made a startable ticket read as a blocked one.
+ * Blocked is slate whatever its prerequisites are doing — nobody can act on
+ * it, and its note already names what it waits on.
+ */
 export const TICKET_LANES: readonly LaneMeta[] = [
-  { lane: 'blocked', label: 'Blocked', note: 'waiting on an edge', tone: 'amber' },
-  { lane: 'ready', label: 'Ready', note: 'you start these', tone: 'slate' },
+  { lane: 'ready', label: 'Ready', note: 'you start these', tone: 'amber' },
   { lane: 'in_flight', label: 'In flight', note: 'PR open', tone: 'cyan' },
+  { lane: 'blocked', label: 'Blocked', note: 'waiting on an edge', tone: 'slate' },
   { lane: 'landed', label: 'Landed', note: 'merged into master', tone: 'emerald' },
   { lane: 'dropped', label: 'Dropped', note: 'decided against, with a reason', tone: 'slate' },
 ];
+
+/** The legend and lane-header dot. Blocked and dropped share a tone, so the
+ *  dot is what tells them apart at a glance. */
+export const LANE_DOT: Record<TicketLane, string> = {
+  ready: 'bg-amber-400',
+  in_flight: 'bg-cyan-400',
+  blocked: 'bg-slate-400',
+  landed: 'bg-emerald-400',
+  dropped: 'bg-slate-600',
+};
 
 /** Group every ticket into its lane, empty lanes included. */
 export function bucketByLane(
@@ -49,29 +67,13 @@ export function bucketByLane(
   }));
 }
 
-/**
- * Blocked has two grades: amber once a prerequisite is at least in flight,
- * slate while none of them has started. §3.5.5 keeps that distinction because
- * it is the difference between waiting for a review and waiting for someone to
- * begin.
- */
-export function ticketTone(view: TicketView, index: TicketIndex): RunStatusTone {
-  switch (view.standing.lane) {
-    case 'landed':
-      return 'emerald';
-    case 'in_flight':
-      return 'cyan';
-    case 'ready':
-    case 'dropped':
-      return 'slate';
-    case 'blocked':
-      return view.standing.blockers.some(
-        (blocker) => index.get(blocker.id)?.standing.lane === 'in_flight',
-      )
-        ? 'amber'
-        : 'slate';
-  }
+export function ticketTone(view: TicketView): RunStatusTone {
+  return LANE_TONE[view.standing.lane];
 }
+
+const LANE_TONE = Object.fromEntries(
+  TICKET_LANES.map((meta) => [meta.lane, meta.tone]),
+) as Record<TicketLane, RunStatusTone>;
 
 /** The lane's own word for a ticket sitting in it. */
 export function stateLabel(view: TicketView): string {
@@ -132,7 +134,7 @@ export interface Verdict {
  * *saying* a ticket is startable rather than claiming it starts one.
  */
 export function verdict(view: TicketView, index: TicketIndex): Verdict {
-  const tone = ticketTone(view, index);
+  const tone = ticketTone(view);
   switch (view.standing.lane) {
     case 'landed':
       return {

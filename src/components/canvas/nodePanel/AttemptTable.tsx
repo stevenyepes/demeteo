@@ -22,7 +22,7 @@ export function AttemptTable({
 }) {
   return (
     <div>
-      <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+      <div className="mb-2 text-[10px] font-bold text-slate-500">
         Attempt history
       </div>
       {!hasExecution ? (
@@ -41,7 +41,7 @@ export function AttemptTable({
       ) : (
         <div className="overflow-hidden rounded-xl border border-white/5">
           <table className="w-full border-collapse text-left text-xs">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-wider text-slate-500">
+            <thead className="bg-white/[0.02] text-[10px] text-slate-500">
               <tr>
                 <Th>#</Th>
                 <Th>Status</Th>

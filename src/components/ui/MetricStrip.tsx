@@ -30,7 +30,8 @@ import { TONE_TEXT, type RunStatusTone } from '../../lib/runStatus';
 export interface MetricProps {
   label: string;
   value: string;
-  /** Status tone for the value; omitted leaves it neutral white. */
+  /** Status tone for the value; omitted leaves it neutral white. A quantity
+   *  such as cost or tokens is not a status and takes none (AGENTS.md §4). */
   tone?: RunStatusTone;
   tooltip?: string;
   className?: string;
@@ -84,7 +85,7 @@ export function Metric({
       title={tooltip}
       className={`flex flex-col justify-center gap-1 shrink-0 ${className}`}
     >
-      <span className="text-[10px] font-bold uppercase tracking-wider leading-none text-slate-500">
+      <span className="text-[10px] font-bold leading-none text-slate-500">
         {label}
       </span>
       {valueEl}

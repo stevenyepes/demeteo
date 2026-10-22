@@ -85,7 +85,7 @@ export function Inspector<T extends string>({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             {icon}
-            <h3 className="truncate font-heading text-sm font-bold uppercase tracking-wider text-white">
+            <h3 className="truncate font-heading text-sm font-bold text-white">
               {title}
             </h3>
           </div>

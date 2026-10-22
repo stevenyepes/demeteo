@@ -26,7 +26,7 @@ export const GateParkReason: React.FC<GateParkReasonProps> = ({ reason, report, 
     className="p-4 rounded-lg bg-amber-500/[0.04] border border-amber-500/20 text-sm text-slate-300 leading-relaxed space-y-3"
   >
     <div className="flex items-center justify-between gap-3">
-      <div className="text-amber-300 font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider">
+      <div className="text-amber-300 font-semibold flex items-center gap-1.5 text-xs">
         <ShieldAlert className="w-3.5 h-3.5" /> Why the run stopped here
       </div>
       {report && (

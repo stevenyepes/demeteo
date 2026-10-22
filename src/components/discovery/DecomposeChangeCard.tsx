@@ -75,7 +75,7 @@ export function DecomposeChangeCard({
           <span className="mt-2.5 flex flex-col gap-1.5 rounded-lg border border-white/[0.04] bg-[#050608]/70 px-3 py-2.5">
             {change.fields.map((field) => (
               <span key={field.field} className="flex items-baseline gap-2.5">
-                <span className="w-[92px] shrink-0 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <span className="w-[92px] shrink-0 font-mono text-[10px] font-bold text-slate-500">
                   {field.field}
                 </span>
                 <span className="min-w-0 flex-1 font-mono text-[11px] leading-relaxed">

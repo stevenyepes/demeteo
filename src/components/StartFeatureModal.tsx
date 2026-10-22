@@ -822,7 +822,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               `attachments` field on `onLaunch` for the commit step. */}
           <div data-attachment-dropzone>
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+              <span className="text-[11px] font-mono text-slate-400">
                 Attachments
               </span>
               <span className="text-[10px] font-mono text-slate-500">
@@ -853,7 +853,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
           {/* Title */}
           <div>
-            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
               Title
             </label>
             <input
@@ -868,7 +868,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
           {/* Description */}
           <div>
-            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
               Describe the feature
             </label>
             <textarea
@@ -884,7 +884,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           <div>
             <label
               htmlFor="start-feature-workflow"
-              className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+              className="block text-[11px] font-mono text-slate-400 mb-1.5"
             >
               Workflow
             </label>
@@ -917,7 +917,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
             <label
               htmlFor="start-feature-placement"
-              className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider"
+              className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5"
             >
               <Server className="w-3.5 h-3.5 text-cyan-400" />
               Where to run
@@ -989,7 +989,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <GitBranch className="w-3.5 h-3.5 text-slate-400" />
-                <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+                <span className="text-[11px] font-mono text-slate-400">
                   Target repositories
                 </span>
                 <span className="text-[10px] font-mono text-slate-500">
@@ -1064,7 +1064,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           {showAdvanced && (
             <div className="space-y-3 pl-3 border-l border-white/5">
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Default agent, model &amp; effort — all steps
                 </label>
                 <HarnessModelPicker
@@ -1104,7 +1104,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   reviewed pipeline?" gets answered before spending anything. */}
               {graph && graph.nodes.length > 0 && (
                 <div>
-                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                     Pipeline shape
                   </label>
                   <div className="rounded-lg border border-white/5 bg-black/20 p-3 max-h-48 overflow-y-auto">
@@ -1117,7 +1117,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   default above → the workflow step → the project default. */}
               {steps.length > 0 && (
                 <div>
-                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                     Per-step overrides (optional)
                   </label>
                   <div className="space-y-2.5">
@@ -1171,7 +1171,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               )}
 
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Loop iterations (optional)
                 </label>
                 <input
@@ -1189,7 +1189,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Per-turn budget (optional)
                 </label>
                 <input
@@ -1209,7 +1209,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Commit artifacts to PR
                 </label>
                 <div className="grid grid-cols-3 gap-1.5">
@@ -1222,7 +1222,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                       key={opt.key}
                       type="button"
                       onClick={() => setCommitArtifacts(opt.key)}
-                      className={`px-2.5 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
+                      className={`px-2.5 py-2 rounded-lg text-[11px] font-semibold border transition-colors ${
                         commitArtifacts === opt.key
                           ? 'bg-accent-tint border-accent-edge text-white'
                           : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'

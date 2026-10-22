@@ -180,13 +180,13 @@ export function ConfigPanel({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <TypeIcon className={`h-4 w-4 shrink-0 ${TONE_TEXT[meta.tone]}`} aria-hidden />
-            <h3 className="truncate font-heading text-sm font-bold uppercase tracking-wider text-white">
+            <h3 className="truncate font-heading text-sm font-bold text-white">
               {node.title || node.id}
             </h3>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${TONE_CHIP[meta.tone]}`}
+              className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${TONE_CHIP[meta.tone]}`}
             >
               {type?.label ?? meta.label}
             </span>
@@ -314,7 +314,7 @@ function supportsVerifier(type: NodeTypeInfo | null): boolean {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="space-y-3">
-      <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{title}</h4>
+      <h4 className="text-[10px] font-bold text-slate-500">{title}</h4>
       {children}
     </section>
   );

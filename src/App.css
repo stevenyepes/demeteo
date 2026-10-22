@@ -215,8 +215,6 @@
   .chat-bubble-sender {
     font-size: 0.75rem;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     margin-bottom: 4px;
     display: flex;
     align-items: center;
@@ -463,11 +461,13 @@ body {
    PINNED UTILITY COLOURS
    ----------------------------------------------------
    These re-declare a few dozen Tailwind colour utilities at their Tailwind v3
-   values, so they render slightly off their v4 neighbours: `text-cyan-400`
-   here is v3's #22d3ee, while `text-cyan-300` beside it is v4's oklch. Deleting
+   values, so they render slightly off their v4 neighbours: `text-amber-500`
+   here is v3's #f59e0b, while `text-amber-400` beside it is v4's oklch. Deleting
    the block re-tints the app's most common classes, which is a palette
    decision for the token rewrite rather than a compatibility fix: WebKitGTK
-   2.52 renders v4's oklch and color-mix() natively.
+   2.52 renders v4's oklch and color-mix() natively. Emerald and cyan are no
+   longer pinned here: their values live in `src/styles/tokens.css`, and a pin
+   would silently beat them.
 
    They sit at the end of `utilities`, so they still beat Tailwind's own rule
    of the same name. They used to be unlayered `!important`, which also beat
@@ -476,10 +476,6 @@ body {
    `!important` back. */
 @layer utilities {
   .bg-slate-900\/80 { background-color: rgba(15, 23, 42, 0.8); }
-  .bg-cyan-500\/10 { background-color: rgba(6, 182, 212, 0.1); }
-  .bg-cyan-500\/20 { background-color: rgba(6, 182, 212, 0.2); }
-  .bg-emerald-500\/10 { background-color: rgba(16, 185, 129, 0.1); }
-  .bg-emerald-500\/20 { background-color: rgba(16, 185, 129, 0.2); }
   .bg-amber-500\/10 { background-color: rgba(245, 158, 11, 0.1); }
   .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.1); }
   .bg-white\/5 { background-color: rgba(255, 255, 255, 0.05); }
@@ -487,17 +483,10 @@ body {
   .border-white\/5 { border-color: rgba(255, 255, 255, 0.05); }
   .border-white\/10 { border-color: rgba(255, 255, 255, 0.1); }
   .border-white\/20 { border-color: rgba(255, 255, 255, 0.2); }
-  .border-cyan-500\/30 { border-color: rgba(6, 182, 212, 0.3); }
-  .border-cyan-500\/50 { border-color: rgba(6, 182, 212, 0.5); }
   .border-amber-500\/20 { border-color: rgba(245, 158, 11, 0.2); }
   .border-amber-500\/30 { border-color: rgba(245, 158, 11, 0.3); }
   .border-red-500\/20 { border-color: rgba(239, 68, 68, 0.2); }
   .border-red-500\/30 { border-color: rgba(239, 68, 68, 0.3); }
-  .text-cyan-400 { color: #22d3ee; }
-  .text-cyan-500 { color: #06b6d4; }
-  .text-cyan-500\/70 { color: rgba(6, 182, 212, 0.7); }
-  .text-emerald-400 { color: #34d399; }
-  .text-emerald-500 { color: #10b981; }
   .text-amber-500 { color: #f59e0b; }
   .text-red-400 { color: #f87171; }
   .text-slate-200 { color: #e2e8f0; }

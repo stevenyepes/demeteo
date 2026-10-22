@@ -18,7 +18,7 @@ export function AgentStep({ agentKinds, value, onSubmit }: AgentStepProps) {
     <div className="space-y-4" data-testid="wizard-step-agent">
       <label
         htmlFor="wizard-agent-select"
-        className="text-[11px] font-mono text-slate-400 uppercase tracking-widest flex items-center gap-1.5"
+        className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5"
       >
         <Cpu className="w-3 h-3" /> Which coding agent should run the feature?
       </label>

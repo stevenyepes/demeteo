@@ -169,7 +169,7 @@ export function McpConnectAgentPanel({ serverUrl }: { serverUrl: string }) {
 
   return (
     <div className="nested-card p-4 space-y-3">
-      <h4 className="font-heading text-xs font-semibold text-slate-300 uppercase tracking-wider">
+      <h4 className="font-heading text-xs font-semibold text-slate-300">
         Connect an agent
       </h4>
       <TabBar tabs={tabs} activeTab={selected} onChange={setSelected} ariaLabel="Agent to set up" size="sm" />

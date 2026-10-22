@@ -39,7 +39,7 @@ export function DescriptionStep({
       <div>
         <label
           htmlFor="wizard-title"
-          className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block mb-1"
+          className="text-[11px] font-mono text-slate-400 block mb-1"
         >
           Feature title
         </label>
@@ -62,7 +62,7 @@ export function DescriptionStep({
       <div>
         <label
           htmlFor="wizard-description"
-          className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block mb-1"
+          className="text-[11px] font-mono text-slate-400 block mb-1"
         >
           What do you want to build?
         </label>
@@ -86,7 +86,7 @@ export function DescriptionStep({
       </div>
 
       <div>
-        <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block mb-1">
+        <label className="text-[11px] font-mono text-slate-400 block mb-1">
           Repo visibility
         </label>
         <div className="grid grid-cols-2 gap-1.5">

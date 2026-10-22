@@ -86,7 +86,7 @@ function Shell() {
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="panel max-w-xl w-full p-6 flex flex-col">
           <div className="mb-6 border-b border-white/5 pb-4">
-            <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY UPDATED</h3>
+            <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">STRATEGY UPDATED</h3>
             <h2 className="text-xl font-bold text-white">Approve Detected Worktree Strategy</h2>
           </div>
           <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
@@ -96,12 +96,12 @@ function Shell() {
               { label: 'Default Test Command', value: s.testCommand, onChange: s.setTestCommand, placeholder: 'e.g. npm test or cargo test' },
             ].map(({ label, value, onChange, placeholder }) => (
               <div key={label}>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">{label}</label>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">{label}</label>
                 <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring placeholder-slate-600" />
               </div>
             ))}
             <div>
-              <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
+              <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
               <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring">
                 <option value="archive">Archive by default</option>
                 <option value="keep">Keep active</option>
@@ -110,7 +110,7 @@ function Shell() {
             </div>
             {s.prTemplate && (
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected PR Template</label>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Detected PR Template</label>
                 <div className="w-full bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-[100px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
               </div>
             )}

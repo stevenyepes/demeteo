@@ -114,7 +114,7 @@ const MemoryAgentSettings: React.FC = () => {
   }
 
   const field = (label: string, hint?: string) => (
-    <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+    <label className="block text-[10px] font-mono text-slate-500 mb-1.5">
       {label}
       {hint && <span className="normal-case text-slate-600"> {hint}</span>}
     </label>

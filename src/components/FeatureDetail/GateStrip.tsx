@@ -67,7 +67,7 @@ export function GateStrip({
           className="h-2 w-2 shrink-0 rounded-full bg-current animate-pulse-glow-amber"
         />
         <ShieldAlert className="w-4 h-4 shrink-0" />
-        <span className="text-xs font-semibold uppercase tracking-wide">
+        <span className="text-xs font-semibold">
           {gates.length === 1 ? '1 gate needs you' : `${gates.length} gates need you`}
         </span>
         <span className="truncate font-mono text-xs opacity-80" title={stepName}>
