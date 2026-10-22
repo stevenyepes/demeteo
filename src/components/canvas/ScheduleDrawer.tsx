@@ -154,7 +154,7 @@ export function ScheduleDrawer({
         <div>
           <label
             htmlFor="schedule-project"
-            className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="mb-1 block text-[11px] font-semibold text-slate-400"
           >
             Target project
           </label>
@@ -176,7 +176,7 @@ export function ScheduleDrawer({
         <div>
           <label
             htmlFor="schedule-cron"
-            className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="mb-1 block text-[11px] font-semibold text-slate-400"
           >
             Cron expression
           </label>
@@ -196,7 +196,7 @@ export function ScheduleDrawer({
         <div>
           <label
             htmlFor="schedule-title"
-            className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="mb-1 block text-[11px] font-semibold text-slate-400"
           >
             Feature title template
           </label>

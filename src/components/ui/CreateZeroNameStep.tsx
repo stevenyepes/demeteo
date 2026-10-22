@@ -11,7 +11,7 @@ export function CreateZeroNameStep(props: CreateZeroNameStepProps) {
   const { projectName, onChange } = props;
   return (
     <div className="space-y-3">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest">
+      <label className="text-[11px] font-mono text-slate-400">
         What do you want to call this project?
       </label>
       <input

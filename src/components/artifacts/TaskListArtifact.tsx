@@ -73,7 +73,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
 
       {issues.length > 0 && (
         <div className="panel border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
-          <div className="mb-1.5 flex items-center gap-2 font-bold uppercase tracking-wider text-amber-400">
+          <div className="mb-1.5 flex items-center gap-2 font-bold text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             Plan issues
           </div>
@@ -99,7 +99,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
         <div key={`${groupIndex}-${group.cycle}`} className="space-y-3">
           {labelled && (
             <div className="flex items-baseline justify-between px-1">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              <span className="text-[10px] font-bold text-slate-400">
                 {group.cycle === 0 ? 'Original decomposition' : `Rework ${group.cycle}`}
               </span>
               <span className="font-mono text-[10px] text-slate-500">
@@ -162,7 +162,7 @@ function TaskCard({ index, kind, task }: { index: number; kind: PlanKind; task: 
 
       {Array.isArray(task.blocked_by) && task.blocked_by.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-          <span className="font-bold uppercase tracking-wider">Blocked by</span>
+          <span className="font-bold">Blocked by</span>
           {/* Indexed for the same reason the task cards are: these lists are
               agent-written and nothing rejects a repeat, so `blocked_by:
               ["t1","t1"]` collides as two children under one key. */}

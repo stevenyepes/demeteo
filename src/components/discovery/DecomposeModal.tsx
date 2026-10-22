@@ -105,7 +105,7 @@ export function DecomposeModal({
       >
         <header className="flex shrink-0 items-start justify-between gap-5 border-b border-white/5 px-6 py-5">
           <div className="min-w-0">
-            <p className="m-0 mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
+            <p className="m-0 mb-1.5 font-heading text-[11px] font-semibold text-cyan-400">
               {passEyebrow(proposal.first_pass)}
             </p>
             <h2 className="m-0 font-heading text-[22px] font-bold text-white">Proposed changes</h2>
@@ -148,7 +148,7 @@ export function DecomposeModal({
             <section key={group.kind}>
               <div className="mb-2.5 flex items-center gap-2.5">
                 <span
-                  className={`font-mono text-[10px] font-bold uppercase tracking-[0.08em] ${TONE_TEXT[group.tone]}`}
+                  className={`font-mono text-[10px] font-bold ${TONE_TEXT[group.tone]}`}
                 >
                   {group.label}
                 </span>
@@ -173,7 +173,7 @@ export function DecomposeModal({
           {proposal.locked.length > 0 && (
             <section>
               <div className="mb-2.5 flex items-center gap-2.5">
-                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <span className="font-mono text-[10px] font-bold text-slate-500">
                   Locked
                 </span>
                 <span className="font-mono text-[10px] text-slate-600">

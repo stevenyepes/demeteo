@@ -174,7 +174,7 @@ export function NotificationBell() {
         {open && (
           <div className="raised absolute right-0 top-full mt-2 w-80 overflow-hidden z-50">
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
-              <span className="font-heading text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <span className="font-heading text-xs font-semibold text-slate-400">
                 Notifications
               </span>
               <span className="text-[10px] font-mono text-slate-500">

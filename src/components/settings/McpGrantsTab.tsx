@@ -155,7 +155,7 @@ export function McpGrantsTab() {
   return (
     <div className="space-y-4">
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
           <Server className="w-4 h-4 text-slate-400" /> MCP Server
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
@@ -256,7 +256,7 @@ export function McpGrantsTab() {
       {serverState === 'listening' && serverUrl && <McpConnectAgentPanel serverUrl={serverUrl} />}
 
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
           <Plug className="w-4 h-4 text-slate-400" /> MCP Client Grants
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
@@ -314,7 +314,7 @@ export function McpGrantsTab() {
                       {grant.scopes.map((scope) => (
                         <span
                           key={scope}
-                          className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 uppercase tracking-wider"
+                          className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300"
                         >
                           {scope}
                         </span>

@@ -103,7 +103,7 @@ export const AttachmentChip: React.FC<AttachmentChipProps> = ({
 
       <span
         className={[
-          "shrink-0 font-mono uppercase tracking-wider text-[9px] px-1.5 py-0.5 rounded-md border",
+          "shrink-0 font-mono text-[9px] px-1.5 py-0.5 rounded-md border",
           "border-white/10 bg-white/5 text-slate-300",
         ].join(" ")}
       >

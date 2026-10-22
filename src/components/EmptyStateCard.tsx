@@ -127,7 +127,7 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = (props) => {
             <div className="absolute inset-0 bg-gradient-to-br from-violet-500/10 via-transparent to-cyan-500/10 pointer-events-none" />
             <Sparkles className="relative w-6 h-6 text-violet-300 mb-3 group-hover:scale-110 transition-transform" />
             <span className="relative text-sm font-heading font-semibold text-violet-100 group-hover:text-white transition-colors">Create from Scratch</span>
-            <span className="relative text-[10px] font-mono text-violet-300/70 mt-1 uppercase tracking-wider">Primary</span>
+            <span className="relative text-[10px] font-mono text-violet-300/70 mt-1">Primary</span>
           </button>
         </div>
 

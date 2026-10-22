@@ -177,7 +177,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {/* Group Starter Pack */}
             <div className="space-y-2">
-              <div className="text-xs uppercase tracking-wider text-slate-500 font-bold px-2">Starter Pipelines</div>
+              <div className="text-xs text-slate-500 font-bold px-2">Starter Pipelines</div>
               {workflows
                 .filter((w) => w.is_starter)
                 .map((w) => (
@@ -198,7 +198,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                             <Clock className="w-2.5 h-2.5" /> Scheduled
                           </span>
                         )}
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
                           Starter
                         </span>
                       </div>
@@ -211,7 +211,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
             {/* Group Custom */}
             {workflows.some((w) => !w.is_starter) && (
               <div className="space-y-2 pt-4">
-                <div className="text-xs uppercase tracking-wider text-slate-500 font-bold px-2">Custom Pipelines</div>
+                <div className="text-xs text-slate-500 font-bold px-2">Custom Pipelines</div>
                 {workflows
                   .filter((w) => !w.is_starter)
                   .map((w) => (
@@ -232,7 +232,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                               <Clock className="w-2.5 h-2.5" /> Scheduled
                             </span>
                           )}
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold uppercase tracking-wider">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold">
                             Custom
                           </span>
                         </div>
@@ -318,7 +318,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                 </div>
                 {selectedWorkflow.schedule.next_run_at && (
                   <div className="text-right">
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block mb-0.5">Next Run</span>
+                    <span className="text-[10px] text-slate-500 font-bold block mb-0.5">Next Run</span>
                     <div className="text-xs text-slate-300 font-mono bg-black/30 border border-white/5 px-2 py-1 rounded">
                       {new Date(selectedWorkflow.schedule.next_run_at * 1000).toLocaleString()}
                     </div>
@@ -363,7 +363,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                       <div className="p-5 rounded-lg border border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-all duration-300">
                         <div className="flex items-center gap-3">
                           <span className="font-semibold text-white tracking-wide text-sm">{step.title}</span>
-                          <span className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${badgeColor}`}>
+                          <span className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold ${badgeColor}`}>
                             {icon} {step.kind}
                           </span>
                           {step.agent_kind && (
@@ -379,7 +379,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                           </div>
                         )}
 
-                        <div className="mt-3 flex items-center gap-4 text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
+                        <div className="mt-3 flex items-center gap-4 text-[10px] text-slate-500 font-semibold">
                           {step.on_failure && <span>On Failure: {step.on_failure}</span>}
                           {step.max_iterations && <span>Max Loops: {step.max_iterations}</span>}
                         </div>

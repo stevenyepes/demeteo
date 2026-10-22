@@ -129,7 +129,7 @@ export function AskChatColumn({
           </p>
 
           <div className="mt-7 w-full">
-            <p className="mb-2.5 self-start font-mono text-[10px] tracking-[0.1em] text-slate-600 uppercase">
+            <p className="mb-2.5 self-start font-mono text-[10px] text-slate-600">
               Try
             </p>
             {tryChips(projectName).map((chip) => (
@@ -148,7 +148,7 @@ export function AskChatColumn({
                 </span>
                 {chip.webChip && (
                   <Chip size="sm" tone="emerald">
-                    web
+                    Web
                   </Chip>
                 )}
               </button>

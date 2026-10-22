@@ -210,7 +210,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
         <Loader2 className="w-8 h-8 text-slate-400 animate-spin" />
-        <span className="text-xs uppercase font-bold tracking-widest text-slate-500">Loading output contents...</span>
+        <span className="text-xs font-bold text-slate-500">Loading output contents...</span>
       </div>
     );
   }
@@ -231,7 +231,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   // Blank state
   if (!content && viewType !== 'worktree-ref') {
     return (
-      <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-center text-xs uppercase font-bold tracking-wider">
+      <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-center text-xs font-bold">
         No output content generated for this step.
       </div>
     );
@@ -267,7 +267,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
     >
       {viewType === 'markdown' ? (
         <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 shrink-0">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500 mb-2 shrink-0">
             <span className="flex items-center gap-2 truncate">
               <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
                 {artifactPath ? artifactPath.split('/').pop() : ''}
@@ -300,7 +300,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </h3>
               ),
               h4: ({ children }) => (
-                <h4 className="text-sm font-semibold font-heading text-slate-200 mt-4 mb-2 uppercase tracking-wider select-text break-words">
+                <h4 className="text-sm font-semibold font-heading text-slate-200 mt-4 mb-2 select-text break-words">
                   {children}
                 </h4>
               ),
@@ -367,7 +367,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </tr>
               ),
               th: ({ children }) => (
-                <th className="px-4 py-3 font-semibold font-heading uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
+                <th className="px-4 py-3 font-semibold font-heading text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
                   {children}
                 </th>
               ),
@@ -394,7 +394,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                   const codeHeight = Math.min(codeContent.split('\n').length * 18 + 24, 350);
                   return (
                     <div className="rounded-xl border border-white/5 overflow-hidden my-4 shadow-lg bg-[#050608]/85">
-                      <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                      <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500">
                         <span>{lang}</span>
                         <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(codeContent)}>
                           Copy
@@ -448,7 +448,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         </div>
       ) : viewType === 'task-list' && taskPlan ? (
         <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
-          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider shrink-0">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500 shrink-0">
             <span className="flex items-center gap-2 truncate">
               <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
                 {artifactPath ? artifactPath.split('/').pop() : ''}
@@ -474,7 +474,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         />
       ) : (
         <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
-          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500">
             <span className="flex items-center gap-2 truncate">
               <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
                 {artifactPath ? artifactPath.split('/').pop() : ''}

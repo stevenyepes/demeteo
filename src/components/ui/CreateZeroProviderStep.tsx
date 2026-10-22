@@ -41,7 +41,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
   return (
     <div className="space-y-4">
       <div>
-        <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest mb-2 block">
+        <label className="text-[11px] font-mono text-slate-400 mb-2 block">
           Provider
         </label>
         {providers.length === 0 ? (
@@ -73,7 +73,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
       </div>
 
       <div>
-        <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest mb-2 block">
+        <label className="text-[11px] font-mono text-slate-400 mb-2 block">
           Namespace / group
         </label>
         {namespacesLoading ? (
@@ -112,7 +112,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
 
       <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
         <div>
-          <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest mb-2 block">
+          <label className="text-[11px] font-mono text-slate-400 mb-2 block">
             Repository slug
           </label>
           <input
@@ -127,7 +127,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
           )}
         </div>
         <div>
-          <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest mb-2 block">
+          <label className="text-[11px] font-mono text-slate-400 mb-2 block">
             Visibility
           </label>
           <div className="grid grid-cols-2 gap-1.5">

@@ -41,7 +41,7 @@ export function CreateZeroMachineStep(props: CreateZeroMachineStepProps) {
 
   return (
     <div className="space-y-4">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
+      <label className="text-[11px] font-mono text-slate-400 block">
         Where should agents run?
       </label>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -96,7 +96,7 @@ export function CreateZeroMachineStep(props: CreateZeroMachineStepProps) {
           </select>
           {showPassphrase && (
             <div>
-              <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+              <label className="block text-[10px] font-mono text-slate-400 mb-1.5 flex items-center gap-1.5">
                 <Key className="w-3 h-3" /> Private key passphrase
               </label>
               <input

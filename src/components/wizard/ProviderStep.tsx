@@ -32,7 +32,7 @@ export function ProviderStep({ providers, value, onSubmit }: ProviderStepProps) 
 
   return (
     <div className="space-y-4" data-testid="wizard-step-provider">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest">
+      <label className="text-[11px] font-mono text-slate-400">
         Where do you want to host the new repo?
       </label>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -59,7 +59,7 @@ export function ProviderStep({ providers, value, onSubmit }: ProviderStepProps) 
               <div className="min-w-0">
                 <div className="text-sm font-semibold">{label}</div>
                 <div className="text-[11px] font-mono text-slate-500">{blurb}</div>
-                <div className={`mt-2 text-[10px] font-mono uppercase tracking-widest ${
+                <div className={`mt-2 text-[10px] font-mono ${
                   connected ? 'text-emerald-300' : 'text-amber-300'
                 }`}>
                   {connected ? 'Connected' : 'Not connected'}

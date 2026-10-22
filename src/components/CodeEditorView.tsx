@@ -337,7 +337,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             {!changesOnly && (
             <button
               onClick={() => setSidebarTab('files')}
-              className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors ${
+              className={`flex-1 py-2 text-[10px] font-bold transition-colors ${
                 sidebarTab === 'files'
                   ? 'text-white border-b-2 border-accent-edge -mb-px'
                   : 'text-slate-600 hover:text-slate-400'
@@ -348,7 +348,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             )}
             <button
               onClick={() => setSidebarTab('changes')}
-              className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors flex items-center justify-center gap-1 ${
+              className={`flex-1 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1 ${
                 sidebarTab === 'changes'
                   ? 'text-white border-b-2 border-accent-edge -mb-px'
                   : 'text-slate-600 hover:text-slate-400'
@@ -384,7 +384,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
               ) : changesError ? (
                 <div className="p-3 text-xs text-rose-400 font-mono whitespace-pre-wrap break-all select-text" title={changesError}>{changesError}</div>
               ) : changedFiles.length === 0 ? (
-                <div className="py-8 px-3 text-[10px] text-slate-600 uppercase tracking-widest text-center">
+                <div className="py-8 px-3 text-[10px] text-slate-600 text-center">
                   No changes vs {refLabel(diffBase)}
                 </div>
               ) : changedFiles.map(f => (
@@ -427,7 +427,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                   {diffStatus === 'A' ? 'added' : diffStatus === 'D' ? 'deleted' : 'modified'}
                 </span>
               )}
-              <span className="text-[10px] text-slate-600 ml-auto uppercase tracking-wider font-bold shrink-0">
+              <span className="text-[10px] text-slate-600 ml-auto font-bold shrink-0">
                 {diffPath ? `${refLabel(diffBase)} → ${refLabel(diffHead)}` : 'read-only'}
               </span>
             </div>
@@ -438,7 +438,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             {!selectedPath && !diffPath && (
               <div className="flex flex-col items-center justify-center h-full text-slate-600 select-none gap-2">
                 <FolderOpen className="w-10 h-10 text-slate-700" />
-                <span className="text-xs uppercase tracking-widest font-bold">Select a file to view</span>
+                <span className="text-xs font-bold">Select a file to view</span>
               </div>
             )}
 

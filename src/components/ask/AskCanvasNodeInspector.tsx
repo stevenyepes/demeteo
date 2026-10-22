@@ -157,7 +157,7 @@ export function AskCanvasNodeInspector({
   };
 
   const Icon = ROLE_ICON[node.role];
-  const sectionLabel = 'text-[10px] font-mono uppercase tracking-wider text-slate-500 mb-2';
+  const sectionLabel = 'text-[10px] font-mono text-slate-500 mb-2';
 
   return (
     <div data-testid="ask-canvas-node-inspector" className={INSPECTOR_SURFACE}>
@@ -171,7 +171,7 @@ export function AskCanvasNodeInspector({
           <div className="min-w-0">
             <h3 className="truncate font-heading text-sm font-semibold text-white">{node.title}</h3>
             <span
-              className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${ROLE_CHIP[node.role]}`}
+              className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] ${ROLE_CHIP[node.role]}`}
             >
               {ROLE_LABEL[node.role]}
             </span>

@@ -215,8 +215,6 @@
   .chat-bubble-sender {
     font-size: 0.75rem;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     margin-bottom: 4px;
     display: flex;
     align-items: center;

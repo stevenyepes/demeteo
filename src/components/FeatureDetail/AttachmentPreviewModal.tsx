@@ -33,7 +33,7 @@ export function AttachmentPreviewModal({
           <span className="font-mono text-xs text-cyan-300 truncate" title={attachment.source_filename}>
             {attachment.source_filename}
           </span>
-          <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-white/10 bg-white/5 text-slate-300">
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md border border-white/10 bg-white/5 text-slate-300">
             {attachment.mime}
           </span>
           <span className="text-[10px] font-mono text-slate-500">
@@ -68,7 +68,7 @@ export function AttachmentPreviewModal({
               >
                 {attachment.source_filename}
               </span>
-              <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-white/10 bg-white/5 text-slate-300 shrink-0">
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md border border-white/10 bg-white/5 text-slate-300 shrink-0">
                 {attachment.mime}
               </span>
               <span className="text-[10px] font-mono text-slate-500 shrink-0">
@@ -76,7 +76,7 @@ export function AttachmentPreviewModal({
               </span>
             </div>
             <div className="text-[10px] font-mono text-slate-500 break-all">
-              <span className="uppercase tracking-wider text-slate-600">sha256 </span>
+              <span className="text-slate-600">sha256 </span>
               <span className="text-slate-400">{attachment.sha256}</span>
             </div>
             <div className="text-xs text-slate-400 italic border-t border-white/5 pt-3">

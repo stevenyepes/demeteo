@@ -23,7 +23,7 @@ export function StrategyTab() {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Git Isolation */}
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-slate-400" /> Git Isolation & Strategy
         </h3>
         {/* The test command moved to `HarnessesSection`: it is the harness
@@ -34,7 +34,7 @@ export function StrategyTab() {
           { label: 'Branch Prefix', value: s.branchPrefix, onChange: s.setBranchPrefix },
         ].map(({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) => (
           <div key={label}>
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">{label}</label>
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">{label}</label>
             <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring placeholder-slate-600" />
           </div>
         ))}
@@ -44,11 +44,11 @@ export function StrategyTab() {
 
       {/* Automation Policies */}
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
           <Settings className="w-4 h-4 text-slate-400" /> Automation Policies
         </h3>
         <div>
-          <label htmlFor="gate-autonomy" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Gate approvals</label>
+          <label htmlFor="gate-autonomy" className="block text-xs font-mono text-slate-400 mb-1.5">Gate approvals</label>
           <select id="gate-autonomy" value={s.gateAutonomy} onChange={e => { const v = e.target.value; if (isGateAutonomy(v)) s.setGateAutonomy(v); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring">
             <option value="attended">Ask at every gate</option>
             <option value="review">Auto-approve review gates, ask before shipping</option>
@@ -58,7 +58,7 @@ export function StrategyTab() {
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Which gates let a run continue without you. The ship gate — the one its workflow marks dangerous — is what opens the pull request; every other gate is a review gate. An automatic approval never redirects or rejects, so the run's own validation and critic steps are the only check left. A run on a remote runner always approves review gates on its own, since nobody is attached to answer them. Shipping on a clean review approves the ship gate only when the review step just before it reports no critical and no major issue; a review that reports one, cannot be read, or is missing leaves the gate waiting for you. The Standard Feature Pipeline has that review step, and a custom workflow gets one by naming a review artifact on a step.</p>
         </div>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
           <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring">
             <option value="archive">Archive by default</option>
             <option value="keep">Keep active</option>
@@ -66,13 +66,13 @@ export function StrategyTab() {
           </select>
         </div>
         <div>
-          <label htmlFor="cache-idle-ttl-days" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Release Idle Dependency Caches After (Days)</label>
+          <label htmlFor="cache-idle-ttl-days" className="block text-xs font-mono text-slate-400 mb-1.5">Release Idle Dependency Caches After (Days)</label>
           <input id="cache-idle-ttl-days" type="number" min={0} step={1} value={s.cacheIdleTtlDays} onChange={e => s.setCacheIdleTtlDays(e.target.value)} placeholder={`${DEFAULT_CACHE_IDLE_TTL_DAYS} (engine default)`} className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           {!cacheIdleTtl.ok && <p className="text-[11px] text-ruby-400 mt-1.5">{cacheIdleTtl.message}</p>}
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">A failed, cancelled, interrupted or awaiting-MR feature — or a completed one whose PR is still open — has its dependency cache released once it sits idle this long, as does the default branch's cache Ask and Discovery share once no session holds it. The next run reseeds it. <span className="font-mono">0</span> never releases on idleness; leave blank for the engine default ({DEFAULT_CACHE_IDLE_TTL_DAYS}).</p>
         </div>
         <div>
-          <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Code review entrypoint</label>
+          <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5">Code review entrypoint</label>
           <input id="review-entrypoint" type="text" value={s.reviewEntrypoint} onChange={e => s.setReviewEntrypoint(e.target.value)} placeholder="e.g. /code-review" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Run this instead of asking the agent to review in its own way. Leave blank to let the agent choose — Demeteo does not supply review criteria either way.</p>
         </div>
@@ -80,11 +80,11 @@ export function StrategyTab() {
 
       {/* Default AI Executor */}
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
           <Zap className="w-4 h-4 text-slate-400" /> Default AI Executor Settings
         </h3>
         <div>
-          <label htmlFor="default-workflow" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Workflow</label>
+          <label htmlFor="default-workflow" className="block text-xs font-mono text-slate-400 mb-1.5">Default Workflow</label>
           {s.workflowsError ? (
             <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-ruby-300">Workflows could not be listed ({s.workflowsError}).</div>
           ) : !s.workflowsLoaded ? (
@@ -103,14 +103,14 @@ export function StrategyTab() {
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">{UNSET_DEFAULT_WORKFLOW_HINT}</p>
         </div>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Coding Agent</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Coding Agent</label>
           <select value={s.defaultAgentKind} onChange={e => { const k = e.target.value; s.setDefaultAgentKind(k); s.setDefaultModel(''); s.setDefaultEffort(reconcileEffort(s.defaultEffort, s.effortLevelsFor(k))); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring capitalize">
             <option value="">No default (Prompt on feature creation)</option>
             {s.agentConfigs.filter(a => a.enabled && a.available).map(a => <option key={a.kind} value={a.kind}>{a.display_label}</option>)}
           </select>
         </div>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Model</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Model</label>
           {s.isLoadingModelsForDefault ? (
             <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-400 flex items-center gap-2">
               <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" /><span>Probing available models...</span>
@@ -126,7 +126,7 @@ export function StrategyTab() {
             </div>
           )}
           <div className="mt-4">
-            <label htmlFor="default-effort" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Effort</label>
+            <label htmlFor="default-effort" className="block text-xs font-mono text-slate-400 mb-1.5">Default Effort</label>
             <select
               id="default-effort"
               value={s.defaultEffort}
@@ -141,17 +141,17 @@ export function StrategyTab() {
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">How much reasoning budget every step asks its agent for, unless a workflow, an override or the launch modal pins something more specific. Leave blank for the engine default ({EFFORT_LABELS[DEFAULT_EFFORT]}).</p>
           </div>
           <div className="mt-4">
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Loop Iterations</label>
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Loop Iterations</label>
             <input type="number" min={1} max={10} value={s.defaultLoopIterations} onChange={e => s.setDefaultLoopIterations(e.target.value)} placeholder="3 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">How many times a validation step may loop back to implementation before giving up. Leave blank to use the engine default (3). Overridable per run.</p>
           </div>
           <div className="mt-4">
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Per-Turn Budget (USD)</label>
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Per-Turn Budget (USD)</label>
             <input type="number" min={0} step={0.5} value={s.defaultMaxBudgetUsd} onChange={e => s.setDefaultMaxBudgetUsd(e.target.value)} placeholder="20 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>). The coding turn gets the full amount; shorter role turns get a fraction. Anti-runaway guard, not a whole-run cap. Leave blank for the engine default ($20). Overridable per run.</p>
           </div>
           <div className="mt-4 pt-4 border-t border-white/5">
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Sync Conflict Resolver</label>
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">Sync Conflict Resolver</label>
             <HarnessModelPicker
               agentKinds={s.agentConfigs.filter(a => a.enabled && a.available).map(a => a.kind)}
               models={s.availableModelsForSyncResolver}
@@ -170,7 +170,7 @@ export function StrategyTab() {
               effortPlaceholder="Inherit"
             />
             <div className="mt-3">
-              <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">After a resolution</label>
+              <label className="block text-xs font-mono text-slate-400 mb-1.5">After a resolution</label>
               <select
                 aria-label="After a resolution"
                 value={s.syncReviewBeforePush}
@@ -189,12 +189,12 @@ export function StrategyTab() {
 
       {/* Artifact Handling */}
       <div className="panel p-6 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
           <FileText className="w-4 h-4 text-slate-400" /> Artifact Handling
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">Each workflow step produces a report (<code className="text-slate-300">research-report.md</code>, <code className="text-slate-300">critic-review.md</code>, …). By default these land in a subfolder and stay out of the PR — view them in demeteo's artifact panel. Toggle the commit switch to ship them with the feature branch instead.</p>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Artifact Subfolder</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Artifact Subfolder</label>
           <input type="text" value={s.artifactSubdir} onChange={e => s.setArtifactSubdir(e.target.value)} placeholder="artifacts/" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">Repo-relative path. The orchestrator injects this as <code>{'{{report_dir}}'}</code> (alias <code>{'{{artifact_dir}}'}</code>) into every step's prompt and excludes it from <code>git add</code> when the commit switch is off.</p>
         </div>
@@ -209,14 +209,14 @@ export function StrategyTab() {
 
       {s.prTemplate && (
         <div className="panel p-6 md:col-span-2 space-y-2">
-          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider">Detected PR Template</h3>
+          <h3 className="font-heading text-sm font-semibold text-slate-300">Detected PR Template</h3>
           <div className="w-full bg-black/40 border border-white/5 rounded-lg p-4 font-mono text-xs text-slate-400 max-h-[160px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
         </div>
       )}
 
       {/* Extra Writable Paths */}
       <div className="panel p-6 md:col-span-2 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
           <FolderOpen className="w-4 h-4 text-emerald-400" /> Extra Writable Paths
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
@@ -276,7 +276,7 @@ export function StrategyTab() {
       {/* Coding Agent Configurations */}
       <div className="panel p-6 md:col-span-2 space-y-4">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+          <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
             <Activity className="w-4 h-4 text-slate-400" /> Coding Agent Configuration
           </h3>
           <button type="button" onClick={() => s.fetchAgentConfigs(true)} disabled={s.isRefreshingAgents} className="p-1 rounded text-slate-500 hover:text-white hover:bg-white/5 transition-all disabled:opacity-50" title="Re-check agent availability">

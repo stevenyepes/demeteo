@@ -402,7 +402,7 @@ export function TerminalWorktreeLocationPicker({
 
           <div className="my-1 border-t border-white/[0.06]" />
           <div className="flex items-center gap-2 px-2 pb-1">
-            <span className="text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">
+            <span className="text-[9px] font-mono text-slate-600">
               Worktrees
             </span>
             <span className="flex-1" />

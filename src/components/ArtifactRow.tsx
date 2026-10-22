@@ -26,7 +26,7 @@ export function ArtifactRow({
         <ArtifactIcon kind={cls.kind} />
       </span>
       <span className="flex-1 truncate">{cls.basename}</span>
-      <span className="shrink-0 text-[9px] font-bold uppercase text-slate-500">
+      <span className="shrink-0 text-[9px] font-bold text-slate-500">
         {ARTIFACT_KIND_LABELS[cls.kind]}
       </span>
     </button>

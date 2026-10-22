@@ -236,7 +236,7 @@ export function VersionDrawer({
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/5 px-4 py-3">
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-slate-400" aria-hidden />
-          <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-white">
+          <h3 className="font-heading text-sm font-bold text-white">
             Version history
           </h3>
         </div>
@@ -309,7 +309,7 @@ export function VersionDrawer({
                       v{row.version}
                     </span>
                     {isLatest && (
-                      <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-cyan-300">
+                      <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1 py-px text-[9px] font-bold text-cyan-300">
                         Current
                       </span>
                     )}

@@ -24,7 +24,7 @@ export function DetachedCapsFields({
       <div>
         <label
           htmlFor="start-feature-max-cost"
-          className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+          className="block text-[11px] font-mono text-slate-400 mb-1.5"
         >
           Max cost (USD)
         </label>
@@ -48,7 +48,7 @@ export function DetachedCapsFields({
       <div>
         <label
           htmlFor="start-feature-max-wall-clock"
-          className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+          className="block text-[11px] font-mono text-slate-400 mb-1.5"
         >
           Max wall-clock (min)
         </label>

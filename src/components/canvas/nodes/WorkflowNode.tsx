@@ -61,6 +61,12 @@ const DIFF_CARD: Record<NodeDiffMark, string> = {
   changed: 'border-amber-400/70 shadow-lg shadow-black/30',
 };
 
+const DIFF_LABEL: Record<NodeDiffMark, string> = {
+  added: 'Added',
+  removed: 'Removed',
+  changed: 'Changed',
+};
+
 const DIFF_CHIP: Record<NodeDiffMark, string> = {
   added: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
   removed: 'border-rose-500/30 bg-rose-500/10 text-rose-300',
@@ -192,9 +198,9 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
                     ? `Changed: ${data.diffFields.join(', ')}`
                     : undefined
                 }
-                className={`shrink-0 rounded border px-1 py-px text-[9px] font-bold uppercase tracking-wide ${DIFF_CHIP[diff]}`}
+                className={`shrink-0 rounded border px-1 py-px text-[9px] font-bold ${DIFF_CHIP[diff]}`}
               >
-                {diff}
+                {DIFF_LABEL[diff]}
               </span>
             )}
           </div>

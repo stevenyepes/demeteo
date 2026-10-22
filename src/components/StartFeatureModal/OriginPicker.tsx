@@ -127,7 +127,7 @@ export function OriginPicker({
         <div>
           <label
             htmlFor="start-feature-origin-base"
-            className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+            className="block text-[11px] font-mono text-slate-400 mb-1.5"
           >
             Start from
           </label>
@@ -147,7 +147,7 @@ export function OriginPicker({
         <div>
           <label
             htmlFor="start-feature-origin-diff-base"
-            className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+            className="block text-[11px] font-mono text-slate-400 mb-1.5"
           >
             Diff against
           </label>

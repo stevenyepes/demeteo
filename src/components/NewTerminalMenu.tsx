@@ -475,7 +475,7 @@ export function NewTerminalMenu({
           {/* Recent strip */}
           {resolvedRecents.length > 0 && query === '' && (
             <div className="border-b border-white/[0.06]">
-              <div className="px-3 pt-2.5 pb-1 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">
+              <div className="px-3 pt-2.5 pb-1 text-[9px] font-mono text-slate-600">
                 Recent
               </div>
               <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
@@ -571,7 +571,7 @@ export function NewTerminalMenu({
                       worktree state. */}
                   {showLocationSwitch && (
                     <div className="mx-1 mb-2" data-testid="new-terminal-location">
-                      <span className="block px-0.5 pb-1 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">
+                      <span className="block px-0.5 pb-1 text-[9px] font-mono text-slate-600">
                         Session location
                       </span>
                       {projectRepositories.length > 1 && (

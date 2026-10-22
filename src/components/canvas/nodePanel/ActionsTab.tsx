@@ -103,7 +103,7 @@ export function ActionsTab({
 
   if (!hasActions || !anyAction) {
     return (
-      <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold uppercase tracking-wider text-slate-600">
+      <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold text-slate-600">
         No actions available for this node yet.
       </div>
     );

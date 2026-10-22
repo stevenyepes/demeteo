@@ -37,7 +37,7 @@ export function ConflictFileList({
             <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-200">
               {file.path}
             </span>
-            <span className="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">
+            <span className="shrink-0 text-[10px] text-slate-500">
               {file.kind}
             </span>
           </button>

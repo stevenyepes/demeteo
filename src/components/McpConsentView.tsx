@@ -88,7 +88,7 @@ export function McpConsentView() {
 
         <div className="p-6 space-y-4">
           <div className="p-4 rounded-lg bg-white/[0.01] border border-white/5 space-y-1">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Client</div>
+            <div className="text-[10px] text-slate-500 font-bold">Client</div>
             <div className="text-white font-semibold font-heading">{request.client_name}</div>
             <div className="text-[11px] text-amber-400/90">
               Unverified — this name was chosen by the requesting program, not confirmed by Demeteo.
@@ -96,26 +96,26 @@ export function McpConsentView() {
           </div>
 
           <div className="space-y-1">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Resource</div>
+            <div className="text-[10px] text-slate-500 font-bold">Resource</div>
             <div className="text-xs text-slate-300 font-mono break-all">{request.resource}</div>
           </div>
 
           <div className="space-y-1">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+            <div className="text-[10px] text-slate-500 font-bold">
               Redirect URI
             </div>
             <div className="text-xs text-slate-300 font-mono break-all">{request.redirect_uri}</div>
           </div>
 
           <div className="space-y-2">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+            <div className="text-[10px] text-slate-500 font-bold">
               Requested scopes
             </div>
             <div className="flex flex-wrap gap-1.5">
               {request.requested_scopes.map((scope) => (
                 <span
                   key={scope}
-                  className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 uppercase tracking-wider"
+                  className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300"
                 >
                   {scope}
                 </span>

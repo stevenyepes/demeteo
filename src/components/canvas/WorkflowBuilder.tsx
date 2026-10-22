@@ -577,7 +577,7 @@ export function WorkflowBuilder({
             <strong className="font-semibold">{comparison.to.label}</strong> ·{' '}
             {diffSummary(compareView.diff)}
           </span>
-          <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
+          <span className="text-[10px] text-amber-300/70">
             read-only
           </span>
           <button
@@ -643,7 +643,7 @@ export function WorkflowBuilder({
             <div className="flex items-center justify-between border-b border-white/5 px-3 py-2">
               <span className="text-xs font-semibold text-slate-200">
                 Source
-                <span className="ml-2 font-normal text-[10px] uppercase tracking-wide text-slate-500">
+                <span className="ml-2 font-normal text-[10px] text-slate-500">
                   read-only
                 </span>
               </span>

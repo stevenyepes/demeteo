@@ -67,11 +67,11 @@ export function AssignmentSection({
   return (
     <div className="rounded-xl border border-white/5 bg-black/20 p-3.5">
       <div className="mb-2.5 flex items-center justify-between gap-2">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        <div className="text-[10px] font-bold text-slate-500">
           Assignment
         </div>
         {readOnly && (
-          <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold text-slate-400">
             <Lock className="h-3 w-3" /> Read-only
           </span>
         )}

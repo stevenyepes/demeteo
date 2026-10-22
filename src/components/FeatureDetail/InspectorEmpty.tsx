@@ -44,7 +44,7 @@ export function InspectorEmpty({
     <div data-testid="inspector-empty" data-reason={reason} className={`${INSPECTOR_SURFACE} ${className}`}>
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
         <Icon className={`h-6 w-6 ${TONE_TEXT.slate}`} />
-        <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-slate-300">
+        <h3 className="font-heading text-sm font-bold text-slate-300">
           {title}
         </h3>
         <p className="max-w-[36ch] text-xs leading-relaxed text-slate-500">{body}</p>

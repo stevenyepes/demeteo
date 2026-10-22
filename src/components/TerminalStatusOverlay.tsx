@@ -31,7 +31,7 @@ const TerminalStatusOverlay: React.FC<TerminalStatusOverlayProps> = ({ phase, ho
           ) : (
             <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse-glow" />
           )}
-          <span className="text-[11px] font-mono uppercase tracking-[0.15em] text-slate-300">
+          <span className="text-[11px] font-mono text-slate-300">
             {isError ? "Connection failed" : "Establishing session"}
           </span>
           {host && !isError && (

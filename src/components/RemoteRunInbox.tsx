@@ -237,7 +237,7 @@ const RemoteRunInbox: React.FC = () => {
                 <div key={bucket}>
                   <div className="flex items-center gap-2 mb-2">
                     <Icon className={`w-4 h-4 ${accent}`} />
-                    <h3 className={`text-xs font-mono uppercase tracking-wider ${accent}`}>{meta.label}</h3>
+                    <h3 className={`text-xs font-mono ${accent}`}>{meta.label}</h3>
                     <span className="text-[10px] text-slate-600 font-mono">{grouped[bucket].length}</span>
                   </div>
                   <div className="space-y-2">

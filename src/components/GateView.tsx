@@ -216,7 +216,7 @@ export const GateView: React.FC<GateViewProps> = ({
         {/* Modal Content */}
         <div className="p-6 flex-1 min-h-0 overflow-y-auto space-y-6">
           <div className="p-4 rounded-lg bg-white/[0.01] border border-white/5 text-sm text-slate-400 leading-relaxed space-y-3">
-            <div className="text-white font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-300">
+            <div className="text-white font-semibold flex items-center gap-1.5 text-xs text-slate-300">
               <Terminal className="w-3.5 h-3.5" /> Pipeline context
             </div>
             <p>
@@ -238,7 +238,7 @@ export const GateView: React.FC<GateViewProps> = ({
 
           {/* Artifact Preview */}
           <div className="space-y-2 flex flex-col">
-            <div className="text-white font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-300 shrink-0">
+            <div className="text-white font-semibold flex items-center gap-1.5 text-xs text-slate-300 shrink-0">
               <Sparkles className="w-3.5 h-3.5 text-slate-400" /> Artifact Output
             </div>
             {/* A definite height, not a min-height: this box sits inside a
@@ -277,7 +277,7 @@ export const GateView: React.FC<GateViewProps> = ({
           {/* Redirect / Loop feedback */}
           {isRedirecting && (
             <div className="space-y-2 animate-fade-in">
-              <label className="block text-xs uppercase tracking-wider text-slate-400 font-bold">
+              <label className="block text-xs text-slate-400 font-bold">
                 Redirection Feedback / Instructions
               </label>
               <textarea
@@ -292,7 +292,7 @@ export const GateView: React.FC<GateViewProps> = ({
 
           {!isRedirecting && settled === null && (
             <div className="space-y-2">
-              <label className="block text-xs uppercase tracking-wider text-slate-400 font-bold">
+              <label className="block text-xs text-slate-400 font-bold">
                 Approval Notes (optional)
               </label>
               <textarea
@@ -320,7 +320,7 @@ export const GateView: React.FC<GateViewProps> = ({
           >
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <span className="leading-relaxed">
-              <span className="font-bold uppercase tracking-wider">Already decided.</span>{' '}
+              <span className="font-bold">Already decided.</span>{' '}
               {settled} Nothing here is waiting on you — close this and use the run's own
               controls.
             </span>
@@ -335,7 +335,7 @@ export const GateView: React.FC<GateViewProps> = ({
           >
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <span className="leading-relaxed">
-              <span className="font-bold uppercase tracking-wider">Decision blocked.</span>{' '}
+              <span className="font-bold">Decision blocked.</span>{' '}
               Step <span className="font-mono font-semibold text-rose-200">{blockedBy.step_id}</span> is still{' '}
               <span className="font-mono">{blockedBy.status}</span>. Wait for it to finish before deciding this gate.
             </span>

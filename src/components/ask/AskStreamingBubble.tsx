@@ -86,7 +86,7 @@ function Sources({ turn }: { turn: LiveTurn }): React.ReactElement | null {
       data-testid="ask-sources"
       className="mt-3 border-t border-white/5 pt-2.5"
     >
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium tracking-wide text-slate-500 uppercase">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium text-slate-500">
         <Globe aria-hidden="true" className="h-3 w-3 shrink-0" />
         Sources &middot; {sources.length}
       </div>

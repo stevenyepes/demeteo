@@ -162,7 +162,7 @@ function StepCardInner({
             at a time (§3.1). */}
         {step.status === 'awaiting_gate' && (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="min-w-0 flex-1 text-xs text-amber-400 font-semibold uppercase tracking-wide">
+            <span className="min-w-0 flex-1 text-xs text-amber-400 font-semibold">
               Pipeline paused. Awaiting manual review.
             </span>
             <Button variant="primary" size="sm" onClick={decideGate} className="shrink-0 whitespace-nowrap">

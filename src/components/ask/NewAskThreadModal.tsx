@@ -207,7 +207,7 @@ export function NewAskThreadModal({
         className="raised flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="shrink-0 border-b border-white/5 px-5 py-[18px]">
-          <p className="mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
+          <p className="mb-1.5 font-heading text-[11px] font-semibold text-cyan-400">
             {projectName || 'this project'}
           </p>
           <h2 className="font-heading text-xl font-bold text-white">New ask thread</h2>

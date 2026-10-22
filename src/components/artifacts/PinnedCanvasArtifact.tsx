@@ -49,7 +49,7 @@ export function PinnedCanvasArtifact({
 
   return (
     <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
-      <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider shrink-0">
+      <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500 shrink-0">
         <span className="flex items-center gap-2 truncate">
           <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
             {artifactPath ? artifactPath.split('/').pop() : ''}
@@ -94,7 +94,7 @@ export function PinnedCanvasArtifact({
             <span className="font-heading text-[12.5px] font-semibold text-slate-100">
               {selected.title}
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-wide text-slate-500">
+            <span className="font-mono text-[10px] text-slate-500">
               {ROLE_LABEL[selected.role]}
             </span>
           </div>

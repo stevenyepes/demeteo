@@ -71,7 +71,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
         </header>
 
         <section className="space-y-3">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          <h2 className="text-xs font-bold text-slate-500">
             Clone an existing pipeline
           </h2>
           {loading ? (
@@ -96,7 +96,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
                     <span className="flex items-center gap-2">
                       <span className="truncate font-medium text-white">{row.name}</span>
                       {row.is_starter && (
-                        <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 text-[9px] font-bold uppercase tracking-wider text-emerald-400">
+                        <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 text-[9px] font-bold text-emerald-400">
                           Starter
                         </span>
                       )}
@@ -112,7 +112,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          <h2 className="text-xs font-bold text-slate-500">
             Start from a shape
           </h2>
           <div className="grid gap-2">

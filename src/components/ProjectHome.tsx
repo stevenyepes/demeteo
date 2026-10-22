@@ -510,13 +510,13 @@ const ProjectHome = () => {
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
                 <div className="panel max-w-xl w-full p-6 flex flex-col text-left">
                     <div className="mb-6 border-b border-white/5 pb-4">
-                        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                        <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">STRATEGY DETECTED</h3>
                         <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                     </div>
 
                     <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Branch</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Default Branch</label>
                             <input 
                                 type="text" 
                                 value={defaultBranch} 
@@ -526,7 +526,7 @@ const ProjectHome = () => {
                         </div>
 
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Branch Prefix</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Branch Prefix</label>
                             <input 
                                 type="text" 
                                 value={branchPrefix} 
@@ -536,7 +536,7 @@ const ProjectHome = () => {
                         </div>
 
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Test Command</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Default Test Command</label>
                             <input 
                                 type="text" 
                                 value={testCommand} 
@@ -548,7 +548,7 @@ const ProjectHome = () => {
 
 
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
                             <select 
                                 value={featureLifecycle} 
                                 onChange={e => setFeatureLifecycle(e.target.value)}
@@ -562,7 +562,7 @@ const ProjectHome = () => {
 
                         {prTemplate && (
                             <div>
-                                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected PR Template</label>
+                                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Detected PR Template</label>
                                 <div className="w-full bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-[100px] overflow-y-auto leading-relaxed">
                                     {prTemplate}
                                 </div>
@@ -629,7 +629,7 @@ const ProjectHome = () => {
                 <div className="flex items-end gap-3 shrink-0">
                     {repositories.length > 1 && (
                         <div className="min-w-0">
-                            <span className="block pb-1 pl-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-500">
+                            <span className="block pb-1 pl-0.5 text-[9px] font-mono text-slate-500">
                                 Repository
                             </span>
                             <select
@@ -745,7 +745,7 @@ const ProjectHome = () => {
                                         ride along into the modal seed. Use the
                                         modal to add more once it opens. */}
                                     <div className="px-2 pb-1 flex flex-wrap items-center gap-2">
-                                        <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Attachments</span>
+                                        <span className="text-[10px] font-mono text-slate-500">Attachments</span>
                                         <AttachmentDropzone
                                             mode="launch"
                                             compact
@@ -776,7 +776,7 @@ const ProjectHome = () => {
                     failed and gated runs are here too, each wearing its own chip. */}
                 <div>
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                        <h2 className="font-heading text-sm font-semibold text-slate-400 uppercase tracking-widest">Feature Pipelines</h2>
+                        <h2 className="font-heading text-sm font-semibold text-slate-400">Feature Pipelines</h2>
                         {features.length > 0 && (
                             <DensityToggle value={density} onChange={setDensity} ariaLabel="Pipeline list density" />
                         )}

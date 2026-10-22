@@ -11,7 +11,7 @@ interface SectionCardProps {
 export function SectionCard({ title, icon, children, className = '', headerClassName = '' }: SectionCardProps) {
   return (
     <div className={`panel p-5 ${className}`}>
-      <h3 className={`font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2 ${headerClassName}`}>
+      <h3 className={`font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2 ${headerClassName}`}>
         {icon}
         {title}
       </h3>

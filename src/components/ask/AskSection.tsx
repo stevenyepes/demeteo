@@ -97,7 +97,7 @@ export function AskSection({
               className="w-full border-none bg-transparent p-2 text-sm text-white placeholder-slate-500 focus:outline-none"
             />
             <div className="flex flex-wrap items-center gap-2 px-2 pb-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+              <span className="font-mono text-[10px] text-slate-500">
                 Agent
               </span>
               <span className="text-[11px] text-slate-500">

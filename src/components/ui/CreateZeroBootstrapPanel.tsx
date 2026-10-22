@@ -59,7 +59,7 @@ export function CreateZeroBootstrapPanel({
   return (
     <div className="panel p-6 flex flex-col gap-4">
       <div>
-        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
+        <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">
           {isError ? 'Bootstrap failed' : 'Workspace bootstrap'}
         </h3>
         <h2 className="text-xl font-bold text-white">

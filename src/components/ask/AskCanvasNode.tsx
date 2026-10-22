@@ -134,7 +134,7 @@ export function AskCanvasNode({
           <div className="truncate text-[13px] font-medium text-slate-100" title={node.title}>
             {node.title}
           </div>
-          <div className={`text-[9px] font-medium uppercase tracking-wide ${ROLE_TEXT[node.role]}`}>
+          <div className={`text-[9px] font-medium ${ROLE_TEXT[node.role]}`}>
             {ROLE_LABEL[node.role]}
           </div>
         </div>

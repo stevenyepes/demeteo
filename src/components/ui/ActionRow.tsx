@@ -66,7 +66,7 @@ export function ActionRow({
     >
       <div className={`shrink-0 ${tone ? TONE_TEXT[tone] : 'text-slate-400'}`}>{icon}</div>
       <div className="min-w-0 flex-1">
-        <div className="text-xs font-bold uppercase tracking-wider text-slate-200">{title}</div>
+        <div className="text-xs font-bold text-slate-200">{title}</div>
         <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{desc}</div>
       </div>
       <Button

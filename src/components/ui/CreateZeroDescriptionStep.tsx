@@ -11,7 +11,7 @@ export function CreateZeroDescriptionStep(props: CreateZeroDescriptionStepProps)
   const { description, onChange } = props;
   return (
     <div className="space-y-3">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
+      <label className="text-[11px] font-mono text-slate-400 block">
         What do you want to build?
       </label>
       <textarea

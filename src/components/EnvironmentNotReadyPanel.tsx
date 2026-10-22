@@ -100,7 +100,7 @@ export function EnvironmentNotReadyPanel({ failure, atBase }: Props) {
         </p>
       ) : (
         <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] p-3.5">
-          <div className="font-sans text-[10px] font-bold uppercase tracking-wider text-amber-400/80">
+          <div className="font-sans text-[10px] font-bold text-amber-400/80">
             Do this
           </div>
           <p
@@ -127,7 +127,7 @@ export function EnvironmentNotReadyPanel({ failure, atBase }: Props) {
 
       {failure.reproduce !== '' && (
         <div className="mt-3">
-          <div className="flex items-center gap-1.5 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <div className="flex items-center gap-1.5 font-sans text-[10px] font-bold text-slate-500">
             <Terminal className="w-3 h-3" /> Reproduce
           </div>
           <pre className="mt-1.5 overflow-x-auto rounded border border-white/10 bg-black/30 p-2.5 font-mono text-[11px] leading-relaxed text-cyan-300">

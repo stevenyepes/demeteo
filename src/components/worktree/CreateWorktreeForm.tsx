@@ -63,7 +63,7 @@ export function CreateWorktreeForm({
   return (
     <div className="px-1 pb-1" data-testid="terminal-location-create-form">
       <div className="flex items-center justify-between px-1 pb-1.5">
-        <span className="text-[9px] font-mono uppercase tracking-[0.16em] text-slate-500">
+        <span className="text-[9px] font-mono text-slate-500">
           New worktree
         </span>
         <button
