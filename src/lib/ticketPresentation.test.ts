@@ -89,18 +89,17 @@ describe('bucketByLane', () => {
 });
 
 describe('ticketTone', () => {
-  it('grades blocked amber once a prerequisite is in flight', () => {
-    const tickets = [ticket('a', 1, 'in_flight'), ticket('b', 2, 'blocked', { blockedBy: ['a'] })];
-    const index = indexTickets(tickets);
-
-    expect(ticketTone(tickets[1], index)).toBe('amber');
+  it('spends amber on ready, the one lane a person acts on', () => {
+    expect(ticketTone(ticket('a', 1, 'ready'))).toBe('amber');
   });
 
-  it('leaves blocked slate while nothing has started', () => {
-    const tickets = [ticket('a', 1, 'blocked'), ticket('b', 2, 'blocked', { blockedBy: ['a'] })];
-    const index = indexTickets(tickets);
+  it('leaves blocked slate even while a prerequisite is in flight', () => {
+    const tickets = [ticket('a', 1, 'in_flight'), ticket('b', 2, 'blocked', { blockedBy: ['a'] })];
 
-    expect(ticketTone(tickets[1], index)).toBe('slate');
+    expect(ticketTone(tickets[1])).toBe('slate');
+    expect(TICKET_LANES.filter((lane) => lane.tone === 'amber').map((lane) => lane.lane)).toEqual([
+      'ready',
+    ]);
   });
 });
 

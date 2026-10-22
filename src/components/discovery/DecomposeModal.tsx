@@ -212,7 +212,7 @@ export function DecomposeModal({
                         )}
                       </div>
                       {live && (
-                        <Chip size="sm" tone={ticketTone(live, index)}>
+                        <Chip size="sm" tone={ticketTone(live)}>
                           {stateLabel(live)}
                         </Chip>
                       )}

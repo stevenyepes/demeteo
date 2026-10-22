@@ -115,7 +115,7 @@ export function TicketInspector({
     };
   }, [ticketId]);
 
-  const tone = ticketTone(view, index);
+  const tone = ticketTone(view);
   const standing = verdict(view, index);
   const action = primaryAction(view, index);
   const prerequisites = prerequisiteRows(view, index);

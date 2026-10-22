@@ -206,7 +206,7 @@ export function TicketEditorModal({
       className="flex max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] flex-col overflow-hidden raised"
     >
       <ColumnSubHeader title={ticketLabel(ticket.seq)}>
-        <Chip size="sm" tone={ticketTone(view, index)} dot>
+        <Chip size="sm" tone={ticketTone(view)} dot>
           {stateLabel(view)}
         </Chip>
         <Chip size="sm" tone="slate">

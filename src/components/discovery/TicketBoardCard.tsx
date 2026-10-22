@@ -2,24 +2,19 @@ import React from 'react';
 
 import { ticketLabel } from '../../lib/discoveryProgress';
 import type { RunStatusTone } from '../../lib/runStatus';
-import { ticketNote, type TicketIndex } from '../../lib/ticketPresentation';
+import { LANE_DOT, ticketNote, type TicketIndex } from '../../lib/ticketPresentation';
 import type { TicketView } from '../../types';
 import { Chip } from '../ui/Chip';
 
+/** Landed takes the neutral border: on a plan that is mostly done, an
+ *  emerald edge on every card drowns the amber of what is ready to start. The
+ *  check glyph still says it landed. */
 const TONE_BORDER: Record<RunStatusTone, string> = {
-  emerald: 'border-emerald-500/40',
+  emerald: 'border-slate-700/60',
   cyan: 'border-cyan-500/50',
   amber: 'border-amber-500/50',
   ruby: 'border-ruby-500/50',
   slate: 'border-slate-700/60',
-};
-
-const LANE_DOT: Record<RunStatusTone, string> = {
-  emerald: 'bg-emerald-400',
-  cyan: 'bg-cyan-400',
-  amber: 'bg-amber-400',
-  ruby: 'bg-ruby-400',
-  slate: 'bg-slate-500',
 };
 
 interface TicketBoardCardProps {
@@ -76,7 +71,7 @@ export function TicketBoardCard({
         className={`m-0 mt-1 text-xs font-medium leading-snug ${
           dropped
             ? 'text-slate-500 line-through decoration-slate-500/50'
-            : lane === 'landed'
+            : lane === 'landed' || lane === 'blocked'
               ? 'text-slate-400'
               : 'text-slate-100'
         }`}
@@ -86,7 +81,7 @@ export function TicketBoardCard({
 
       {note && (
         <div className="mt-2 flex items-center gap-1.5">
-          <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${LANE_DOT[tone]}`} />
+          <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${LANE_DOT[lane]}`} />
           <span className="truncate font-mono text-[9px] text-slate-500">{note}</span>
         </div>
       )}
