@@ -263,7 +263,7 @@ describe('card contents', () => {
     renderCard();
 
     const status = screen.getByText('Running').closest('[data-testid="chip"]');
-    expect(status?.className).toContain('bg-cyan-500/10 text-cyan-400 border-cyan-500/20');
+    expect(status?.className).toContain('bg-cyan-500/15 text-cyan-400 border-cyan-500/40');
     // The pulse dot is the `active` affordance, and only active runs get one.
     expect(status?.querySelector('[data-testid="chip-dot"]')).not.toBeNull();
   });
@@ -306,7 +306,7 @@ describe('card contents', () => {
 
     const transport = screen.getByTitle('Executes on this machine');
     expect(transport).toHaveTextContent('Local');
-    expect(transport.className).toContain('bg-slate-500/10 text-slate-400 border-slate-500/20');
+    expect(transport.className).toContain('bg-slate-500/15 text-slate-400 border-slate-500/40');
   });
 
   it('names the host for an attached remote run', () => {
@@ -314,7 +314,7 @@ describe('card contents', () => {
 
     const transport = screen.getByTitle('Executes on gpu-box over SSH');
     expect(transport).toHaveTextContent('Remote · SSH');
-    expect(transport.className).toContain('bg-cyan-500/10 text-cyan-400 border-cyan-500/20');
+    expect(transport.className).toContain('bg-cyan-500/15 text-cyan-400 border-cyan-500/40');
   });
 
   it('reports a detached run even on a local project', () => {
