@@ -128,11 +128,11 @@ export function featureRunStatus(feature: FeatureRunStatusFields): string {
 
 /** `bg/text/border` classes for a pill/chip in the given tone. */
 export const TONE_CHIP: Record<RunStatusTone, string> = {
-  emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  cyan:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  amber:   'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  ruby:    'bg-ruby-500/10 text-ruby-400 border-ruby-500/20',
-  slate:   'bg-slate-500/10 text-slate-400 border-slate-500/20',
+  emerald: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40',
+  cyan:    'bg-cyan-500/15 text-cyan-400 border-cyan-500/40',
+  amber:   'bg-amber-500/15 text-amber-400 border-amber-500/40',
+  ruby:    'bg-ruby-500/15 text-ruby-400 border-ruby-500/40',
+  slate:   'bg-slate-500/15 text-slate-400 border-slate-500/40',
 };
 
 /**
