@@ -15,6 +15,7 @@
 mod support;
 
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
+use demeteo_hub::attachments::AttachmentSettings;
 use demeteo_hub::auth::challenge::{base64url_decode, base64url_encode};
 use demeteo_hub::auth::policy::Status;
 use demeteo_hub::auth::session::{SessionSecret, COOKIE_NAME, CSRF_HEADER};
@@ -120,7 +121,15 @@ async fn hub_over(db: Db) -> Hub {
         rp_id: RP_ID.to_owned(),
         origin: HUB_ORIGIN.to_owned(),
     };
-    let state = AppState::new(db.clone(), rp, keys, SIGNING_KEY.to_owned()).unwrap();
+    let state = AppState::new(
+        db.clone(),
+        rp,
+        keys,
+        SIGNING_KEY.to_owned(),
+        SIGNING_KEY.to_owned(),
+        AttachmentSettings::default(),
+    )
+    .unwrap();
     let web_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("no-such-web-dir");
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await

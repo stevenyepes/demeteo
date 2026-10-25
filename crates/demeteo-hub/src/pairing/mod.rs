@@ -47,6 +47,7 @@
 //! this one callback (RFC 8252) is accepted. `dpop_jkt` is what makes an
 //! intercepted code useless, and it is not a reason to relax the redirect.
 
+pub mod access;
 pub mod authorize;
 pub mod dpop;
 pub mod grant;

@@ -14,6 +14,7 @@ use super::dispatch::{queue_as, strings_verdict, EnqueuedView};
 use super::fleet::granted;
 use super::runs::owned;
 use super::{ApiContext, PostgresApi};
+use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::assertion::shaped;
 use crate::auth::ceremonies::Ceremony;
 use crate::auth::challenge::{
@@ -287,7 +288,8 @@ pub async fn post_gate_challenge(
     JsonBody(body): JsonBody<GateChallengeBody>,
 ) -> Result<Json<GateChallengeView>, ApiError> {
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     let view = gate_challenge(
         &api,
         current.user,
@@ -307,7 +309,8 @@ pub async fn post_gate_decision(
     JsonBody(body): JsonBody<GateDecisionBody>,
 ) -> Result<(StatusCode, Json<EnqueuedView>), ApiError> {
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     let queued = gate_decision(
         &api,
         current.user,

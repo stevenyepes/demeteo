@@ -1098,7 +1098,7 @@ fn the_session_cookie_is_http_only_secure_and_same_site_strict() {
 /// This table and the next list every state-changing route the Hub serves.
 /// Their lengths are in their types so that losing a row is a compile error
 /// and not a loop that quietly covers one route fewer.
-const SESSION_BOUND_POSTS: [&str; 15] = [
+const SESSION_BOUND_POSTS: [&str; 16] = [
     "/v1/session/end",
     "/v1/passkeys/add/start",
     "/v1/passkeys/add/finish",
@@ -1110,6 +1110,7 @@ const SESSION_BOUND_POSTS: [&str; 15] = [
     "/v1/pairing/approve",
     "/v1/pairing/deny",
     "/v1/instances/{instance_id}/runs",
+    "/v1/instances/{instance_id}/attachments",
     "/v1/instances/{instance_id}/runs/{feature_id}/cancel",
     "/v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment",
     "/v1/instances/{instance_id}/gates/challenge",
@@ -1246,7 +1247,11 @@ async fn a_state_changing_request_from_another_origin_is_403() {
         .chain(PRE_SESSION_POSTS)
         .collect();
     let distinct: BTreeSet<&str> = every_post.iter().copied().collect();
-    assert_eq!(distinct.len(), 19, "a path is listed twice: {every_post:?}");
+    assert_eq!(
+        distinct.len(),
+        SESSION_BOUND_POSTS.len() + PRE_SESSION_POSTS.len(),
+        "a path is listed twice: {every_post:?}"
+    );
 
     for path in every_post {
         assert_eq!(

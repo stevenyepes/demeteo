@@ -1,4 +1,5 @@
 use crate::api;
+use crate::attachments::{self, AttachmentSettings};
 use crate::auth::ceremonies::Ceremonies;
 use crate::auth::handlers::{self, cookie_text, header_text, ApiError};
 use crate::auth::session::{self, Rejection};
@@ -11,7 +12,7 @@ use crate::ports::KeyService;
 use crate::socket;
 use crate::socket::connections::Connections;
 use crate::store::Db;
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::header::ORIGIN;
 use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -30,6 +31,8 @@ struct Shared {
     connections: Connections,
     keys: Arc<dyn KeyService>,
     signing_key: SigningKey,
+    transit_key: String,
+    attachments: AttachmentSettings,
 }
 
 /// axum clones the state into every request, so everything but the pool is
@@ -45,13 +48,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// `signing_key` is the name `keys` knows the request-signing key by.
-    /// Nothing here asks `keys` for it, or for anything else.
+    /// `signing_key` is the name `keys` knows the request-signing key by, and
+    /// `transit_key` the one it wraps attachment data keys under. Nothing here
+    /// asks `keys` for either, or for anything else.
     pub fn new(
         db: Db,
         rp: RelyingParty,
         keys: Arc<dyn KeyService>,
         signing_key: String,
+        transit_key: String,
+        attachments: AttachmentSettings,
     ) -> Result<Self, RelyingPartyError> {
         let verifier = Verifier::new(&rp)?;
         Ok(Self {
@@ -64,6 +70,8 @@ impl AppState {
                 connections: Connections::default(),
                 keys,
                 signing_key: SigningKey::new(signing_key),
+                transit_key,
+                attachments,
             }),
         })
     }
@@ -99,15 +107,23 @@ impl AppState {
     pub fn signing_key(&self) -> &SigningKey {
         &self.shared.signing_key
     }
+
+    pub fn transit_key(&self) -> &str {
+        &self.shared.transit_key
+    }
+
+    pub fn attachments(&self) -> &AttachmentSettings {
+        &self.shared.attachments
+    }
 }
 
 /// `/healthz` is liveness only: it must stay green while OpenBao is sealed or
 /// Postgres is away, or the orchestrator restarts a Hub that is merely waiting
 /// for a manual unseal. Its handler therefore extracts no part of `state`,
-/// though `/token` and the socket beside it and the `/v1` routes all hold it,
-/// and building the router dials nothing. Nor does it wait on a socket: a
-/// session runs in a task of its own, and the registry of them is asked
-/// nothing here.
+/// though `/token`, the socket and the attachment fetch beside it and the
+/// `/v1` routes all hold it, and building the router dials nothing. Nor does
+/// it wait on a socket: a session runs in a task of its own, and the registry
+/// of them is asked nothing here.
 ///
 /// A missing `web_dir` degrades to 404s at request time, never a startup failure.
 pub fn router(state: AppState, web_dir: &Path) -> Router {
@@ -128,6 +144,12 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
         // through, so in there this would be guarded by nothing and read as
         // if it were.
         .route(socket::handler::SOCKET_PATH, get(socket::handler::socket))
+        // Outside `v1` for the socket's reasons: an instance fetches with
+        // its access token and a proof for this URL, and sends no `Origin`.
+        .route(
+            attachments::fetch::FETCH_ROUTE,
+            get(attachments::fetch::get_attachment),
+        )
         .with_state(state.clone())
         .merge(v1(state));
     router_with(routes, web_dir)
@@ -181,6 +203,13 @@ fn v1(state: AppState) -> Router {
             "/v1/instances/{instance_id}/runs",
             post(api::dispatch::post_dispatch),
         )
+        // The one route whose body is a file: everywhere else axum's default
+        // limit stands.
+        .route(
+            "/v1/instances/{instance_id}/attachments",
+            post(api::attachments::post_upload)
+                .layer(DefaultBodyLimit::max(body_limit(state.attachments()))),
+        )
         .route(
             "/v1/instances/{instance_id}/runs/{feature_id}/cancel",
             post(api::dispatch::post_cancel),
@@ -206,6 +235,12 @@ fn v1(state: AppState) -> Router {
             guard_mutations,
         ))
         .with_state(state)
+}
+
+/// A limit past what `usize` holds is no limit: no body that long can be
+/// buffered to be refused.
+fn body_limit(settings: &AttachmentSettings) -> usize {
+    usize::try_from(settings.max_bytes).unwrap_or(usize::MAX)
 }
 
 /// The `/v1` routes that change state before there is a session, whose only

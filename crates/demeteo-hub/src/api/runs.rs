@@ -9,6 +9,7 @@ use super::fleet::{granted, parsed_instance, RunSummary};
 use super::run_state::{by_feature, fold, FeatureStatus, PendingGate, StepState, TicketProgress};
 use super::scope::read_verdict;
 use super::{ApiContext, PostgresApi};
+use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::handlers::{store_failed, unix_now, ApiError, CurrentSession};
 use crate::routes::AppState;
 use crate::store::instances::Instance;
@@ -143,7 +144,8 @@ pub async fn get_runs(
 ) -> Result<Json<RunsView>, ApiError> {
     let Query(filter) = query.map_err(|_| ApiError::INVALID_REQUEST)?;
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     runs(&api, current.user, filter, unix_now()).await.map(Json)
 }
 
@@ -155,7 +157,8 @@ pub async fn get_run(
     Path((instance_id, feature_id)): Path<(String, String)>,
 ) -> Result<Json<RunDetailView>, ApiError> {
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     run_detail(&api, current.user, &instance_id, &feature_id, unix_now())
         .await
         .map(Json)

@@ -4,8 +4,12 @@
 //!
 //! A row is marked and never deleted. `attachments` references a request
 //! `ON DELETE CASCADE`, so deleting an answered or expired request would take
-//! the ciphertext staged for it along, and what becomes of that is not
-//! decided here.
+//! the ciphertext staged for it along. What becomes of an attachment is
+//! decided elsewhere, and no delete here may stand in for it: it is bound to
+//! its request at dispatch, by [`insert_request_binding`], and takes the
+//! request's expiry; it is consumed by the instance's one fetch of it; and
+//! one never fetched is swept once that expiry has passed
+//! ([`attachments`](super::attachments), `docs/HUB.md` §6.3).
 //!
 //! No statement here reads a clock. [`list_queued_requests`] returns a
 //! request that is past its `expires_at` like any other, and whether it is
@@ -23,11 +27,13 @@
 //! `expires_at` the verdict delivery applies, and must not read the column
 //! as that verdict.
 
+use super::attachments::bind_to_request;
 use super::{timestamp, Db, InstanceId, StoreError, UserId};
 use demeteo_hub_protocol::{RefusalReason, RequestOutcome, SignedRequest};
 use serde_json::Value;
-use sqlx::FromRow;
+use sqlx::{FromRow, PgExecutor};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// The raw bytes of a request's id. The envelope's `request_id` is their
 /// text; the primary key and the `attachments` foreign key are the bytes.
@@ -177,7 +183,7 @@ fn stored_envelope(text: &str) -> QueuedEnvelope {
     }
 }
 
-fn stored_expiry(expires_at: OffsetDateTime) -> Result<u64, StoreError> {
+pub(super) fn stored_expiry(expires_at: OffsetDateTime) -> Result<u64, StoreError> {
     let seconds = expires_at.unix_timestamp();
     u64::try_from(seconds).map_err(|_| StoreError::ExpiryOutOfRange(seconds))
 }
@@ -289,7 +295,7 @@ impl TryFrom<RecordRow> for RequestRecord {
 /// U+0000 in any string, which `JSONB` does not store.
 pub async fn insert_request(
     user: UserId,
-    db: &Db,
+    db: impl PgExecutor<'_>,
     instance: InstanceId,
     new: &NewRequest,
 ) -> Result<(), StoreError> {
@@ -309,6 +315,43 @@ pub async fn insert_request(
     .bind(expires_at)
     .execute(db)
     .await?;
+    Ok(())
+}
+
+/// [`insert_request`] and the binding of `attachments` to the request, in
+/// one transaction: either the request is queued and every id is bound, or
+/// neither is and the answer is [`StoreError::AttachmentUnavailable`]. `now`
+/// (Unix seconds) is what a staged row's expiry is compared with.
+///
+/// The transaction holds the row locks the `UPDATE` takes until it ends, so
+/// nothing that waits on another service may run inside it: the envelope is
+/// signed, and every data key unwrapped, before this is called.
+pub async fn insert_request_binding(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    new: &NewRequest,
+    attachments: &[Uuid],
+    now: u64,
+) -> Result<(), StoreError> {
+    let mut tx = db.begin().await?;
+    insert_request(user, &mut *tx, instance, new).await?;
+    let bound = bind_to_request(
+        user,
+        &mut tx,
+        instance,
+        attachments,
+        &new.id,
+        new.expires_at,
+        now,
+    )
+    .await?;
+    if usize::try_from(bound).ok() != Some(attachments.len()) {
+        // As in `record_outcome`: a failed ROLLBACK does not change the answer.
+        let _ = tx.rollback().await;
+        return Err(StoreError::AttachmentUnavailable);
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -431,6 +474,11 @@ pub async fn mark_request_expired(
 /// the new one is `decide`'s answer alone. An answer for an answered row
 /// overwrites it.
 ///
+/// Writing an outcome deletes the request's attachments in the same
+/// transaction: from then on they cannot be fetched (`docs/HUB.md` §6.3), so
+/// keeping them until the sweep at the request's expiry would be custody of
+/// content nobody can be handed. `None` deletes nothing.
+///
 /// The row is locked from the read to the write so that two results for one
 /// request take turns, and the second is shown the outcome the first
 /// recorded. The lock is `FOR NO KEY UPDATE`, which two of them still
@@ -480,6 +528,14 @@ pub async fn record_outcome(
     .bind(outcome)
     .bind(refusal_reason)
     .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM attachments WHERE user_id = $1 AND instance_id = $2 AND request_id = $3",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(id.as_slice())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

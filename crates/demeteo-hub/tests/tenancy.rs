@@ -16,7 +16,8 @@ use demeteo_hub::socket::postgres::PostgresStore;
 use demeteo_hub::socket::requests::OutcomeChange;
 use demeteo_hub::socket::SNAPSHOT_KIND;
 use demeteo_hub::store::attachments::{
-    get_attachment, insert_attachment, NewAttachment, WrappedKey,
+    bind_to_request, consumed, delete_expired, fetchable, insert_attachment, staged_of,
+    NewAttachment, WrappedKey,
 };
 use demeteo_hub::store::device_keys::{instance_of_key, NewDeviceKey};
 use demeteo_hub::store::instances::{
@@ -24,11 +25,11 @@ use demeteo_hub::store::instances::{
     record_departure, record_hello, Instance, NewInstance, NewInstanceLabels, NewPairing,
 };
 use demeteo_hub::store::passkeys::{insert_passkey, list_passkeys, NewPasskey};
-use demeteo_hub::store::pool::create_user;
+use demeteo_hub::store::pool::{create_user, tenants};
 use demeteo_hub::store::requests::{
-    find_request, insert_request, list_queued_requests, mark_request_expired, mark_request_sent,
-    record_outcome, NewRequest, QueuedEnvelope, RequestId, RequestRecord, RequestState,
-    RequestStatus,
+    find_request, insert_request, insert_request_binding, list_queued_requests,
+    mark_request_expired, mark_request_sent, record_outcome, NewRequest, QueuedEnvelope, RequestId,
+    RequestRecord, RequestState, RequestStatus,
 };
 use demeteo_hub::store::run_mirror::{mirror_event, mirror_of, MirrorRecord, NewEvent};
 use demeteo_hub::store::sessions::{
@@ -411,41 +412,336 @@ async fn child_row_naming_another_users_instance_is_rejected() {
     .await;
 }
 
+fn new_attachment(instance: InstanceId, expires_at: u64) -> NewAttachment {
+    NewAttachment {
+        id: Uuid::new_v4(),
+        instance_id: instance,
+        ciphertext: vec![1, 2, 3],
+        wrapped_key: WrappedKey::parse("vault:v1:wrapped").unwrap(),
+        sealed_digest: vec![9; 60],
+        expires_at,
+    }
+}
+
+async fn bound(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    ids: &[Uuid],
+    request: &NewRequest,
+    now: u64,
+) -> u64 {
+    let mut tx = db.begin().await.unwrap();
+    let bound = bind_to_request(
+        user,
+        &mut tx,
+        instance,
+        ids,
+        &request.id,
+        request.expires_at,
+        now,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    bound
+}
+
 #[tokio::test]
 #[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
 async fn attachments_are_invisible_to_other_users() {
     in_fresh_schema(|db| async move {
         let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
         let (b, _) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let attachment = new_attachment(a_instance, now + 3600);
 
-        let request_id = vec![7u8; 16];
-        sqlx::query(
-            "INSERT INTO instance_requests (id, user_id, instance_id, kind, envelope, expires_at) \
-             VALUES ($1, $2, $3, 'probe', '{}'::jsonb, now() + interval '1 hour')",
-        )
-        .bind(&request_id)
-        .bind(a)
-        .bind(a_instance)
-        .execute(&db)
-        .await
-        .unwrap();
-
-        let attachment = NewAttachment {
-            instance_id: a_instance,
-            request_id,
-            ciphertext: vec![1, 2, 3],
-            wrapped_key: WrappedKey::parse("vault:v1:wrapped").unwrap(),
-        };
         assert!(insert_attachment(b, &db, &attachment).await.is_err());
         let stored = insert_attachment(a, &db, &attachment).await.unwrap();
+        assert_eq!(stored.id, attachment.id);
+        assert_eq!(stored.request_id, None);
         assert_eq!(stored.wrapped_key, "vault:v1:wrapped");
-        assert_eq!(
-            stored.sha256,
-            Sha256::digest(&attachment.ciphertext).as_slice()
-        );
+        assert_eq!(stored.sealed_digest, attachment.sealed_digest);
         assert_eq!(stored.size_bytes, 3);
-        assert!(get_attachment(a, &db, stored.id).await.unwrap().is_some());
-        assert!(get_attachment(b, &db, stored.id).await.unwrap().is_none());
+        assert_eq!(stored.expires_at, now + 3600);
+        let sha256: Vec<u8> = sqlx::query_scalar("SELECT sha256 FROM attachments WHERE id = $1")
+            .bind(attachment.id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(sha256, Sha256::digest(&attachment.ciphertext).as_slice());
+
+        let ids = [attachment.id];
+        assert_eq!(
+            staged_of(a, &db, a_instance, &ids).await.unwrap(),
+            vec![stored]
+        );
+        assert!(staged_of(b, &db, a_instance, &ids)
+            .await
+            .unwrap()
+            .is_empty());
+        let request = new_request([7; 16], a_instance, now + 300);
+        insert_request(a, &db, a_instance, &request).await.unwrap();
+        assert_eq!(bound(b, &db, a_instance, &ids, &request, now).await, 0);
+        assert_eq!(bound(a, &db, a_instance, &ids, &request, now).await, 1);
+        assert!(fetchable(b, &db, a_instance, attachment.id, now)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(delete_expired(b, &db, now + 7200).await.unwrap(), 0);
+        assert!(!consumed(b, &db, a_instance, attachment.id, now)
+            .await
+            .unwrap());
+        assert!(consumed(a, &db, a_instance, attachment.id, now)
+            .await
+            .unwrap());
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn the_dispatch_read_answers_what_the_insert_returned_and_the_fetch_adds_the_ciphertext() {
+    in_fresh_schema(|db| async move {
+        let (a, instance) = user_with_instance(&db, "laptop").await;
+        let now = unix_now();
+        let new = new_attachment(instance, now + 3600);
+        let stored = insert_attachment(a, &db, &new).await.unwrap();
+        assert_eq!(
+            staged_of(a, &db, instance, &[new.id]).await.unwrap(),
+            vec![stored]
+        );
+
+        let request = new_request([7; 16], instance, now + 300);
+        insert_request(a, &db, instance, &request).await.unwrap();
+        assert_eq!(bound(a, &db, instance, &[new.id], &request, now).await, 1);
+        let read = staged_of(a, &db, instance, &[new.id]).await.unwrap();
+        let fetched = fetchable(a, &db, instance, new.id, now)
+            .await
+            .unwrap()
+            .expect("bound to a queued request");
+        assert_eq!(fetched.ciphertext, new.ciphertext);
+        assert_eq!(vec![fetched.meta()], read);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_request_is_queued_only_with_every_attachment_it_binds() {
+    in_fresh_schema(|db| async move {
+        let (a, instance) = user_with_instance(&db, "laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let staged = new_attachment(instance, now + 3600);
+        let foreign = new_attachment(b_instance, now + 3600);
+        insert_attachment(a, &db, &staged).await.unwrap();
+        insert_attachment(b, &db, &foreign).await.unwrap();
+        let request = new_request([7; 16], instance, now + 300);
+
+        for refused in [vec![staged.id, foreign.id], vec![staged.id, staged.id]] {
+            let err = insert_request_binding(a, &db, instance, &request, &refused, now)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, StoreError::AttachmentUnavailable), "{err}");
+            assert!(find_request(a, &db, instance, &request.id)
+                .await
+                .unwrap()
+                .is_none());
+            let rows = staged_of(a, &db, instance, &[staged.id]).await.unwrap();
+            assert_eq!(rows[0].request_id, None);
+            assert_eq!(rows[0].expires_at, now + 3600);
+        }
+
+        insert_request_binding(a, &db, instance, &request, &[staged.id], now)
+            .await
+            .unwrap();
+        assert!(find_request(a, &db, instance, &request.id)
+            .await
+            .unwrap()
+            .is_some());
+        let rows = staged_of(a, &db, instance, &[staged.id]).await.unwrap();
+        assert_eq!(rows[0].request_id, Some(request.id));
+        assert_eq!(rows[0].expires_at, request.expires_at);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_attachment_is_bound_once_and_fetchable_only_while_its_request_is_queued() {
+    in_fresh_schema(|db| async move {
+        let (a, instance) = user_with_instance(&db, "laptop").await;
+        let now = unix_now();
+        let staged = new_attachment(instance, now + 3600);
+        let lapsed = new_attachment(instance, now);
+        for new in [&staged, &lapsed] {
+            insert_attachment(a, &db, new).await.unwrap();
+        }
+        let request = new_request([7; 16], instance, now + 300);
+        let other = new_request([8; 16], instance, now + 300);
+        for new in [&request, &other] {
+            insert_request(a, &db, instance, new).await.unwrap();
+        }
+
+        assert!(fetchable(a, &db, instance, staged.id, now)
+            .await
+            .unwrap()
+            .is_none());
+        let both = [staged.id, lapsed.id];
+        assert_eq!(bound(a, &db, instance, &both, &request, now).await, 1);
+        assert_eq!(bound(a, &db, instance, &[staged.id], &other, now).await, 0);
+
+        let fetched = fetchable(a, &db, instance, staged.id, now)
+            .await
+            .unwrap()
+            .expect("bound to a queued request");
+        assert_eq!(fetched.request_id, Some(request.id));
+        assert_eq!(fetched.expires_at, request.expires_at);
+        assert!(fetchable(a, &db, instance, staged.id, request.expires_at)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(fetchable(a, &db, instance, lapsed.id, now)
+            .await
+            .unwrap()
+            .is_none());
+
+        mark_request_expired(a, &db, instance, &request.id)
+            .await
+            .unwrap();
+        assert!(fetchable(a, &db, instance, staged.id, now)
+            .await
+            .unwrap()
+            .is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_attachment_is_consumed_only_while_its_request_is_queued() {
+    in_fresh_schema(|db| async move {
+        let (a, instance) = user_with_instance(&db, "laptop").await;
+        let now = unix_now();
+        let mut bound_ids = Vec::new();
+        for n in 1..=4 {
+            let new = new_attachment(instance, now + 3600);
+            insert_attachment(a, &db, &new).await.unwrap();
+            let request = new_request([n; 16], instance, now + 300);
+            insert_request(a, &db, instance, &request).await.unwrap();
+            assert_eq!(bound(a, &db, instance, &[new.id], &request, now).await, 1);
+            bound_ids.push((new.id, request.id));
+        }
+        let [answered, expired, lapsed, live] = bound_ids[..] else {
+            unreachable!("four were bound");
+        };
+        let accepted = |_: RequestState| Some(RequestOutcome::Accepted);
+        assert!(record_outcome(a, &db, instance, &answered.1, now, accepted)
+            .await
+            .unwrap());
+        assert!(mark_request_expired(a, &db, instance, &expired.1)
+            .await
+            .unwrap());
+
+        assert!(!consumed(a, &db, instance, answered.0, now).await.unwrap());
+        for (name, id, at) in [
+            ("marked expired", expired.0, now),
+            ("past its expires_at", lapsed.0, now + 300),
+        ] {
+            assert!(!consumed(a, &db, instance, id, at).await.unwrap(), "{name}");
+            let kept = staged_of(a, &db, instance, &[id]).await.unwrap();
+            assert_eq!(kept.len(), 1, "{name} was deleted");
+        }
+        assert!(consumed(a, &db, instance, live.0, now).await.unwrap());
+        assert!(!consumed(a, &db, instance, live.0, now).await.unwrap());
+    })
+    .await;
+}
+
+/// `b`'s request carries the same id bytes as the one answered: only the
+/// tenant and the instance tell its row apart.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn recording_an_outcome_deletes_only_that_requests_attachments() {
+    in_fresh_schema(|db| async move {
+        let (a, instance) = user_with_instance(&db, "laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let mut rows = Vec::new();
+        for (user, at, n) in [(a, instance, 1), (a, instance, 2), (b, b_instance, 1)] {
+            let new = new_attachment(at, now + 3600);
+            insert_attachment(user, &db, &new).await.unwrap();
+            let request = new_request([n; 16], at, now + 300);
+            insert_request(user, &db, at, &request).await.unwrap();
+            assert_eq!(bound(user, &db, at, &[new.id], &request, now).await, 1);
+            rows.push((new.id, request.id));
+        }
+        let [answered, other, strangers] = rows[..] else {
+            unreachable!("three were bound");
+        };
+        let unbound = new_attachment(instance, now + 3600);
+        insert_attachment(a, &db, &unbound).await.unwrap();
+        let own = [answered.0, other.0, unbound.id];
+
+        let keep = |_: RequestState| None;
+        assert!(record_outcome(a, &db, instance, &answered.1, now, keep)
+            .await
+            .unwrap());
+        let accepted = |_: RequestState| Some(RequestOutcome::Accepted);
+        assert!(!record_outcome(a, &db, instance, &[9; 16], now, accepted)
+            .await
+            .unwrap());
+        assert_eq!(staged_of(a, &db, instance, &own).await.unwrap().len(), 3);
+
+        assert!(record_outcome(a, &db, instance, &answered.1, now, accepted)
+            .await
+            .unwrap());
+        let left = staged_of(a, &db, instance, &own).await.unwrap();
+        let mut left: Vec<Uuid> = left.iter().map(|row| row.id).collect();
+        left.sort();
+        let mut expected = vec![other.0, unbound.id];
+        expected.sort();
+        assert_eq!(left, expected);
+        let theirs = staged_of(b, &db, b_instance, &[strangers.0]).await.unwrap();
+        assert_eq!(theirs.len(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn the_sweep_deletes_one_tenants_expired_attachments_per_call() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let lapsed = new_attachment(a_instance, now);
+        let waiting = new_attachment(a_instance, now + 1);
+        let b_lapsed = new_attachment(b_instance, now - 1);
+        insert_attachment(a, &db, &lapsed).await.unwrap();
+        insert_attachment(a, &db, &waiting).await.unwrap();
+        insert_attachment(b, &db, &b_lapsed).await.unwrap();
+
+        let mut tenants = tenants(&db).await.unwrap();
+        tenants.sort_by_key(|user| user.handle());
+        let mut expected = vec![a, b];
+        expected.sort_by_key(|user| user.handle());
+        assert_eq!(tenants, expected);
+
+        assert_eq!(delete_expired(a, &db, now).await.unwrap(), 1);
+        let left = staged_of(a, &db, a_instance, &[lapsed.id, waiting.id])
+            .await
+            .unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, waiting.id);
+        assert_eq!(
+            staged_of(b, &db, b_instance, &[b_lapsed.id])
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     })
     .await;
 }

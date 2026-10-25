@@ -29,8 +29,8 @@ use super::requests::OutcomeChange;
 use super::SNAPSHOT_KIND;
 use crate::store::instances::{granted_scopes, record_departure, record_hello};
 use crate::store::requests::{
-    insert_request, list_queued_requests, mark_request_expired, mark_request_sent, record_outcome,
-    NewRequest, QueuedRequest, RequestId, RequestState,
+    insert_request, insert_request_binding, list_queued_requests, mark_request_expired,
+    mark_request_sent, record_outcome, NewRequest, QueuedRequest, RequestId, RequestState,
 };
 use crate::store::run_mirror::{mirror_event, NewEvent};
 use crate::store::snapshots::replace_snapshot;
@@ -38,6 +38,7 @@ use crate::store::{Db, InstanceId, StoreError, UserId};
 use async_trait::async_trait;
 use demeteo_hub_protocol::{Hello, RequestOutcome, RunEvent, Scope, Snapshot};
 use serde::Serialize;
+use uuid::Uuid;
 
 /// The rows of `instance` as `user` holds them. Nothing here checks that
 /// `user` has such an instance: both are whatever the caller was admitted
@@ -155,6 +156,23 @@ impl SocketStore for PostgresStore {
 
     async fn request_inserted(&self, request: NewRequest) -> Result<(), StoreError> {
         insert_request(self.user, &self.db, self.instance, &request).await
+    }
+
+    async fn request_inserted_binding(
+        &self,
+        request: NewRequest,
+        attachments: &[Uuid],
+        now: u64,
+    ) -> Result<(), StoreError> {
+        insert_request_binding(
+            self.user,
+            &self.db,
+            self.instance,
+            &request,
+            attachments,
+            now,
+        )
+        .await
     }
 
     async fn queued_requests(&self) -> Result<Vec<QueuedRequest>, StoreError> {
