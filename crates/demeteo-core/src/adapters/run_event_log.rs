@@ -33,6 +33,12 @@
 //! | `bootstrap_progress` | `phase`, `label`, `status`, `detail` | feature-start sub-steps |
 //! | `step_output`        | `step_execution_id`, `text` | coalesced agent output — **remote only** (the runner bridge buffers `AgentStream` deltas; locally the durable transcript already lives in the `messages` table, so the recorder skips it) |
 //!
+//! Only `feature_status`, `step_progress`, `gate_required`, `gate_decided`
+//! and `gate_auto_approved` cross to a paired Hub, and only for some
+//! statuses and never with their payload as written: the allowlist is
+//! [`hub_event`](crate::domain::hub_socket::hub_event), and a kind added
+//! here stays local until that `match` names it.
+//!
 //! Plus the coarse run-lifecycle kinds `run.rs` appends by hand on the
 //! runner (`submitted`, `bootstrapped`, `pushed`, `pr_opened`, …), which
 //! have no local equivalent.

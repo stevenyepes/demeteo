@@ -12,8 +12,12 @@ edition = "2021"
 # crates/demeteo-runner/src/credentials.rs. There is also no keyring
 # daemon to talk to on a headless remote, so linking one in would only
 # buy a store that always fails to open.
-default = ["keyring"]
+default = ["keyring", "hub-socket"]
 keyring = ["dep:keyring"]
+# The desktop's WebSocket to the Hub (adapters/hub/socket/ws_transport.rs).
+# It needs `keyring` because the pairing it authenticates with lives there,
+# and the runner, which never pairs, leaves both off.
+hub-socket = ["keyring", "dep:tokio-tungstenite", "dep:rustls", "dep:rustls-platform-verifier"]
 # Build openssl from source via openssl-sys's vendored feature instead
 # of letting pkg-config locate the host's libssl. Required when
 # cross-compiling to x86_64-unknown-linux-musl: the host's libssl-dev
@@ -40,11 +44,18 @@ async-trait = "0.1"
 aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
 axum = "0.8"
 base64 = "0.22"
+demeteo-hub-protocol = { path = "../demeteo-hub-protocol" }
 getrandom = "0.3"
 keyring = { version = "4", optional = true }
 parking_lot = "0.12"
 refinery = { version = "0.9", features = ["rusqlite"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+# Exactly reqwest's `rustls` provider set: a second provider (`ring`) makes
+# rustls's process default ambiguous. ws_transport.rs names its provider
+# explicitly all the same.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"], optional = true }
+# The roots reqwest trusts for `/token`, so the socket trusts the same Hub.
+rustls-platform-verifier = { version = "0.7", optional = true }
 # A bump that moves libsqlite3-sys fails to resolve the whole workspace, desktop
 # included, until sqlx in crates/demeteo-hub/Cargo.toml moves in lockstep.
 rusqlite = { version = "0.39", features = ["bundled"] }
@@ -57,6 +68,9 @@ ssh2 = "0.9"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
+# `__rustls-tls` with no roots feature: the `ClientConfig` comes from
+# ws_transport.rs, never from the crate's own fallback.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "__rustls-tls"], optional = true }
 tracing = "0.1"
 schemars = "1"
 jsonschema = { version = "0.49", default-features = false }

@@ -314,6 +314,10 @@ pub fn run() {
 
             commands::workflows::seed_starter_workflows(&ctx.workflows);
             ctx.app_version.set(app.package_info().version.to_string());
+            // After the version, which the socket's `Hello` announces.
+            if let Some(hub) = &ctx.hub {
+                hub.start_socket();
+            }
 
             app.manage(ctx);
             app.manage(SessionState::default());

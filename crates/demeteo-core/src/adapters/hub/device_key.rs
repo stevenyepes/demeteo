@@ -11,9 +11,9 @@
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 
-use crate::domain::hub_pairing::dpop::{dpop_proof, dpop_signing_input};
+use crate::domain::hub_pairing::dpop::{dpop_proof, dpop_signing_input_for};
 use crate::domain::hub_pairing::jwk::{fingerprint, thumbprint};
-use crate::domain::hub_pairing::HubPairingError;
+use crate::domain::hub_pairing::{access_token_hash, HubPairingError};
 
 /// No `Debug`, `Clone` or `Serialize`: the private half leaves only through
 /// [`DeviceKey::to_pkcs8`], on its way to the OS keyring.
@@ -64,7 +64,21 @@ impl DeviceKey {
     /// A proof for `POST htu` at `iat` (Unix seconds). The Hub refuses a
     /// `jti` outside 1 to 128 bytes.
     pub fn dpop_proof(&self, htu: &str, iat: u64, jti: &str) -> Result<String, HubPairingError> {
-        let signing_input = dpop_signing_input(&self.point, htu, iat, jti);
+        self.dpop_proof_for("POST", htu, iat, jti, None)
+    }
+
+    /// A proof for `htm htu`, bound to `access_token` when the request
+    /// presents one.
+    pub fn dpop_proof_for(
+        &self,
+        htm: &str,
+        htu: &str,
+        iat: u64,
+        jti: &str,
+        access_token: Option<&str>,
+    ) -> Result<String, HubPairingError> {
+        let ath = access_token.map(access_token_hash);
+        let signing_input = dpop_signing_input_for(&self.point, htm, htu, iat, jti, ath.as_deref());
         let signature = self
             .key_pair
             .sign(&SystemRandom::new(), signing_input.as_bytes())
