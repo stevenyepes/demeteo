@@ -361,6 +361,8 @@ describe('the real tree, walked from hub-web and the canvas', () => {
     expect(visited).toEqual(
       expect.arrayContaining([
         'hub-web/src/App.tsx',
+        'hub-web/src/views/Dispatch.tsx',
+        'hub-web/src/components/DispatchPipeline.tsx',
         'src/components/canvas/nodeCatalog.ts',
         'src/components/canvas/nodes/WorkflowNode.tsx',
       ]),

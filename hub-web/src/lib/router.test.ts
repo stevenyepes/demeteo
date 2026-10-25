@@ -10,6 +10,7 @@ const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/runs', { name: 'runs' }],
   ['#/instances/i-1/runs/f-9', { name: 'run', instanceId: 'i-1', featureId: 'f-9' }],
   ['#/dispatch', { name: 'dispatch' }],
+  ['#/instances/i-1/dispatch', { name: 'dispatch', instanceId: 'i-1' }],
   ['#/add-instance', { name: 'add-instance' }],
   ['#/sign-up', { name: 'sign-up' }],
   ['#/sign-in', { name: 'sign-in' }],
@@ -49,9 +50,11 @@ describe('parseRoute', () => {
   it.each(['lab/box', 'lab box', '50%', 'add-instance'])('round-trips the id %j', (id) => {
     const instance: Linkable = { name: 'instance', instanceId: id };
     const run: Linkable = { name: 'run', instanceId: id, featureId: id };
+    const dispatch: Linkable = { name: 'dispatch', instanceId: id };
 
     expect(parseRoute(routeHref(instance))).toEqual(instance);
     expect(parseRoute(routeHref(run))).toEqual(run);
+    expect(parseRoute(routeHref(dispatch))).toEqual(dispatch);
   });
 
   it('tolerates one trailing slash', () => {
@@ -62,6 +65,7 @@ describe('parseRoute', () => {
   it('reports an over-long path as not-found', () => {
     expect(parseRoute('#/runs/x/y')).toEqual({ name: 'not-found', path: '/runs/x/y' });
     expect(parseRoute('#/instances/i-1/runs/f-9/extra').name).toBe('not-found');
+    expect(parseRoute('#/instances/i-1/dispatch/x').name).toBe('not-found');
   });
 
   it('reports a malformed percent-escape as not-found instead of throwing', () => {
@@ -90,6 +94,16 @@ describe('parseRoute', () => {
       expect(parseRoute(hash).name).toBe('not-found');
     },
   );
+
+  it('reads an instance dispatch as neither the instance nor a run', () => {
+    expect(parseRoute('#/instances/i-1/dispatch')).toEqual({ name: 'dispatch', instanceId: 'i-1' });
+    expect(parseRoute('#/instances/dispatch')).toEqual({ name: 'instance', instanceId: 'dispatch' });
+    expect(parseRoute('#/instances/i-1/runs/dispatch')).toEqual({
+      name: 'run',
+      instanceId: 'i-1',
+      featureId: 'dispatch',
+    });
+  });
 
   it('does not let an id shadow the add-instance route', () => {
     expect(parseRoute('#/instances/add')).toEqual({ name: 'instance', instanceId: 'add' });

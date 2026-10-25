@@ -59,7 +59,7 @@ function viewFor(route: Route, onSession: () => void): ReactElement {
     case 'run':
       return <Run instanceId={route.instanceId} featureId={route.featureId} />;
     case 'dispatch':
-      return <Dispatch />;
+      return <Dispatch instanceId={route.instanceId} />;
     case 'add-instance':
       return <AddInstance />;
     case 'pair':

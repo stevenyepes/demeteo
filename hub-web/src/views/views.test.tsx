@@ -40,6 +40,19 @@ vi.mock('../lib/fleet', () => ({
   getInstance: () => new Promise<never>(() => {}),
 }));
 
+/** Held in flight as well; `Dispatch.test.tsx` is where the Dispatch view meets them. */
+vi.mock('../lib/dispatch', () => ({
+  dispatchFeature: () => new Promise<never>(() => {}),
+  getRequestStatus: () => new Promise<never>(() => {}),
+  dispatchErrorSentence: () => null,
+  refusalSentence: () => null,
+}));
+
+vi.mock('../lib/attachments', () => ({
+  MAX_ATTACHMENTS_PER_DISPATCH: 10,
+  uploadAttachment: () => new Promise<never>(() => {}),
+}));
+
 const SESSION: Session = { csrfToken: 'csrf-1', credentialId: 'cred-1' };
 
 const VIEWS: { heading: string; element: ReactElement }[] = [

@@ -6,6 +6,7 @@
 
 use super::run_state::{by_feature, fold, FeatureStatus, PendingGate};
 use super::scope::read_verdict;
+use super::snapshot_view::{run_shape, workflows};
 use super::{ApiContext, PostgresApi, SnapshotRead};
 use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::handlers::{store_failed, unix_now, ApiError, CurrentSession};
@@ -19,6 +20,10 @@ use demeteo_hub_protocol::{RunEvent, RunEventKind, Scope};
 use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+pub use super::snapshot_view::{
+    GraphEdgeView, GraphNodeView, GraphPosition, RunShapeView, WorkflowGraphView, WorkflowView,
+};
 
 #[derive(Debug, Serialize)]
 pub struct FleetView {
@@ -70,6 +75,11 @@ pub struct InstanceDetailView {
     /// `None` without `read`; empty until the instance sends a snapshot, and
     /// while the one it sent is unreadable.
     pub projects: Option<Vec<ProjectView>>,
+    /// Graph-only, by the [`snapshot_view`](super::snapshot_view) rule.
+    /// `None` and empty as `projects` is.
+    pub workflows: Option<Vec<WorkflowView>>,
+    /// `None` and empty as `projects` is.
+    pub run_shape: Option<Vec<RunShapeView>>,
     /// `None` without `read`.
     pub live_runs: Option<Vec<RunSummary>>,
     /// Always `null`: no protocol message reports an instance's harnesses
@@ -178,11 +188,19 @@ pub async fn instance_detail(
         .ok_or(ApiError::NOT_FOUND)?;
     let scopes = granted(&row);
     let read_granted = read_verdict(&scopes).is_ok();
-    let (projects, live_runs) = if read_granted {
-        let projects = projects_of(api, user, id).await?;
-        (Some(projects), Some(runs_of(api, user, id).await?.live))
+    let (reported, live_runs) = if read_granted {
+        let reported = reported_of(api, user, id).await?;
+        (Some(reported), Some(runs_of(api, user, id).await?.live))
     } else {
         (None, None)
+    };
+    let (projects, workflows, run_shape) = match reported {
+        Some(reported) => (
+            Some(reported.projects),
+            Some(reported.workflows),
+            Some(reported.run_shape),
+        ),
+        None => (None, None, None),
     };
     Ok(InstanceDetailView {
         id: row.id.0.to_string(),
@@ -196,6 +214,8 @@ pub async fn instance_detail(
         scopes,
         read_granted,
         projects,
+        workflows,
+        run_shape,
         live_runs,
         harnesses: (),
     })
@@ -257,27 +277,38 @@ async fn runs_of(api: &ApiContext<'_>, user: UserId, id: InstanceId) -> Result<R
     Ok(runs)
 }
 
-async fn projects_of(
+#[derive(Default)]
+struct Reported {
+    projects: Vec<ProjectView>,
+    workflows: Vec<WorkflowView>,
+    run_shape: Vec<RunShapeView>,
+}
+
+async fn reported_of(
     api: &ApiContext<'_>,
     user: UserId,
     id: InstanceId,
-) -> Result<Vec<ProjectView>, ApiError> {
+) -> Result<Reported, ApiError> {
     let snapshot = api.store.snapshot(user, id).await.map_err(store_failed)?;
     Ok(match snapshot {
-        Some(SnapshotRead::Readable(snapshot)) => snapshot
-            .projects
-            .into_iter()
-            .map(|project| ProjectView {
-                id: project.id,
-                name: project.name,
-                remote_url: project.remote_url,
-            })
-            .collect(),
+        Some(SnapshotRead::Readable(snapshot)) => Reported {
+            projects: snapshot
+                .projects
+                .into_iter()
+                .map(|project| ProjectView {
+                    id: project.id,
+                    name: project.name,
+                    remote_url: project.remote_url,
+                })
+                .collect(),
+            workflows: workflows(snapshot.workflows),
+            run_shape: run_shape(snapshot.run_shape),
+        },
         Some(SnapshotRead::Unreadable) => {
             tracing::warn!(instance = %id.0, "a stored snapshot is unreadable");
-            Vec::new()
+            Reported::default()
         }
-        None => Vec::new(),
+        None => Reported::default(),
     })
 }
 

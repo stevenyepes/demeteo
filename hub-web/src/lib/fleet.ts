@@ -1,3 +1,4 @@
+import { type EffortLevel, isEffortLevel } from '../../../src/lib/effortLevels';
 import { type Guard, getJson, HubApiError } from './api';
 
 export type HubScope = 'read' | 'spend' | 'gates';
@@ -38,6 +39,29 @@ export type RunSummary = {
   costCents: number | null;
 };
 
+export type WorkflowGraphNode = {
+  id: string;
+  type: string;
+  title: string;
+  position: { x: number; y: number } | null;
+};
+
+export type WorkflowChoice = {
+  workflowId: string;
+  version: number;
+  name: string;
+  graph: { nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] } | null;
+};
+
+export type RunShapeDefaults = {
+  projectId: string;
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+  workflowId: string | null;
+  maxBudgetCents: number | null;
+};
+
 export type InstanceDetail = {
   id: string;
   present: boolean;
@@ -53,6 +77,8 @@ export type InstanceDetail = {
   projects: ProjectSummary[] | null;
   liveRuns: RunSummary[] | null;
   harnesses: null;
+  workflows: WorkflowChoice[] | null;
+  runShape: RunShapeDefaults[] | null;
 };
 
 type WireNeedsYou = {
@@ -88,6 +114,32 @@ type WireRunSummary = {
   cost_cents: number | null;
 };
 
+type WireGraphNode = {
+  id: string;
+  type: string;
+  title: string;
+  position: { x: number; y: number } | null;
+};
+
+type WireGraphEdge = { from: string; to: string };
+
+type WireWorkflow = {
+  workflow_id: string;
+  version: number;
+  name: string;
+  graph: { nodes: WireGraphNode[]; edges: WireGraphEdge[] } | null;
+};
+
+type WireRunShape = {
+  project_id: string;
+  default_agent_kind: string | null;
+  default_model: string | null;
+  /** Any string: an effort this build does not know maps to `null` rather than refusing the answer. */
+  default_effort: string | null;
+  default_workflow_id: string | null;
+  default_max_budget_cents: number | null;
+};
+
 type WireInstanceDetail = {
   id: string;
   present: boolean;
@@ -102,13 +154,15 @@ type WireInstanceDetail = {
   projects: WireProject[] | null;
   live_runs: WireRunSummary[] | null;
   harnesses: null;
+  workflows: WireWorkflow[] | null;
+  run_shape: WireRunShape[] | null;
 };
 
 const SCOPES: readonly unknown[] = ['read', 'spend', 'gates'] satisfies HubScope[];
 
 const STATUSES: readonly unknown[] = ['running', 'completed', 'failed', 'cancelled'] satisfies RunStatus[];
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function getFleet(): Promise<FleetInstance[]> {
   const { instances } = await getJson('/v1/fleet', isFleet);
@@ -164,6 +218,39 @@ function instanceDetailOf(wire: WireInstanceDetail): InstanceDetail {
     projects: wire.projects === null ? null : wire.projects.map(projectOf),
     liveRuns: wire.live_runs === null ? null : wire.live_runs.map(runSummaryOf),
     harnesses: null,
+    workflows: wire.workflows === null ? null : wire.workflows.map(workflowOf),
+    runShape: wire.run_shape === null ? null : wire.run_shape.map(runShapeOf),
+  };
+}
+
+function workflowOf(wire: WireWorkflow): WorkflowChoice {
+  return {
+    workflowId: wire.workflow_id,
+    version: wire.version,
+    name: wire.name,
+    graph:
+      wire.graph === null
+        ? null
+        : {
+            nodes: wire.graph.nodes.map((node) => ({
+              id: node.id,
+              type: node.type,
+              title: node.title,
+              position: node.position === null ? null : { x: node.position.x, y: node.position.y },
+            })),
+            edges: wire.graph.edges.map((edge) => ({ from: edge.from, to: edge.to })),
+          },
+  };
+}
+
+function runShapeOf(wire: WireRunShape): RunShapeDefaults {
+  return {
+    projectId: wire.project_id,
+    agentKind: wire.default_agent_kind,
+    model: wire.default_model,
+    effort: isEffortLevel(wire.default_effort) ? wire.default_effort : null,
+    workflowId: wire.default_workflow_id,
+    maxBudgetCents: wire.default_max_budget_cents,
   };
 }
 
@@ -226,6 +313,48 @@ const isWireRunSummary: Guard<WireRunSummary> = (value): value is WireRunSummary
   typeof memberOf(value, 'updated_at') === 'number' &&
   isNumberOrNull(memberOf(value, 'cost_cents'));
 
+const isWirePosition: Guard<{ x: number; y: number }> = (value): value is { x: number; y: number } =>
+  typeof memberOf(value, 'x') === 'number' && typeof memberOf(value, 'y') === 'number';
+
+const isWireGraphNode: Guard<WireGraphNode> = (value): value is WireGraphNode => {
+  const position = memberOf(value, 'position');
+  return (
+    typeof memberOf(value, 'id') === 'string' &&
+    typeof memberOf(value, 'type') === 'string' &&
+    typeof memberOf(value, 'title') === 'string' &&
+    (position === null || isWirePosition(position))
+  );
+};
+
+const isWireGraphEdge: Guard<WireGraphEdge> = (value): value is WireGraphEdge =>
+  typeof memberOf(value, 'from') === 'string' && typeof memberOf(value, 'to') === 'string';
+
+const isWireGraph: Guard<{ nodes: WireGraphNode[]; edges: WireGraphEdge[] }> = (
+  value,
+): value is { nodes: WireGraphNode[]; edges: WireGraphEdge[] } => {
+  const nodes = memberOf(value, 'nodes');
+  const edges = memberOf(value, 'edges');
+  return Array.isArray(nodes) && nodes.every(isWireGraphNode) && Array.isArray(edges) && edges.every(isWireGraphEdge);
+};
+
+const isWireWorkflow: Guard<WireWorkflow> = (value): value is WireWorkflow => {
+  const graph = memberOf(value, 'graph');
+  return (
+    typeof memberOf(value, 'workflow_id') === 'string' &&
+    typeof memberOf(value, 'version') === 'number' &&
+    typeof memberOf(value, 'name') === 'string' &&
+    (graph === null || isWireGraph(graph))
+  );
+};
+
+const isWireRunShape: Guard<WireRunShape> = (value): value is WireRunShape =>
+  typeof memberOf(value, 'project_id') === 'string' &&
+  isStringOrNull(memberOf(value, 'default_agent_kind')) &&
+  isStringOrNull(memberOf(value, 'default_model')) &&
+  isStringOrNull(memberOf(value, 'default_effort')) &&
+  isStringOrNull(memberOf(value, 'default_workflow_id')) &&
+  isNumberOrNull(memberOf(value, 'default_max_budget_cents'));
+
 const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireInstanceDetail =>
   typeof memberOf(value, 'id') === 'string' &&
   typeof memberOf(value, 'present') === 'boolean' &&
@@ -239,7 +368,9 @@ const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireIn
   typeof memberOf(value, 'read_granted') === 'boolean' &&
   isListOrNull(memberOf(value, 'projects'), isWireProject) &&
   isListOrNull(memberOf(value, 'live_runs'), isWireRunSummary) &&
-  memberOf(value, 'harnesses') === null;
+  memberOf(value, 'harnesses') === null &&
+  isListOrNull(memberOf(value, 'workflows'), isWireWorkflow) &&
+  isListOrNull(memberOf(value, 'run_shape'), isWireRunShape);
 
 function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
