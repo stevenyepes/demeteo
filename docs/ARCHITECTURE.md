@@ -424,7 +424,7 @@ socket client included
 |---|---|
 | `crates/demeteo-hub` | the axum server — partly built: passkey registration, sign-in, sessions, endorsement and revocation under `/v1`, pairing in `crates/demeteo-hub/src/pairing/` (`GET /authorize`, the consent routes under `/v1/pairing`, `POST /token`), and the instance socket in `crates/demeteo-hub/src/socket/` (`GET /socket`: admission by access token, presence, the run mirror, the latest snapshot, the signed request queue and its outcomes), and the session JSON API in `crates/demeteo-hub/src/api/` (fleet and run reads, dispatch, cancel, step assignment, gate challenge and decision, request status). It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — built, and the Hub is its only dependant so far |
-| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in, passkey management and the pairing approval page built; the fleet views are placeholders |
+| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in, passkey management and the pairing approval page built; Fleet and Instance read the session API, and Runs, Run and Dispatch are placeholders |
 
 The Hub does not link `demeteo-core` in v1. The desktop's client for it is a slice of the
 hexagon above — `domain/hub_pairing/`, `ports/hub.rs`, `adapters/hub/` — composed only

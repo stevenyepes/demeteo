@@ -34,6 +34,12 @@ vi.mock('../lib/passkeys', () => ({ listPasskeys: () => new Promise<never>(() =>
 /** Held in flight for the same reason; `ApprovePairing.test.tsx` is where it meets the prompt. */
 vi.mock('../lib/pairing', () => ({ startPairing: () => new Promise<never>(() => {}) }));
 
+/** Held in flight too; `Fleet.test.tsx` is where the views meet the fleet and its instances. */
+vi.mock('../lib/fleet', () => ({
+  getFleet: () => new Promise<never>(() => {}),
+  getInstance: () => new Promise<never>(() => {}),
+}));
+
 const SESSION: Session = { csrfToken: 'csrf-1', credentialId: 'cred-1' };
 
 const VIEWS: { heading: string; element: ReactElement }[] = [
