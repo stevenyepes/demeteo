@@ -7,7 +7,11 @@ use base64::Engine;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const PREFIX: &str = "memory";
+/// Starts with Transit's `vault:` so a wrapped data key passes
+/// [`WrappedKey::parse`](crate::store::attachments::WrappedKey::parse) and an
+/// upload test can store it; the `memory` tail keeps it from ever being
+/// mistaken for real Transit ciphertext.
+const PREFIX: &str = "vault:memory";
 const DATA_KEY_LEN: usize = 32;
 
 /// Test double. Its encryption is reversible and not cryptographic; its
@@ -125,6 +129,7 @@ fn fixed<const N: usize>(bytes: &[u8]) -> Result<[u8; N], KeyServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::attachments::WrappedKey;
     use aws_lc_rs::signature::{UnparsedPublicKey, ED25519};
 
     const KNOWN: &str = "known";
@@ -188,7 +193,9 @@ mod tests {
         let keys = MemoryKeys::sealed();
 
         assert!(is_sealed(keys.encrypt(KNOWN, b"x").await));
-        assert!(is_sealed(keys.decrypt(KNOWN, "memory:known:eA==").await));
+        assert!(is_sealed(
+            keys.decrypt(KNOWN, "vault:memory:known:eA==").await
+        ));
         assert!(is_sealed(keys.data_key(KNOWN).await));
         assert!(is_sealed(keys.verifying_key(KNOWN).await));
         assert!(is_sealed(keys.sign(KNOWN, b"x").await));
@@ -212,6 +219,28 @@ mod tests {
             dk.plaintext
         );
         assert_ne!(dk.plaintext, keys.data_key(KNOWN).await.unwrap().plaintext);
+    }
+
+    #[tokio::test]
+    async fn data_key_wrapped_form_is_a_storable_transit_key_of_32_bytes() {
+        let keys = double();
+        let dk = keys.data_key(KNOWN).await.unwrap();
+        assert!(WrappedKey::parse(dk.wrapped.clone()).is_some());
+        assert_eq!(dk.plaintext.len(), 32);
+        assert_eq!(
+            keys.decrypt(KNOWN, &dk.wrapped).await.unwrap(),
+            dk.plaintext
+        );
+    }
+
+    #[tokio::test]
+    async fn data_key_wrapped_under_another_key_does_not_decrypt() {
+        let keys = MemoryKeys::with_keys([KNOWN, OTHER]);
+        let dk = keys.data_key(KNOWN).await.unwrap();
+        assert!(matches!(
+            keys.decrypt(OTHER, &dk.wrapped).await,
+            Err(KeyServiceError::Malformed(_))
+        ));
     }
 
     #[tokio::test]

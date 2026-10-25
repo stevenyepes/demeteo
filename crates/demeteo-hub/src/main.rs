@@ -1,4 +1,6 @@
 use demeteo_hub::adapters::openbao::{http_client, OpenBaoKeys};
+use demeteo_hub::attachments::postgres::PostgresAttachments;
+use demeteo_hub::attachments::sweep;
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::config::Config;
 use demeteo_hub::ports::KeyService;
@@ -57,12 +59,22 @@ async fn run() -> Result<(), String> {
         Arc::clone(&keys),
         config.transit_key.clone(),
     ));
+    let attachments = PostgresAttachments::new(db.clone());
+    let sweep_secs = config.attachments.sweep_secs;
+    tokio::spawn(async move { sweep::run(&attachments, sweep_secs).await });
     let rp = RelyingParty {
         rp_id: config.rp_id,
         origin: config.origin,
     };
-    let state =
-        routes::AppState::new(db, rp, keys, config.signing_key).map_err(|e| e.to_string())?;
+    let state = routes::AppState::new(
+        db,
+        rp,
+        keys,
+        config.signing_key,
+        config.transit_key,
+        config.attachments,
+    )
+    .map_err(|e| e.to_string())?;
     let app = routes::router(state.clone(), &config.web_dir);
     serve_until_stopped(
         listener,

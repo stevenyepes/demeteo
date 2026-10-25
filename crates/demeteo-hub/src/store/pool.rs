@@ -70,6 +70,15 @@ pub async fn create_user(db: &Db) -> Result<UserId, StoreError> {
     Ok(id)
 }
 
+/// Every tenant, for a job that has to visit each in turn, such as the
+/// attachment sweep. Reading `users` is how such a job learns them without a
+/// statement over another table that names no tenant.
+pub async fn tenants(db: &Db) -> Result<Vec<UserId>, StoreError> {
+    Ok(sqlx::query_scalar::<_, UserId>("SELECT id FROM users")
+        .fetch_all(db)
+        .await?)
+}
+
 /// Creates the user, its first passkey and the session that passkey signed in
 /// with, or none of them: a credential id another tenant already holds is
 /// [`StoreError::CredentialExists`] and leaves no `users` row.

@@ -281,10 +281,18 @@ in the `postgres-data` volume, and the passkey stays on the authenticator under 
 | `DEMETEO_HUB_TRANSIT_MOUNT` | hub | Transit mount, default `transit` |
 | `DEMETEO_HUB_TRANSIT_KEY` | hub | name of the Transit key that wraps, default `demeteo-hub` |
 | `DEMETEO_HUB_SIGNING_KEY` | hub | name of the Ed25519 Transit key that signs requests, default `demeteo-hub-signing`. Only ASCII letters, digits, `_` and `-` are allowed (`[A-Za-z0-9_-]`); the Hub refuses to start on any other name |
+| `DEMETEO_HUB_ATTACHMENT_MAX_BYTES` | hub | the largest attachment upload, in bytes, default `26214400` (25 MiB). The Hub buffers a whole upload and a whole fetch in memory |
+| `DEMETEO_HUB_ATTACHMENT_TTL_SECS` | hub | how long an uploaded attachment waits for the dispatch that names it, default `3600`. A dispatched one lives as long as its request instead |
+| `DEMETEO_HUB_ATTACHMENT_SWEEP_SECS` | hub | how often expired attachments are deleted, default `60` |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | postgres, hub | database credentials; the password is required and must be URL-safe (see above) |
 | `DEMETEO_HUB_DOMAIN`, `DEMETEO_HUB_UPSTREAM` | caddy | site name and the `hub` address to proxy to |
 | `BAO_API_ADDR` | openbao | the address OpenBao advertises |
 | `DEMETEO_HUB_TEST_DATABASE_URL` | tests only | Postgres URL for the ignored tests |
+
+Each `DEMETEO_HUB_ATTACHMENT_*` value must be a positive integer, or the Hub refuses to start.
+`compose.yaml` passes none of the three to the container, so the bundle runs on the defaults; add
+one under the `hub` service's `environment` to change it. What they govern is
+[`docs/HUB.md` §6.3](../../docs/HUB.md).
 
 ## Running the ignored tests
 

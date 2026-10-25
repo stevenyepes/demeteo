@@ -125,9 +125,11 @@ describe('hub-web, from no account to signed back in', () => {
       answer('GET /v1/session', { error: 'unauthenticated' }, 401),
       answer('POST /v1/register/start', { ceremony_id: 'cer-register', options: CREATION_OPTIONS }),
       answer('POST /v1/register/finish', { csrf_token: 'csrf-from-register', credential_id: 'cred-1' }),
+      answer('GET /v1/fleet', { instances: [] }),
       answer('POST /v1/session/end', {}),
       answer('POST /v1/session/start', { ceremony_id: 'cer-sign-in', options: REQUEST_OPTIONS }),
       answer('POST /v1/session/finish', { csrf_token: 'csrf-from-sign-in', credential_id: 'cred-1' }),
+      answer('GET /v1/fleet', { instances: [] }),
     ]);
     webauthn.createCredential.mockResolvedValueOnce(ATTESTATION);
     webauthn.getCredential.mockResolvedValueOnce(SIGN_IN_ASSERTION);
@@ -140,6 +142,7 @@ describe('hub-web, from no account to signed back in', () => {
     const signOutControl = await screen.findByRole('button', { name: 'Sign out' });
     expect(screen.getByRole('navigation')).toBeInTheDocument();
     expect(shownView()).toBe('Fleet');
+    await screen.findByText(/no instances are paired/i);
     expect(sent.slice(1)).toEqual([
       { request: 'POST /v1/register/start', csrf: null, body: { label: 'laptop' } },
       {
@@ -147,6 +150,7 @@ describe('hub-web, from no account to signed back in', () => {
         csrf: null,
         body: { ceremony_id: 'cer-register', credential: ATTESTATION },
       },
+      { request: 'GET /v1/fleet', csrf: null, body: undefined },
     ]);
     expect(webauthn.createCredential.mock.calls).toEqual([[CREATION_OPTIONS]]);
 
@@ -155,7 +159,7 @@ describe('hub-web, from no account to signed back in', () => {
     const signInControl = await screen.findByRole('button', { name: 'Sign in with a passkey' });
     expect(shownView()).toBe('Sign in');
     expect(screen.queryByRole('navigation')).toBeNull();
-    expect(sent.slice(3)).toEqual([
+    expect(sent.slice(4)).toEqual([
       { request: 'POST /v1/session/end', csrf: 'csrf-from-register', body: {} },
     ]);
 
@@ -163,13 +167,15 @@ describe('hub-web, from no account to signed back in', () => {
 
     await screen.findByRole('button', { name: 'Sign out' });
     expect(shownView()).toBe('Fleet');
-    expect(sent.slice(4)).toEqual([
+    await screen.findByText(/no instances are paired/i);
+    expect(sent.slice(5)).toEqual([
       { request: 'POST /v1/session/start', csrf: null, body: {} },
       {
         request: 'POST /v1/session/finish',
         csrf: null,
         body: { ceremony_id: 'cer-sign-in', credential: SIGN_IN_ASSERTION },
       },
+      { request: 'GET /v1/fleet', csrf: null, body: undefined },
     ]);
     expect(webauthn.getCredential.mock.calls).toEqual([[REQUEST_OPTIONS]]);
     expect(webauthn.getAssertion).not.toHaveBeenCalled();

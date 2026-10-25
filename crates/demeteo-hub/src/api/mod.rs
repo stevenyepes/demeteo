@@ -33,6 +33,7 @@
 //!
 //! This module is a leaf: `store` and `socket` never import it.
 
+pub mod attachments;
 pub mod dispatch;
 pub mod fleet;
 pub mod gates;
@@ -48,6 +49,8 @@ pub mod testing;
 pub use port::{ApiStore, MirrorEvent, SnapshotRead};
 pub use postgres::PostgresApi;
 
+use crate::attachments::port::AttachmentStore;
+use crate::attachments::AttachmentSettings;
 use crate::auth::ceremonies::Ceremonies;
 use crate::auth::RelyingParty;
 use crate::pairing::signing_key::SigningKey;
@@ -65,12 +68,21 @@ pub struct ApiContext<'a> {
     pub connections: &'a Connections,
     pub ceremonies: &'a Ceremonies,
     pub rp: &'a RelyingParty,
+    pub attachments: &'a dyn AttachmentStore,
+    /// The name `keys` wraps attachment data keys under.
+    pub transit_key: &'a str,
+    pub settings: &'a AttachmentSettings,
 }
 
 impl<'a> ApiContext<'a> {
-    /// What a handler runs its use-case over: the process's own registries
-    /// and keys, and `store` for the rows.
-    pub(crate) fn of(state: &'a AppState, store: &'a dyn ApiStore) -> Self {
+    /// What a handler runs its use-case over: the process's own registries,
+    /// keys and settings, `store` for the rows and `attachments` for the
+    /// attachment rows.
+    pub(crate) fn of(
+        state: &'a AppState,
+        store: &'a dyn ApiStore,
+        attachments: &'a dyn AttachmentStore,
+    ) -> Self {
         Self {
             store,
             keys: state.keys(),
@@ -78,6 +90,48 @@ impl<'a> ApiContext<'a> {
             connections: state.connections(),
             ceremonies: state.ceremonies(),
             rp: state.rp(),
+            attachments,
+            transit_key: state.transit_key(),
+            settings: state.attachments(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::MemoryFleet;
+    use super::*;
+    use crate::adapters::memory_keys::MemoryKeys;
+    use crate::store::pool;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn a_handler_context_carries_the_states_transit_key_and_settings() {
+        let settings = AttachmentSettings {
+            max_bytes: 7,
+            ttl_secs: 11,
+            sweep_secs: 13,
+        };
+        let rp = RelyingParty {
+            rp_id: "hub.example".to_owned(),
+            origin: "https://hub.example".to_owned(),
+        };
+        let keys = MemoryKeys::with_keys(["signing", "transit"]);
+        let db = pool::connect_lazy("postgres://hub@db.invalid/hub").unwrap();
+        let state = AppState::new(
+            db,
+            rp,
+            Arc::new(keys),
+            "signing".to_owned(),
+            "transit".to_owned(),
+            settings.clone(),
+        )
+        .unwrap();
+        let fleet = MemoryFleet::default();
+
+        let api = ApiContext::of(&state, &fleet, &fleet);
+
+        assert_eq!(api.transit_key, "transit");
+        assert_eq!(api.settings, &settings);
     }
 }

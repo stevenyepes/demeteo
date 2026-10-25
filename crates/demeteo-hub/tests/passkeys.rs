@@ -5,6 +5,7 @@
 mod support;
 
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
+use demeteo_hub::attachments::AttachmentSettings;
 use demeteo_hub::auth::ceremonies::{Ceremony, MAX_LIVE_CEREMONIES};
 use demeteo_hub::auth::chain::{self, ChainError, EndorsementRecord, RevocationRecord, StoredKey};
 use demeteo_hub::auth::challenge::{
@@ -65,7 +66,15 @@ fn now() -> u64 {
 /// one that started to would be answered an error.
 fn state_over(db: Db) -> AppState {
     let no_keys = MemoryKeys::with_keys(iter::empty::<String>());
-    AppState::new(db, rp(), Arc::new(no_keys), String::new()).unwrap()
+    AppState::new(
+        db,
+        rp(),
+        Arc::new(no_keys),
+        String::new(),
+        String::new(),
+        AttachmentSettings::default(),
+    )
+    .unwrap()
 }
 
 /// [`serve_state`] over `db` and no keys.

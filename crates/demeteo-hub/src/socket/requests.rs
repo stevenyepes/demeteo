@@ -29,6 +29,7 @@ use crate::store::{InstanceId, StoreError};
 use demeteo_hub_protocol::{
     EncodeError, RequestOutcome, RequestPayload, Scope, SignedRequest, PROTOCOL_VERSION,
 };
+use uuid::Uuid;
 
 /// The scope `docs/HUB.md` §7 files a kind under, or `None` for the two that
 /// change the pinned passkeys: those are authorised by the assertion they
@@ -299,12 +300,59 @@ pub async fn enqueued_as<S>(
 where
     S: SocketStore + ?Sized,
 {
+    let instance = store.instance();
+    let (queued, row) = signed(store, keys, signing_key, minted, payload, now).await?;
+    store.request_inserted(row).await?;
+    connections.wake(instance);
+    Ok(queued)
+}
+
+/// [`enqueued`], binding `attachments` to the request in the same store
+/// call that queues it, by
+/// [`request_inserted_binding`](SocketStore::request_inserted_binding). An
+/// id that is no longer bindable by then is
+/// [`StoreError::AttachmentUnavailable`] and nothing is queued.
+///
+/// The signature is made before that call and nothing after it waits on the
+/// key service, so no row it locks is held across one.
+pub async fn enqueued_binding<S>(
+    store: &S,
+    keys: &dyn KeyService,
+    signing_key: &SigningKey,
+    connections: &Connections,
+    payload: RequestPayload,
+    attachments: &[Uuid],
+    now: u64,
+) -> Result<Enqueued, EnqueueError>
+where
+    S: SocketStore + ?Sized,
+{
+    let minted = fresh_minted(now)?;
+    let instance = store.instance();
+    let (queued, row) = signed(store, keys, signing_key, minted, payload, now).await?;
+    store
+        .request_inserted_binding(row, attachments, now)
+        .await?;
+    connections.wake(instance);
+    Ok(queued)
+}
+
+async fn signed<S>(
+    store: &S,
+    keys: &dyn KeyService,
+    signing_key: &SigningKey,
+    minted: Minted,
+    payload: RequestPayload,
+    now: u64,
+) -> Result<(Enqueued, NewRequest), EnqueueError>
+where
+    S: SocketStore + ?Sized,
+{
     let granted = store.granted_scopes().await?;
     enqueue_verdict(&granted, &payload)?;
 
-    let instance = store.instance();
     let id = minted.id;
-    let mut envelope = unsigned(minted, instance, payload, now);
+    let mut envelope = unsigned(minted, store.instance(), payload, now);
     let signature = signing_key.sign(keys, &envelope.signing_bytes()?).await?;
     envelope.signature = base64url_encode(&signature);
 
@@ -312,9 +360,7 @@ where
         id,
         expires_at: envelope.expires_at,
     };
-    store.request_inserted(row(id, envelope)).await?;
-    connections.wake(instance);
-    Ok(queued)
+    Ok((queued, row(id, envelope)))
 }
 
 /// The key service's errors split as the pairing response splits them, and
@@ -355,6 +401,7 @@ impl From<EnqueueError> for ApiError {
                 Self::INTERNAL
             }
             EnqueueError::Store(StoreError::NoSuchInstance) => Self::NOT_FOUND,
+            EnqueueError::Store(StoreError::AttachmentUnavailable) => Self::ATTACHMENT_UNAVAILABLE,
             EnqueueError::Store(error) => store_failed(error),
         }
     }
@@ -368,7 +415,6 @@ mod tests {
         CancelFeature, Decision, GateDecision, PasskeyEndorsement, PasskeyRevocation,
         RefusalReason, SetStepAssignment, StartFeature, WebAuthnAssertion,
     };
-    use uuid::Uuid;
 
     const NOW: u64 = 1_700_000_000;
 
@@ -679,6 +725,10 @@ mod tests {
             ApiError::new(StatusCode::NOT_FOUND, "not_found")
         );
         assert_eq!(
+            ApiError::from(EnqueueError::Store(StoreError::AttachmentUnavailable)),
+            ApiError::new(StatusCode::CONFLICT, "attachment_unavailable")
+        );
+        assert_eq!(
             ApiError::from(EnqueueError::Encode(EncodeError::TooLong)),
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_request")
         );
@@ -690,5 +740,46 @@ mod tests {
             ApiError::from(EnqueueError::Store(StoreError::EnvelopeUnreadable)),
             ApiError::INTERNAL
         );
+    }
+
+    #[tokio::test]
+    async fn a_binding_enqueue_queues_only_when_every_attachment_is_bound() {
+        use crate::adapters::memory_keys::MemoryKeys;
+        use crate::socket::testing::MemoryHub;
+        use crate::store::attachments::{NewAttachment, WrappedKey};
+
+        let hub = MemoryHub::paired(&[Scope::Spend]);
+        let id = Uuid::new_v4();
+        hub.attachment_staged(NewAttachment {
+            id,
+            instance_id: hub.instance_id(),
+            ciphertext: vec![0x5a; 64],
+            wrapped_key: WrappedKey::parse("vault:v1:filler").unwrap(),
+            sealed_digest: vec![0xa5; 60],
+            expires_at: NOW + 60,
+        });
+        let keys = MemoryKeys::with_keys(["signing"]);
+        let (key, connections) = (SigningKey::new("signing"), Connections::default());
+        let enqueue = |attachments: Vec<Uuid>| {
+            let (store, keys, key, connections) = (hub.store(), &keys, &key, &connections);
+            async move {
+                enqueued_binding(&store, keys, key, connections, cancel(), &attachments, NOW).await
+            }
+        };
+
+        let err = enqueue(vec![id, Uuid::new_v4()]).await.unwrap_err();
+        assert!(
+            matches!(err, EnqueueError::Store(StoreError::AttachmentUnavailable)),
+            "{err}"
+        );
+        assert!(hub.requests().is_empty());
+        assert!(hub.attachments()[0].request_id.is_none());
+
+        let queued = enqueue(vec![id]).await.unwrap();
+        assert_eq!(hub.requests().len(), 1);
+        assert_eq!(hub.requests()[0].id, queued.id);
+        assert!(!hub.requests()[0].envelope.signature.is_empty());
+        assert_eq!(hub.attachments()[0].request_id, Some(queued.id));
+        assert_eq!(hub.attachments()[0].expires_at, queued.expires_at);
     }
 }
