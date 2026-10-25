@@ -33,4 +33,10 @@ pub trait RunEventsPort: Send + Sync {
     /// the event was appended (R9) — a client that reconnects after any
     /// gap just asks for everything since its last-seen offset.
     fn list_since(&self, run_id: &str, from_offset: i64) -> Result<Vec<RunEvent>, String>;
+    /// At most `limit` events of **every** run with `offset > from_offset`,
+    /// oldest first — the instance-wide page the Hub socket backfills and
+    /// resumes from (docs/HUB.md §5). Served by the primary key, so it
+    /// needs no index. No default body: a double that never pages this
+    /// log says so with an `Err` rather than answering empty.
+    fn list_after(&self, from_offset: i64, limit: usize) -> Result<Vec<RunEvent>, String>;
 }

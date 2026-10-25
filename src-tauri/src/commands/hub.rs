@@ -44,8 +44,8 @@ pub fn status_core(hub: &HubPairing) -> Result<HubStatus, String> {
     hub.status().map_err(|e| e.to_string())
 }
 
-pub fn disconnect_core(hub: &HubPairing) -> Result<HubStatus, String> {
-    hub.disconnect().map_err(|e| e.to_string())
+pub async fn disconnect_core(hub: &HubPairing) -> Result<HubStatus, String> {
+    hub.disconnect().await.map_err(|e| e.to_string())
 }
 
 /// Waits up to [`PAIR_TIMEOUT`] for the browser's answer; `async`, so on
@@ -65,8 +65,8 @@ pub fn hub_status(ctx: State<'_, AppContext>) -> Result<HubStatus, String> {
 }
 
 #[tauri::command]
-pub fn hub_disconnect(ctx: State<'_, AppContext>) -> Result<HubStatus, String> {
-    disconnect_core(pairing(&ctx)?)
+pub async fn hub_disconnect(ctx: State<'_, AppContext>) -> Result<HubStatus, String> {
+    disconnect_core(pairing(&ctx)?).await
 }
 
 #[cfg(test)]

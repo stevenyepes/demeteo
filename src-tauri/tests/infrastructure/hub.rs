@@ -12,30 +12,46 @@ use super::{disconnect_core, pair_core, pairing, status_core};
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::hub::device_key::DeviceKey;
 use crate::adapters::hub::loopback::CallbackListener;
-use crate::adapters::hub::testing::MemorySecretStore;
+use crate::adapters::hub::socket::session::SessionContext;
+use crate::adapters::hub::socket::wake::WakingRunEvents;
+use crate::adapters::hub::socket::{supervise, Sleeper, SocketConfig, SupervisorDeps};
+use crate::adapters::hub::testing::{
+    MemorySecretStore, RefreshCall, ScriptedConnection, ScriptedRefreshEndpoint,
+    ScriptedSocketDialer,
+};
 use crate::adapters::hub::token_client::ReqwestTokenEndpoint;
 use crate::adapters::hub::HubPairing;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::feature_origin::FeatureOrigin;
-use crate::domain::hub_pairing::answer::token_form_body;
+use crate::domain::hub_pairing::answer::{refresh_form_body, token_form_body};
 use crate::domain::hub_pairing::callback::{callback_verdict, CallbackVerdict, RefuseReason};
-use crate::domain::hub_pairing::dpop::{dpop_proof, dpop_signing_input};
+use crate::domain::hub_pairing::dpop::{dpop_proof, dpop_signing_input, dpop_signing_input_for};
 use crate::domain::hub_pairing::jwk::{canonical_jwk, fingerprint, jwk_value, thumbprint};
 use crate::domain::hub_pairing::keyring_names::{
     hub_keyring_account, keyring_backend_name, KEYRING_SERVICE,
 };
 use crate::domain::hub_pairing::pkce::s256_challenge;
 use crate::domain::hub_pairing::{
-    authorize_url, check_pairing_origin, consent_label, hub_origin, hub_status, pairing_state,
-    redirect_uri, token_error, token_refusal, token_url, AuthorizeRequest, HubPairingError,
-    HubPairingState, HubPins, HubSecret, HubStatus, KeyringStatus, PairingAnswer, PinnedPasskey,
-    PAIR_TIMEOUT, SCOPES,
+    access_token_hash, authorize_url, check_pairing_origin, consent_label, hub_origin, hub_status,
+    pairing_state, redirect_uri, socket_dial_url, socket_url, token_error, token_refusal,
+    token_url, AuthorizeRequest, HubPairingError, HubPairingState, HubPins, HubSecret, HubStatus,
+    KeyringStatus, PairingAnswer, PinnedPasskey, RefreshAnswer, PAIR_TIMEOUT, SCOPES,
+};
+use crate::domain::hub_socket::{
+    after, after_close, after_refresh, backoff, hello, hub_event, refresh_refusal, resets_backoff,
+    sends_events, Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS,
+    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, Project};
 use crate::error::AppError;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
-use crate::ports::hub::{BrowserLauncher, HubPinRepository, HubSecretStore, HubTokenEndpoint};
+use crate::ports::hub::{
+    BrowserLauncher, DialFailure, HubPinRepository, HubRefreshEndpoint, HubSecretStore,
+    HubSocketConnection, HubSocketDialer, HubTokenEndpoint, SocketGone, SocketReceived,
+    SocketUpgrade,
+};
+use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::state::AppContext;
 use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
 use rusqlite::types::ValueRef;
@@ -467,12 +483,16 @@ const REFRESH_TOKEN: &str = "dhr_refresh-0123456789abcdefghijklmnopqrstu";
 /// `pairing_response`'s serialization: the flattened `RefreshResponse`
 /// members first, then the pins.
 fn hub_answer() -> PairingAnswer {
+    hub_answer_scoped("read gates")
+}
+
+fn hub_answer_scoped(scope: &str) -> PairingAnswer {
     let body = json!({
         "access_token": ACCESS_TOKEN,
         "token_type": "DPoP",
         "expires_in": 900,
         "refresh_token": REFRESH_TOKEN,
-        "scope": "read gates",
+        "scope": scope,
         "instance_id": "7f0c2a4e-1b3d-4c5e-8f90-123456789abc",
         "request_signing_key": "__________________________________________8",
         "rp_id": "hub.example",
@@ -829,10 +849,20 @@ fn token_request_body() -> String {
     token_form_body("C0DE", "verifier-0", "http://127.0.0.1:49152/callback")
 }
 
-/// One scripted `/token` answer on `127.0.0.1:0`. The task returns why the
-/// request was not the one scripted, and answers such a request with `418`
-/// rather than the script, so an unscripted request can never pass.
 async fn token_stub(
+    status: u16,
+    content_type: &'static str,
+    body: &'static str,
+) -> (String, tokio::task::JoinHandle<Result<(), String>>) {
+    token_stub_expecting(token_request_body(), status, content_type, body).await
+}
+
+/// One scripted `/token` answer on `127.0.0.1:0` to a POST of
+/// `expected_body`. The task returns why the request was not the one
+/// scripted, and answers such a request with `418` rather than the script,
+/// so an unscripted request can never pass.
+async fn token_stub_expecting(
+    expected_body: String,
     status: u16,
     content_type: &'static str,
     body: &'static str,
@@ -843,7 +873,6 @@ async fn token_stub(
         .await
         .expect("a loopback bind");
     let url = format!("http://{}/token", listener.local_addr().unwrap());
-    let expected_body = token_request_body();
     let served = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let mut request = Vec::new();
@@ -1054,6 +1083,9 @@ impl BrowserLauncher for NeverOpened {
 
 enum Reply {
     Answer,
+    /// One answer per exchange, the nth granting the nth `scope`; an
+    /// exchange past the last is refused.
+    Scoped(&'static [&'static str]),
     Refuse(&'static str),
 }
 
@@ -1122,9 +1154,17 @@ impl HubTokenEndpoint for ScriptedToken {
         let verifier = self
             .check(token_url, &form_body, &dpop)
             .map_err(|why| HubPairingError::Transport(format!("token double: {why}")))?;
-        self.verifiers.lock().unwrap().push(verifier);
+        let exchanged = {
+            let mut verifiers = self.verifiers.lock().unwrap();
+            verifiers.push(verifier);
+            verifiers.len()
+        };
         match self.reply {
             Reply::Answer => Ok(hub_answer()),
+            Reply::Scoped(scopes) => scopes
+                .get(exchanged - 1)
+                .map(|scope| hub_answer_scoped(scope))
+                .ok_or_else(|| HubPairingError::Transport("token double: unscripted".into())),
             Reply::Refuse(code) => Err(token_error(code)),
         }
     }
@@ -1607,7 +1647,7 @@ async fn disconnect_forgets_the_hub_twice_over_and_leaves_runs_alone() {
     assert_eq!(rig.secrets.entries().len(), 2);
     assert_eq!(row_count(&rig.db, "hub_pinned_passkeys"), 2);
 
-    let status = rig.hub.disconnect().expect("a disconnect");
+    let status = rig.hub.disconnect().await.expect("a disconnect");
 
     assert!(
         rig.secrets.entries().is_empty(),
@@ -1624,7 +1664,7 @@ async fn disconnect_forgets_the_hub_twice_over_and_leaves_runs_alone() {
         (None, None, None)
     );
 
-    let again = rig.hub.disconnect().expect("a second disconnect");
+    let again = rig.hub.disconnect().await.expect("a second disconnect");
     assert_eq!(again.state, HubPairingState::Unpaired);
 
     let kept = FeatureRepository::get(&*rig.db, &feature.id)
@@ -1705,6 +1745,28 @@ async fn a_router_context_can_pair() {
     assert!(pairing(&ctx).is_ok());
 }
 
+/// `RunEventRecorder` appends through `ctx.run_events`, and the socket waits
+/// on the wake its pairing was given: the two have to be one decorator.
+#[tokio::test]
+async fn an_append_through_the_context_wakes_the_socket_the_pairing_holds() {
+    let ctx = core_context("router-wake", ExecutionMode::Router);
+    let wake = ctx
+        .hub
+        .as_ref()
+        .and_then(|hub| hub.socket_wake())
+        .expect("a Router context attaches the socket");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), wake.notified())
+            .await
+            .is_err(),
+        "nothing was appended yet"
+    );
+    ctx.run_events
+        .append("f-1", "feature_status", None, 1)
+        .unwrap();
+    assert!(woken(&wake).await);
+}
+
 #[tokio::test]
 async fn the_command_cores_answer_what_the_service_answers() {
     let rig = Rig::new("hub_command_cores", Reply::Answer);
@@ -1716,7 +1778,7 @@ async fn the_command_cores_answer_what_the_service_answers() {
     assert_eq!(paired.state, HubPairingState::Paired);
     assert_eq!(status_core(&rig.hub), Ok(paired));
 
-    let disconnected = disconnect_core(&rig.hub).expect("a disconnect");
+    let disconnected = disconnect_core(&rig.hub).await.expect("a disconnect");
     assert_eq!(disconnected.state, HubPairingState::Unpaired);
     assert_eq!(Ok(disconnected), rig.hub.status());
 }
@@ -1733,4 +1795,1875 @@ async fn a_command_core_error_is_the_services_error_text() {
         }
         .to_string())
     );
+}
+
+#[test]
+fn socket_url_is_the_https_htu_the_hub_verifies() {
+    assert_eq!(
+        socket_url("https://hub.example"),
+        "https://hub.example/socket"
+    );
+    assert_eq!(
+        socket_url("http://localhost:8080"),
+        "http://localhost:8080/socket"
+    );
+}
+
+#[test]
+fn socket_dial_url_is_the_websocket_spelling_of_the_origin() {
+    assert_eq!(
+        socket_dial_url("https://hub.example"),
+        Ok("wss://hub.example/socket".into())
+    );
+    assert_eq!(
+        socket_dial_url("http://localhost:8080"),
+        Ok("ws://localhost:8080/socket".into())
+    );
+    for origin in ["wss://hub.example", "ftp://hub.example", "hub.example", ""] {
+        assert!(
+            matches!(
+                socket_dial_url(origin),
+                Err(HubPairingError::InvalidHubUrl(_))
+            ),
+            "{origin:?}"
+        );
+    }
+}
+
+/// The access token and `ath` of RFC 9449 §7.1's example.
+#[test]
+fn access_token_hash_matches_rfc_9449() {
+    assert_eq!(
+        access_token_hash("Kz~8mXK1EalYznwH-LC-1fBAo.4Ljp~zsPE_NeO.gxU"),
+        "fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo"
+    );
+}
+
+/// The claims segment is pinned as text, not parsed, because the bytes are
+/// what the key signs: a reordered or re-spelled claim set would still parse
+/// equal.
+#[test]
+fn a_post_proof_without_ath_is_the_token_signing_input_unchanged() {
+    let htu = "https://hub.example.com/token";
+    let point = rfc_9449_point();
+    let input = dpop_signing_input_for(&point, "POST", htu, 1_700_000_000, "jti-0", None);
+    assert_eq!(
+        input,
+        dpop_signing_input(&point, htu, 1_700_000_000, "jti-0")
+    );
+    assert_eq!(
+        input.split('.').nth(1),
+        Some("eyJodG0iOiJQT1NUIiwiaHR1IjoiaHR0cHM6Ly9odWIuZXhhbXBsZS5jb20vdG9rZW4iLCJpYXQiOjE3MDAwMDAwMDAsImp0aSI6Imp0aS0wIn0")
+    );
+}
+
+#[test]
+fn a_socket_proof_names_its_method_and_its_access_token() {
+    let htu = socket_url("https://hub.example");
+    let token = "Kz~8mXK1EalYznwH-LC-1fBAo.4Ljp~zsPE_NeO.gxU";
+    let ath = access_token_hash(token);
+    let input = dpop_signing_input_for(&rfc_9449_point(), "GET", &htu, 7, "jti-1", Some(&ath));
+    assert_eq!(
+        segment(input.split('.').nth(1).unwrap()),
+        json!({"jti": "jti-1", "htm": "GET", "htu": htu, "iat": 7u64, "ath": ath})
+    );
+
+    let key = DeviceKey::generate().unwrap();
+    let claims = |proof: String| segment(proof.split('.').nth(1).unwrap());
+    assert_eq!(
+        claims(
+            key.dpop_proof_for("GET", &htu, 7, "jti-1", Some(token))
+                .unwrap()
+        ),
+        json!({"jti": "jti-1", "htm": "GET", "htu": htu, "iat": 7u64, "ath": ath})
+    );
+    assert_eq!(
+        claims(
+            key.dpop_proof_for("POST", "https://hub.example/token", 7, "jti-1", None)
+                .unwrap()
+        ),
+        claims(
+            key.dpop_proof("https://hub.example/token", 7, "jti-1")
+                .unwrap()
+        )
+    );
+}
+
+fn run_row(kind: &str, payload: Option<&str>) -> RunEvent {
+    RunEvent {
+        offset: 42,
+        run_id: "f-0123456789abcdef".into(),
+        kind: kind.into(),
+        payload_json: payload.map(str::to_owned),
+        created_at: 1_700_000_123_999,
+    }
+}
+
+/// The wire payload: every id the protocol can carry, `ticket_id` included,
+/// so a projection that set one it should not is caught.
+fn wire_payload(step_id: Option<&str>, step_execution_id: Option<&str>) -> Value {
+    json!({"step_id": step_id, "step_execution_id": step_execution_id, "ticket_id": null})
+}
+
+/// The projection serialised as the socket sends it: comparing the wire form
+/// rather than the struct is what shows no row field rides along.
+fn projected(row: &RunEvent) -> Option<Value> {
+    hub_event(row).map(|event| serde_json::to_value(event).expect("serialisable"))
+}
+
+/// Every row of the spec's §2.3 projection table. The payloads are the shapes
+/// `run_event_record` writes, extra fields included, so a projection that
+/// forwarded any of them would not equal the expected wire value.
+#[test]
+fn every_allowlisted_run_event_projects_to_its_protocol_kind() {
+    let progress = |status: &str| {
+        json!({
+            "step_id": "s-implement", "status": status, "cost_usd": 0.5, "tokens": 900,
+            "wall_clock_secs": 12, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 2,
+        })
+        .to_string()
+    };
+    let gate = json!({
+        "step_execution_id": "se-7", "decision": "approve", "feedback": "/home/me/secret.txt"
+    })
+    .to_string();
+    let none = wire_payload(None, None);
+    let step = wire_payload(Some("s-implement"), None);
+    let execution = wire_payload(None, Some("se-7"));
+    let cases = [
+        (
+            "feature_status",
+            json!({"status": "running"}).to_string(),
+            "feature_started",
+            &none,
+        ),
+        (
+            "feature_status",
+            json!({"status": "completed"}).to_string(),
+            "feature_completed",
+            &none,
+        ),
+        (
+            "feature_status",
+            json!({"status": "failed"}).to_string(),
+            "feature_failed",
+            &none,
+        ),
+        (
+            "feature_status",
+            json!({"status": "cancelled"}).to_string(),
+            "feature_cancelled",
+            &none,
+        ),
+        ("step_progress", progress("running"), "step_started", &step),
+        (
+            "step_progress",
+            progress("completed"),
+            "step_completed",
+            &step,
+        ),
+        ("step_progress", progress("failed"), "step_failed", &step),
+        (
+            "gate_required",
+            json!({"step_execution_id": "se-7"}).to_string(),
+            "gate_pending",
+            &execution,
+        ),
+        ("gate_decided", gate.clone(), "gate_decided", &execution),
+        ("gate_auto_approved", gate, "gate_decided", &execution),
+    ];
+    for (kind, payload, wire_kind, wire_payload) in cases {
+        assert_eq!(
+            projected(&run_row(kind, Some(&payload))),
+            Some(json!({
+                "v": 1,
+                "feature_id": "f-0123456789abcdef",
+                "offset": 42,
+                "kind": wire_kind,
+                "occurred_at": 1_700_000_123u64,
+                "payload": wire_payload,
+            })),
+            "{kind} {payload}"
+        );
+    }
+}
+
+#[test]
+fn a_run_event_off_the_allowlist_never_crosses() {
+    let step_status = |status: &str| json!({"step_id": "s-1", "status": status}).to_string();
+    let feature_status = |status: &str| json!({"status": status}).to_string();
+    let any =
+        json!({"step_id": "s-1", "step_execution_id": "se-1", "status": "running"}).to_string();
+    let cases: Vec<(&str, Option<String>)> = vec![
+        ("agent_spawned", Some(any.clone())),
+        ("retry_decision", Some(any.clone())),
+        ("retry_exhausted", Some(any.clone())),
+        ("env_not_ready", Some(any.clone())),
+        ("agent_commits_folded", Some(any.clone())),
+        ("gate_held_by_review", Some(any.clone())),
+        ("bootstrap_progress", Some(any.clone())),
+        ("critic_rework_requested", Some(any.clone())),
+        ("step_output", Some(any.clone())),
+        ("not_a_kind_anyone_writes", Some(any)),
+        ("step_progress", Some(step_status("pending"))),
+        ("step_progress", Some(step_status("verifying"))),
+        ("step_progress", Some(step_status("awaiting_gate"))),
+        ("step_progress", Some(step_status("interrupted"))),
+        ("step_progress", Some(step_status("Running"))),
+        ("feature_status", Some(feature_status("awaiting_gate"))),
+        ("feature_status", Some(feature_status("paused"))),
+        ("feature_status", None),
+        ("feature_status", Some("not json".into())),
+        ("feature_status", Some(json!({"status": 1}).to_string())),
+        ("feature_status", Some("{}".into())),
+        ("step_progress", None),
+        ("step_progress", Some("{".into())),
+        (
+            "step_progress",
+            Some(json!({"status": "running"}).to_string()),
+        ),
+        (
+            "step_progress",
+            Some(json!({"step_id": null, "status": "running"}).to_string()),
+        ),
+        ("gate_required", None),
+        ("gate_required", Some("[]".into())),
+        ("gate_required", Some("{}".into())),
+        ("gate_decided", None),
+        ("gate_decided", Some("se-1".into())),
+        ("gate_decided", Some(json!({"step_id": "s-1"}).to_string())),
+        ("gate_auto_approved", None),
+        (
+            "gate_auto_approved",
+            Some(json!({"step_execution_id": 7}).to_string()),
+        ),
+        (
+            "step_progress",
+            Some(json!({"step_id": "s\u{0}1", "status": "running"}).to_string()),
+        ),
+        (
+            "gate_required",
+            Some(json!({"step_execution_id": "se\u{0}1"}).to_string()),
+        ),
+        (
+            "gate_decided",
+            Some(json!({"step_execution_id": "\u{0}"}).to_string()),
+        ),
+        (
+            "gate_auto_approved",
+            Some(json!({"step_execution_id": "se-1\u{0}"}).to_string()),
+        ),
+    ];
+    for (kind, payload) in cases {
+        assert_eq!(
+            projected(&run_row(kind, payload.as_deref())),
+            None,
+            "{kind} {payload:?}"
+        );
+    }
+}
+
+#[test]
+fn a_run_event_the_hub_would_refuse_is_dropped_before_it_is_sent() {
+    let running = json!({"status": "running"}).to_string();
+    let row = |edit: &dyn Fn(&mut RunEvent)| {
+        let mut row = run_row("feature_status", Some(&running));
+        edit(&mut row);
+        projected(&row)
+    };
+    assert!(row(&|_| {}).is_some());
+
+    assert_eq!(MAX_FEATURE_ID_BYTES, 256);
+    let at_bound = row(&|r| r.run_id = "f".repeat(MAX_FEATURE_ID_BYTES));
+    assert_eq!(
+        at_bound.map(|e| e["feature_id"].clone()),
+        Some(json!("f".repeat(256)))
+    );
+    assert_eq!(
+        row(&|r| r.run_id = "f".repeat(MAX_FEATURE_ID_BYTES + 1)),
+        None
+    );
+    assert_eq!(
+        row(&|r| r.run_id = "é".repeat(129)),
+        None,
+        "258 bytes in 129 chars"
+    );
+    assert_eq!(row(&|r| r.run_id = "f-01\u{0}23".into()), None);
+
+    assert_eq!(row(&|r| r.offset = 0), None);
+    assert_eq!(row(&|r| r.offset = -1), None);
+    assert_eq!(row(&|r| r.offset = i64::MIN), None);
+    assert_eq!(row(&|r| r.created_at = -1), None);
+    assert_eq!(row(&|r| r.created_at = i64::MIN), None);
+}
+
+#[test]
+fn a_projected_event_keeps_the_rows_offset_and_its_time_in_whole_seconds() {
+    let running = json!({"status": "running"}).to_string();
+    for (offset, created_at, occurred_at) in [
+        (1, 0, 0),
+        (2, 999, 0),
+        (3, 1_000, 1),
+        (77, 1_700_000_000_999, 1_700_000_000),
+        (i64::MAX, i64::MAX, i64::MAX as u64 / 1000),
+    ] {
+        let mut row = run_row("feature_status", Some(&running));
+        row.offset = offset;
+        row.created_at = created_at;
+        let event = hub_event(&row).expect("allowlisted row");
+        assert_eq!(event.offset, offset as u64);
+        assert_eq!(event.occurred_at, occurred_at);
+    }
+}
+
+#[test]
+fn hello_announces_only_the_pinned_scopes_the_protocol_knows() {
+    let pins = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    let sent = hello(
+        "install-1",
+        "1.3.0",
+        "linux",
+        "x86_64",
+        &pins(&["read", "logs", "gates", "Read", "", "configure", "spend"]),
+    );
+    assert_eq!(
+        serde_json::to_value(sent).expect("serialisable"),
+        json!({
+            "v": 1,
+            "install_id": "install-1",
+            "app_version": "1.3.0",
+            "os": "linux",
+            "arch": "x86_64",
+            "scopes": ["read", "gates", "spend"],
+        })
+    );
+    assert!(hello("i", "v", "o", "a", &pins(&["logs"]))
+        .scopes
+        .is_empty());
+    assert!(hello("i", "v", "o", "a", &[]).scopes.is_empty());
+}
+
+#[test]
+fn events_are_sent_only_when_read_is_pinned() {
+    let pins = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    assert!(sends_events(&pins(&["read"])));
+    assert!(sends_events(&pins(&["spend", "read", "gates"])));
+    assert!(!sends_events(&pins(&["spend", "gates"])));
+    assert!(!sends_events(&pins(&["Read", "read ", "logs"])));
+    assert!(!sends_events(&[]));
+}
+
+#[test]
+fn a_socket_end_decides_the_reconnect_by_the_ac4_table() {
+    use Reconnect::{AfterBackoff, RefreshNow, Stop};
+    let refused = |status, fresh_token| SocketEnd::Refused {
+        status,
+        fresh_token,
+    };
+    for (end, verdict) in [
+        (SocketEnd::Closed(Some(1001)), AfterBackoff),
+        (SocketEnd::Closed(Some(1011)), AfterBackoff),
+        (SocketEnd::Closed(None), AfterBackoff),
+        (SocketEnd::Silent, AfterBackoff),
+        (SocketEnd::Closed(Some(4001)), RefreshNow),
+        (SocketEnd::Closed(Some(4002)), Stop(StopReason::Displaced)),
+        (
+            SocketEnd::Closed(Some(1008)),
+            Stop(StopReason::ProtocolViolation),
+        ),
+        (SocketEnd::Closed(Some(1000)), AfterBackoff),
+        (SocketEnd::Closed(Some(1006)), AfterBackoff),
+        (SocketEnd::Closed(Some(4000)), AfterBackoff),
+        (SocketEnd::Closed(Some(4003)), AfterBackoff),
+        (refused(401, false), RefreshNow),
+        (refused(401, true), Stop(StopReason::Unauthorized)),
+        (refused(503, false), AfterBackoff),
+        (refused(503, true), AfterBackoff),
+        (refused(400, false), Stop(StopReason::Refused)),
+        (refused(400, true), Stop(StopReason::Refused)),
+        (refused(500, false), AfterBackoff),
+        (refused(500, true), AfterBackoff),
+        (SocketEnd::Unreachable, AfterBackoff),
+        (refused(502, false), AfterBackoff),
+        (refused(429, false), AfterBackoff),
+        (refused(403, false), Stop(StopReason::Refused)),
+        (refused(404, true), Stop(StopReason::Refused)),
+        (refused(302, false), Stop(StopReason::Refused)),
+        (refused(200, false), Stop(StopReason::Refused)),
+    ] {
+        assert_eq!(after(end), verdict, "{end:?}");
+        for fresh_token in [false, true] {
+            for secs_left in [None, Some(0), Some(PREMATURE_EXPIRY_MARGIN_SECS)] {
+                assert_eq!(
+                    after_close(end, fresh_token, secs_left),
+                    verdict,
+                    "{end:?} fresh={fresh_token} left={secs_left:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A `4001` is premature only on a fresh token the local clock gives more
+/// than the margin to; every other `4001` is the AC4 row.
+#[test]
+fn a_4001_on_a_fresh_token_with_life_left_backs_off_before_refreshing() {
+    use Reconnect::{AfterBackoff, RefreshAfterBackoff, RefreshNow};
+    let expired = SocketEnd::Closed(Some(4001));
+    let margin = Some(PREMATURE_EXPIRY_MARGIN_SECS);
+    let beyond = Some(PREMATURE_EXPIRY_MARGIN_SECS + 1);
+    for (end, fresh_token, secs_left, verdict) in [
+        (expired, true, beyond, RefreshAfterBackoff),
+        (expired, true, Some(900), RefreshAfterBackoff),
+        (expired, true, Some(u64::MAX), RefreshAfterBackoff),
+        (expired, true, margin, RefreshNow),
+        (expired, true, Some(0), RefreshNow),
+        (expired, true, None, RefreshNow),
+        (expired, false, Some(900), RefreshNow),
+        (expired, false, None, RefreshNow),
+        (SocketEnd::Closed(Some(1011)), true, Some(900), AfterBackoff),
+        (SocketEnd::Silent, true, Some(900), AfterBackoff),
+    ] {
+        assert_eq!(
+            after_close(end, fresh_token, secs_left),
+            verdict,
+            "{end:?} fresh={fresh_token} left={secs_left:?}"
+        );
+    }
+}
+
+#[test]
+fn only_an_acked_session_not_judged_premature_resets_the_backoff() {
+    use Reconnect::{AfterBackoff, RefreshAfterBackoff, RefreshNow, Stop};
+    for verdict in [AfterBackoff, RefreshNow, Stop(StopReason::Displaced)] {
+        assert!(resets_backoff(true, verdict), "{verdict:?}");
+        assert!(!resets_backoff(false, verdict), "{verdict:?}");
+    }
+    assert!(!resets_backoff(true, RefreshAfterBackoff));
+    assert!(!resets_backoff(false, RefreshAfterBackoff));
+}
+
+#[test]
+fn a_failed_refresh_backs_off_only_when_nothing_can_have_rotated() {
+    use Reconnect::{AfterBackoff, Stop};
+    let hub = |error: &str| {
+        RefreshEnd::Refused(HubPairingError::HubRefused {
+            error: error.into(),
+        })
+    };
+    let read = |body: Value| RefreshEnd::Refused(token_refusal(body.to_string().as_bytes()));
+    for (end, verdict) in [
+        (RefreshEnd::Unsent, AfterBackoff),
+        (RefreshEnd::Unavailable, AfterBackoff),
+        (RefreshEnd::Unanswered, Stop(StopReason::RefreshUncertain)),
+        (hub("invalid_grant"), Stop(StopReason::NeedsRepair)),
+        (hub("invalid_dpop_proof"), Stop(StopReason::Refused)),
+        (hub("too_many_requests"), AfterBackoff),
+        (hub("invalid_request"), Stop(StopReason::Refused)),
+        (hub("internal"), Stop(StopReason::Refused)),
+        (
+            RefreshEnd::Refused(HubPairingError::ClockSkew),
+            Stop(StopReason::ClockSkew),
+        ),
+        (
+            read(json!({"error": "invalid_grant"})),
+            Stop(StopReason::NeedsRepair),
+        ),
+        (
+            read(json!({"error": "invalid_dpop_proof"})),
+            Stop(StopReason::ClockSkew),
+        ),
+        (read(json!({"error": "too_many_requests"})), AfterBackoff),
+        (
+            read(json!({"detail": "bad gateway"})),
+            Stop(StopReason::Refused),
+        ),
+        (
+            RefreshEnd::Refused(HubPairingError::Transport("reset".into())),
+            Stop(StopReason::Refused),
+        ),
+    ] {
+        assert_eq!(after_refresh(end.clone()), verdict, "{end:?}");
+    }
+}
+
+const HTML_BODY: &[u8] = b"<html><body><h1>Service Unavailable</h1></body></html>";
+
+/// AC5.4 "or with 503, is retried after backoff": a `503` the Hub did not
+/// spell was never forwarded and backs off; any other bare `5xx` may have
+/// been, so it stops. A Hub-coded body reads as `token_refusal` reads it.
+#[test]
+fn a_refused_refresh_is_judged_by_its_hub_code_then_by_its_status() {
+    use Reconnect::{AfterBackoff, Stop};
+    let coded = |error: &str| json!({ "error": error }).to_string().into_bytes();
+    for (status, body, verdict) in [
+        (503, HTML_BODY.to_vec(), AfterBackoff),
+        (503, Vec::new(), AfterBackoff),
+        (503, coded("too_many_requests"), AfterBackoff),
+        (503, coded("internal"), Stop(StopReason::Refused)),
+        (500, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
+        (502, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
+        (504, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
+        (500, coded("internal"), Stop(StopReason::Refused)),
+        (400, coded("invalid_grant"), Stop(StopReason::NeedsRepair)),
+        (
+            400,
+            coded("invalid_dpop_proof"),
+            Stop(StopReason::ClockSkew),
+        ),
+        (400, HTML_BODY.to_vec(), Stop(StopReason::Refused)),
+        (429, Vec::new(), Stop(StopReason::Refused)),
+    ] {
+        let end = refresh_refusal(status, &body);
+        assert_eq!(
+            after_refresh(end.clone()),
+            verdict,
+            "{status} {}: {end:?}",
+            String::from_utf8_lossy(&body)
+        );
+        if body.starts_with(b"{") {
+            assert_eq!(end, RefreshEnd::Refused(token_refusal(&body)), "{status}");
+        }
+    }
+}
+
+#[test]
+fn backoff_doubles_to_the_cap_scaled_by_a_clamped_jitter() {
+    for attempt in 0..=10u32 {
+        let secs = (1u64 << attempt).min(300);
+        for (jitter, permille) in [(0.5, 500), (0.75, 750), (1.0, 1000)] {
+            assert_eq!(
+                backoff(attempt, jitter),
+                Duration::from_millis(secs * permille),
+                "attempt {attempt}, jitter {jitter}"
+            );
+        }
+        assert_eq!(backoff(attempt, 0.1), Duration::from_millis(secs * 500));
+        assert_eq!(backoff(attempt, 2.0), Duration::from_secs(secs));
+    }
+    assert_eq!(BACKOFF_CAP_SECS, 300);
+    assert_eq!(backoff(9, 1.0), Duration::from_secs(300));
+    for attempt in [63, 64, 65, u32::MAX] {
+        assert_eq!(backoff(attempt, 1.0), Duration::from_secs(300), "{attempt}");
+    }
+    assert_eq!(backoff(3, f64::NAN), Duration::from_secs(8));
+    assert_eq!(backoff(3, f64::INFINITY), Duration::from_secs(8));
+    assert_eq!(backoff(3, f64::NEG_INFINITY), Duration::from_secs(4));
+}
+
+fn waking_db(
+    tag: &str,
+) -> (
+    demeteo_core::test_dir::TestDir,
+    Arc<SqliteAdapter>,
+    WakingRunEvents,
+) {
+    let (dir, db) = pin_db(tag);
+    let db = Arc::new(db);
+    let events = WakingRunEvents::new(db.clone());
+    (dir, db, events)
+}
+
+async fn woken(wake: &tokio::sync::Notify) -> bool {
+    tokio::time::timeout(Duration::from_secs(5), wake.notified())
+        .await
+        .is_ok()
+}
+
+#[tokio::test]
+async fn an_append_through_the_decorator_wakes_a_pending_waiter() {
+    let (_dir, _db, events) = waking_db("hub-wake-pending");
+    let wake = events.wake();
+    let waiter = tokio::spawn(async move { woken(&wake).await });
+    tokio::task::yield_now().await;
+    events
+        .append("f-1", "feature_status", Some(r#"{"status":"running"}"#), 1)
+        .unwrap();
+    assert!(waiter.await.unwrap());
+}
+
+#[tokio::test]
+async fn an_append_with_nobody_waiting_leaves_one_wake_for_the_next_wait() {
+    let (_dir, _db, events) = waking_db("hub-wake-permit");
+    events.append("f-1", "feature_status", None, 1).unwrap();
+    events.append("f-1", "feature_status", None, 2).unwrap();
+    let wake = events.wake();
+    assert!(woken(&wake).await);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), wake.notified())
+            .await
+            .is_err(),
+        "two appends before the wait collapse into one wake"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_append_does_not_wake() {
+    let (_dir, db, events) = waking_db("hub-wake-failed");
+    db.conn
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TABLE run_events")
+        .unwrap();
+    assert!(events.append("f-1", "feature_status", None, 1).is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), events.wake().notified())
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn the_decorator_reads_what_the_wrapped_store_holds() {
+    let (_dir, db, events) = waking_db("hub-wake-reads");
+    let first = db.append("f-1", "feature_status", None, 1).unwrap();
+    let second = events
+        .append("f-2", "step_progress", Some("{}"), 2)
+        .unwrap();
+    let third = db.append("f-1", "gate_required", None, 3).unwrap();
+    let offsets = |rows: Vec<RunEvent>| rows.iter().map(|e| e.offset).collect::<Vec<_>>();
+    assert_eq!(
+        offsets(events.list_after(0, 10).unwrap()),
+        [first, second, third]
+    );
+    assert_eq!(offsets(events.list_after(first, 1).unwrap()), [second]);
+    assert_eq!(
+        offsets(events.list_since("f-1", 0).unwrap()),
+        [first, third]
+    );
+    assert_eq!(offsets(events.list_since("f-1", first).unwrap()), [third]);
+    assert_eq!(
+        offsets(db.list_after(0, 10).unwrap()),
+        offsets(events.list_after(0, 10).unwrap())
+    );
+}
+
+fn form_pairs(body: &str) -> Vec<(String, String)> {
+    reqwest::Url::parse(&format!("http://x/?{body}"))
+        .unwrap()
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
+}
+
+#[test]
+fn refresh_form_body_parses_back_to_the_refresh_grant_and_its_token() {
+    let token = "dhr_r0+/= &?~";
+    let body = refresh_form_body(token);
+    assert_eq!(
+        body,
+        "grant_type=refresh_token&refresh_token=dhr_r0%2B%2F%3D%20%26%3F~"
+    );
+    let expected = [("grant_type", "refresh_token"), ("refresh_token", token)]
+        .map(|(k, v)| (k.to_owned(), v.to_owned()));
+    assert_eq!(form_pairs(&body), expected);
+}
+
+/// `refresh_response`'s serialization in `crates/demeteo-hub/src/pairing/grant.rs`.
+fn hub_refresh_body() -> Value {
+    json!({
+        "access_token": ACCESS_TOKEN,
+        "token_type": "DPoP",
+        "expires_in": 900,
+        "refresh_token": REFRESH_TOKEN,
+    })
+}
+
+#[test]
+fn a_refresh_answer_parses_the_hubs_shape_into_the_rotated_pair() {
+    let answer: RefreshAnswer = serde_json::from_value(hub_refresh_body()).unwrap();
+    assert_eq!(answer.expires_in(), 900);
+    let tokens = answer.into_tokens();
+    assert_eq!(tokens.access.expose(), ACCESS_TOKEN);
+    assert_eq!(tokens.refresh.expose(), REFRESH_TOKEN);
+
+    for member in ["access_token", "token_type", "expires_in", "refresh_token"] {
+        let mut body = hub_refresh_body();
+        body.as_object_mut().unwrap().remove(member);
+        assert!(
+            serde_json::from_value::<RefreshAnswer>(body).is_err(),
+            "{member}"
+        );
+    }
+}
+
+async fn refresh_with(url: &str, token: &str) -> Result<RefreshAnswer, RefreshEnd> {
+    ReqwestTokenEndpoint::new()
+        .expect("an HTTP client")
+        .refresh(url, refresh_form_body(token), TOKEN_DPOP.to_owned())
+        .await
+}
+
+#[tokio::test]
+async fn a_refresh_that_never_connects_is_unsent() {
+    let closed = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let url = format!("http://{}/token", closed.local_addr().unwrap());
+    drop(closed);
+
+    let end = refresh_with(&url, REFRESH_TOKEN).await.err();
+
+    assert_eq!(end, Some(RefreshEnd::Unsent));
+}
+
+#[tokio::test]
+async fn a_refresh_read_and_closed_without_an_answer_is_unanswered() {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a loopback bind");
+    let url = format!("http://{}/token", listener.local_addr().unwrap());
+    let read = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err("the request ended inside its head".to_owned());
+            }
+            request.extend_from_slice(&chunk[..n]);
+        }
+        Ok::<_, String>(())
+    });
+
+    let end = refresh_with(&url, REFRESH_TOKEN).await.err();
+
+    read.await
+        .unwrap()
+        .expect("the request reached the listener");
+    assert_eq!(end, Some(RefreshEnd::Unanswered));
+}
+
+/// A refresh of `REFRESH_TOKEN` answered by [`token_stub_expecting`].
+async fn refresh_answered(status: u16, body: &'static str) -> Result<RefreshAnswer, RefreshEnd> {
+    let (url, served) = token_stub_expecting(
+        refresh_form_body(REFRESH_TOKEN),
+        status,
+        "application/json",
+        body,
+    )
+    .await;
+    let result = refresh_with(&url, REFRESH_TOKEN).await;
+    served.await.unwrap().expect("the scripted request");
+    result
+}
+
+#[tokio::test]
+async fn a_refresh_posts_the_grant_with_one_dpop_header_and_reads_the_rotated_pair() {
+    const ROTATED: &str = r#"{"access_token":"dha_next","token_type":"DPoP",
+        "expires_in":900,"refresh_token":"dhr_next"}"#;
+    let result = refresh_answered(200, ROTATED).await;
+    let Ok(answer) = result else {
+        panic!("{:?}", result.err());
+    };
+    let tokens = answer.into_tokens();
+    assert_eq!(
+        (tokens.access.expose(), tokens.refresh.expose()),
+        ("dha_next", "dhr_next")
+    );
+}
+
+#[tokio::test]
+async fn a_refresh_refused_by_the_hub_is_refused_as_token_refusal_reads_it() {
+    let end = refresh_answered(400, r#"{"error":"invalid_grant"}"#)
+        .await
+        .err();
+    assert_eq!(
+        end,
+        Some(RefreshEnd::Refused(HubPairingError::HubRefused {
+            error: "invalid_grant".into()
+        }))
+    );
+    let Err(busy) = refresh_answered(503, r#"{"error":"too_many_requests"}"#).await else {
+        panic!("a 503 read as an answer");
+    };
+    assert_eq!(after_refresh(busy), Reconnect::AfterBackoff);
+    let html = std::str::from_utf8(HTML_BODY).expect("an ASCII body");
+    for (status, end) in [
+        (503, RefreshEnd::Unavailable),
+        (502, RefreshEnd::Unanswered),
+    ] {
+        assert_eq!(refresh_answered(status, html).await.err(), Some(end));
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_answered_200_without_a_readable_pair_is_unanswered() {
+    let end = refresh_answered(200, r#"{"access_token":"dha_only"}"#)
+        .await
+        .err();
+    assert_eq!(end, Some(RefreshEnd::Unanswered));
+}
+
+#[tokio::test]
+async fn the_scripted_refresh_endpoint_answers_only_its_script_and_records_every_call() {
+    let endpoint = ScriptedRefreshEndpoint::new();
+    endpoint.answer("dha_1", "dhr_1", 900);
+    endpoint.fail(RefreshEnd::Unsent);
+
+    let Ok(first) = endpoint.refresh("u1", "b1".into(), "p1".into()).await else {
+        panic!("the scripted answer was not given");
+    };
+    let second = endpoint.refresh("u2", "b2".into(), "p2".into()).await.err();
+    assert_eq!(endpoint.unscripted(), 0);
+    let third = endpoint.refresh("u3", "b3".into(), "p3".into()).await.err();
+
+    assert_eq!(first.into_tokens().refresh.expose(), "dhr_1");
+    assert_eq!(second, Some(RefreshEnd::Unsent));
+    assert_eq!(third, Some(RefreshEnd::Unanswered));
+    assert_eq!(endpoint.unscripted(), 1);
+    let call = |n: u8| RefreshCall {
+        token_url: format!("u{n}"),
+        form_body: format!("b{n}"),
+        dpop: format!("p{n}"),
+    };
+    assert_eq!(endpoint.calls(), [call(1), call(2), call(3)]);
+}
+
+#[tokio::test]
+async fn a_held_scripted_refresh_waits_for_release() {
+    let endpoint = Arc::new(ScriptedRefreshEndpoint::new());
+    endpoint.answer("dha_1", "dhr_1", 900);
+    endpoint.hold();
+    let call = tokio::spawn({
+        let endpoint = Arc::clone(&endpoint);
+        async move { endpoint.refresh("u", "b".into(), "p".into()).await.is_ok() }
+    });
+
+    endpoint.called_times(1).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!call.is_finished());
+    endpoint.release();
+
+    assert!(call.await.unwrap());
+    assert_eq!(endpoint.unscripted(), 0);
+}
+
+fn presented_refresh(call: &RefreshCall) -> String {
+    let pairs = form_pairs(&call.form_body);
+    match &pairs[..] {
+        [(grant, kind), (name, token)] if grant == "grant_type" && name == "refresh_token" => {
+            assert_eq!(kind, "refresh_token");
+            token.clone()
+        }
+        _ => panic!("not a refresh grant: {pairs:?}"),
+    }
+}
+
+/// A desktop paired with [`ORIGIN`] holding `refresh`, whose refreshes reach
+/// a [`ScriptedRefreshEndpoint`] and whose code exchanges fail.
+struct RefreshRig {
+    dir: demeteo_core::test_dir::TestDir,
+    db: Arc<SqliteAdapter>,
+    secrets: Arc<MemorySecretStore>,
+    endpoint: Arc<ScriptedRefreshEndpoint>,
+    key: DeviceKey,
+    hub: Arc<HubPairing>,
+}
+
+impl RefreshRig {
+    fn new(tag: &str, refresh: &str) -> Self {
+        let (dir, db) = pin_db(tag);
+        let db = Arc::new(db);
+        let key = DeviceKey::generate().unwrap();
+        let secrets = Arc::new(
+            MemorySecretStore::paired(db.as_ref(), &pins(ORIGIN, &[]), &key, refresh).unwrap(),
+        );
+        let endpoint = Arc::new(ScriptedRefreshEndpoint::new());
+        let token = Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        });
+        let hub = HubPairing::new(db.clone(), secrets.clone(), token)
+            .with_refresh_endpoint(endpoint.clone());
+        Self {
+            dir,
+            db,
+            secrets,
+            endpoint,
+            key,
+            hub: Arc::new(hub),
+        }
+    }
+
+    fn stored_refresh(&self) -> Option<String> {
+        let account = hub_keyring_account(&self.db.install_id().unwrap(), HubSecret::RefreshToken);
+        self.secrets.entries().get(&account).cloned()
+    }
+}
+
+/// The first refresh is parked inside the endpoint before the second is
+/// first polled, so the second can only miss the endpoint by waiting.
+#[tokio::test]
+async fn concurrent_refreshes_reach_the_hub_in_turn_and_present_each_token_once() {
+    let rig = RefreshRig::new("hub_refresh_serial", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.answer("dha_a2", "dhr_r2", 900);
+    rig.endpoint.hold();
+
+    let (first, second, ()) =
+        tokio::join!(rig.hub.refresh_access(), rig.hub.refresh_access(), async {
+            rig.endpoint.called_times(1).await;
+            tokio::task::yield_now().await;
+            rig.endpoint.release();
+        });
+
+    let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+    assert_eq!(presented, ["dhr_r0", "dhr_r1"]);
+    assert_eq!(rig.endpoint.unscripted(), 0);
+    assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r2"));
+    let mut issued = [first, second].map(|access| access.unwrap().expose().to_owned());
+    issued.sort();
+    assert_eq!(issued, ["dha_a1", "dha_a2"]);
+    assert_eq!(rig.hub.access_token().unwrap().expose(), "dha_a2");
+}
+
+#[tokio::test]
+async fn a_refreshed_access_token_is_held_in_memory_and_never_stored() {
+    let rig = RefreshRig::new("hub_refresh_memory", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+
+    let access = rig.hub.refresh_access().await.expect("a refresh");
+
+    assert_eq!(access.expose(), "dha_a1");
+    assert_eq!(rig.hub.access_token().unwrap().expose(), "dha_a1");
+    let written = rig.secrets.written();
+    assert!(written.iter().any(|v| v == "dhr_r1"), "{written:?}");
+    assert!(!written.iter().any(|v| v == "dha_a1"));
+    let leaks = found_in_db(
+        &rig.db,
+        &rig.dir.path().join("demeteo.db"),
+        &[("access token", b"dha_a1".to_vec())],
+    );
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+#[tokio::test]
+async fn a_pairing_holds_its_access_token_in_memory_and_never_stores_it() {
+    let rig = Rig::new("hub_pair_access_memory", Reply::Answer);
+
+    rig.pair(HUB_URL).await.expect("a pairing");
+
+    assert_eq!(rig.hub.access_token().unwrap().expose(), ACCESS_TOKEN);
+    assert!(!rig.secrets.written().iter().any(|v| v == ACCESS_TOKEN));
+    assert!(rig.hub.disconnect().await.is_ok());
+    assert!(rig.hub.access_token().is_none());
+}
+
+#[tokio::test]
+async fn a_refresh_without_an_endpoint_a_pairing_or_a_token_sends_nothing() {
+    let unconfigured = RefreshRig::new("hub_refresh_no_endpoint", "dhr_r0");
+    let bare = HubPairing::new(
+        unconfigured.db.clone(),
+        unconfigured.secrets.clone(),
+        Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        }),
+    );
+    let no_token = RefreshRig::new("hub_refresh_no_token", "dhr_r0");
+    no_token
+        .secrets
+        .delete(&hub_keyring_account(
+            &no_token.db.install_id().unwrap(),
+            HubSecret::RefreshToken,
+        ))
+        .unwrap();
+    let no_pins = RefreshRig::new("hub_refresh_no_pins", "dhr_r0");
+    no_pins.db.clear().unwrap();
+
+    for (case, end) in [
+        ("no endpoint", bare.refresh_access().await.err()),
+        ("no token", no_token.hub.refresh_access().await.err()),
+        ("no pins", no_pins.hub.refresh_access().await.err()),
+    ] {
+        assert!(
+            matches!(end, Some(RefreshEnd::Refused(HubPairingError::Storage(_)))),
+            "{case}: {end:?}"
+        );
+    }
+    assert!(no_token.endpoint.calls().is_empty());
+    assert!(no_pins.endpoint.calls().is_empty());
+}
+
+/// The rotation has happened at the Hub, so the access token issued with a
+/// refresh token that could not be kept is not handed out either.
+#[tokio::test]
+async fn a_rotation_the_keyring_cannot_keep_yields_no_access_token() {
+    let rig = RefreshRig::new("hub_refresh_unkept", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.hold();
+
+    let (end, ()) = tokio::join!(rig.hub.refresh_access(), async {
+        rig.endpoint.called_times(1).await;
+        rig.secrets.set_available(false);
+        rig.endpoint.release();
+    });
+
+    assert!(
+        matches!(end, Err(RefreshEnd::Refused(HubPairingError::Storage(_)))),
+        "{:?}",
+        end.map(|_| "an access token")
+    );
+    assert!(rig.hub.access_token().is_none());
+    assert_eq!(rig.endpoint.calls().len(), 1);
+}
+
+fn socket_upgrade(access: &str) -> SocketUpgrade {
+    let answer: RefreshAnswer = serde_json::from_value(json!({
+        "access_token": access,
+        "token_type": "DPoP",
+        "expires_in": 900,
+        "refresh_token": "dhr_unused",
+    }))
+    .unwrap();
+    SocketUpgrade {
+        url: "wss://hub.example.com/socket".to_owned(),
+        access_token: answer.into_tokens().access,
+        dpop: "proof".to_owned(),
+    }
+}
+
+#[test]
+fn a_socket_upgrade_never_prints_its_access_token() {
+    let printed = format!("{:?}", socket_upgrade("dha_secret"));
+    assert!(!printed.contains("dha_secret"), "{printed}");
+}
+
+/// An unscripted dial is refused with a status the supervisor stops on, so
+/// a test that scripts too few dials fails on its count, not its timeout.
+#[tokio::test]
+async fn an_unscripted_dial_is_refused_and_counted() {
+    let dialer = ScriptedSocketDialer::new();
+    dialer.refuse(DialFailure::Refused {
+        status: 401,
+        error: Some("invalid_token".to_owned()),
+    });
+
+    let first = dialer.dial(socket_upgrade("dha_1")).await.err();
+    let second = dialer.dial(socket_upgrade("dha_2")).await.err();
+
+    assert_eq!(
+        first,
+        Some(DialFailure::Refused {
+            status: 401,
+            error: Some("invalid_token".to_owned()),
+        })
+    );
+    assert_eq!(
+        second,
+        Some(DialFailure::Refused {
+            status: ScriptedSocketDialer::UNSCRIPTED_STATUS,
+            error: Some(ScriptedSocketDialer::UNSCRIPTED.to_owned()),
+        })
+    );
+    for fresh_token in [false, true] {
+        assert_eq!(
+            after(SocketEnd::Refused {
+                status: ScriptedSocketDialer::UNSCRIPTED_STATUS,
+                fresh_token,
+            }),
+            Reconnect::Stop(StopReason::Refused)
+        );
+    }
+    assert_eq!(dialer.unscripted(), 1);
+    let tokens: Vec<_> = dialer
+        .upgrades()
+        .iter()
+        .map(|u| u.access_token.expose().to_owned())
+        .collect();
+    assert_eq!(tokens, ["dha_1", "dha_2"]);
+}
+
+#[tokio::test]
+async fn a_scripted_connection_replays_then_closes_and_refuses_sends() {
+    let dialer = ScriptedSocketDialer::new();
+    let connection =
+        ScriptedConnection::new([SocketReceived::Text("{}".to_owned()), SocketReceived::Alive]);
+    let log = connection.log();
+    dialer.connect(connection);
+    let dialed_at = Arc::new(Mutex::new(Vec::new()));
+    let seen = dialed_at.clone();
+    dialer.on_dial(move |u| seen.lock().unwrap().push(u.url.clone()));
+
+    let mut socket = dialer.dial(socket_upgrade("dha_1")).await.unwrap();
+    assert_eq!(socket.send_text("hello".to_owned()).await, Ok(()));
+    let mut received = Vec::new();
+    for _ in 0..4 {
+        received.push(socket.received().await);
+    }
+    let late = socket.send_text("late".to_owned()).await;
+    socket.close(1000).await;
+
+    assert_eq!(
+        received,
+        [
+            SocketReceived::Text("{}".to_owned()),
+            SocketReceived::Alive,
+            SocketReceived::Closed(None),
+            SocketReceived::Closed(None),
+        ]
+    );
+    assert_eq!(late, Err(SocketGone));
+    assert_eq!(log.unscripted(), 2, "both reads past the script");
+    assert_eq!(log.sent(), ["hello"]);
+    assert_eq!(log.closed_with(), Some(1000));
+    assert_eq!(*dialed_at.lock().unwrap(), ["wss://hub.example.com/socket"]);
+    assert_eq!(dialer.unscripted(), 0);
+}
+
+/// Records each wait with the number of `/token` calls made before it, so a
+/// test can tell a backoff before a refresh from one after it.
+struct CountingSleeper {
+    endpoint: Arc<ScriptedRefreshEndpoint>,
+    waits: Mutex<Vec<(Duration, usize)>>,
+}
+
+#[async_trait::async_trait]
+impl Sleeper for CountingSleeper {
+    async fn sleep(&self, duration: Duration) {
+        let calls = self.endpoint.calls().len();
+        self.waits.lock().unwrap().push((duration, calls));
+        tokio::task::yield_now().await;
+    }
+}
+
+impl RefreshRig {
+    /// Supervises on its own task until it stops of its own accord, and
+    /// returns why with every wait it asked for. A supervisor that never
+    /// stops fails the timeout rather than hanging the suite.
+    async fn supervise(
+        &self,
+        dialer: &Arc<ScriptedSocketDialer>,
+    ) -> (StopReason, Vec<(Duration, usize)>) {
+        let run_events = Arc::new(WakingRunEvents::new(self.db.clone()));
+        let sleeper = Arc::new(CountingSleeper {
+            endpoint: self.endpoint.clone(),
+            waits: Mutex::default(),
+        });
+        let deps = SupervisorDeps {
+            tokens: self.hub.clone(),
+            origin: ORIGIN.to_owned(),
+            key: DeviceKey::from_pkcs8(&self.key.to_pkcs8().unwrap()).unwrap(),
+            dialer: dialer.clone(),
+            session: SessionContext::new(
+                self.db.install_id().unwrap(),
+                "0.0.0-test".to_owned(),
+                vec!["read".to_owned()],
+                run_events.clone(),
+                run_events.wake(),
+            ),
+            sleeper: sleeper.clone(),
+            jitter: Box::new(|| 1.0),
+        };
+        let (_stop, stopped) = tokio::sync::watch::channel(false);
+        let reason = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::spawn(supervise(deps, stopped)),
+        )
+        .await
+        .expect("the supervisor stops")
+        .expect("the supervisor did not panic");
+        assert_eq!(dialer.unscripted(), 0, "an unscripted dial");
+        assert_eq!(self.endpoint.unscripted(), 0, "an unscripted refresh");
+        let waits = sleeper.waits.lock().unwrap().clone();
+        (reason, waits)
+    }
+}
+
+fn closing_with(code: u16) -> ScriptedConnection {
+    ScriptedConnection::new([SocketReceived::Closed(Some(code))])
+}
+
+fn dialed_tokens(dialer: &ScriptedSocketDialer) -> Vec<String> {
+    dialer
+        .upgrades()
+        .iter()
+        .map(|upgrade| upgrade.access_token.expose().to_owned())
+        .collect()
+}
+
+/// A refusal as the real endpoint hands it over: read by `token_refusal`.
+fn refresh_refused(error: &str) -> RefreshEnd {
+    RefreshEnd::Refused(token_refusal(
+        json!({ "error": error }).to_string().as_bytes(),
+    ))
+}
+
+/// AC5.4: a refresh the Hub may have rotated, or refused for good, is never
+/// sent again — the supervisor stops on it, before any dial.
+#[tokio::test]
+async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_token_call() {
+    for (tag, end, reason) in [
+        (
+            "unanswered",
+            RefreshEnd::Unanswered,
+            StopReason::RefreshUncertain,
+        ),
+        (
+            "invalid_grant",
+            refresh_refused("invalid_grant"),
+            StopReason::NeedsRepair,
+        ),
+        (
+            "invalid_dpop_proof",
+            refresh_refused("invalid_dpop_proof"),
+            StopReason::ClockSkew,
+        ),
+        (
+            "invalid_dpop_proof_unread",
+            RefreshEnd::Refused(HubPairingError::HubRefused {
+                error: "invalid_dpop_proof".to_owned(),
+            }),
+            StopReason::Refused,
+        ),
+        (
+            "bare_502",
+            refresh_refusal(502, HTML_BODY),
+            StopReason::RefreshUncertain,
+        ),
+    ] {
+        let rig = RefreshRig::new(&format!("hub_supervise_stops_{tag}"), "dhr_r0");
+        rig.endpoint.fail(end);
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+
+        let (stopped, waits) = rig.supervise(&dialer).await;
+
+        assert_eq!(stopped, reason, "{tag}");
+        assert_eq!(rig.endpoint.calls().len(), 1, "{tag}");
+        assert!(dialer.upgrades().is_empty(), "{tag}");
+        assert!(waits.is_empty(), "{tag}: {waits:?}");
+        assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r0"), "{tag}");
+    }
+}
+
+/// AC5.4: a refresh that never left, or that the Hub turned away before
+/// reading its token, is waited out and sent again with the same token.
+#[tokio::test]
+async fn a_refresh_nothing_can_have_rotated_backs_off_then_refreshes_again() {
+    for (tag, end) in [
+        ("unsent", RefreshEnd::Unsent),
+        ("busy_503", refresh_refused("too_many_requests")),
+        ("bare_503", refresh_refusal(503, HTML_BODY)),
+    ] {
+        let rig = RefreshRig::new(&format!("hub_supervise_retries_{tag}"), "dhr_r0");
+        rig.endpoint.fail(end);
+        rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+        dialer.connect(closing_with(4002));
+
+        let (stopped, waits) = rig.supervise(&dialer).await;
+
+        assert_eq!(stopped, StopReason::Displaced, "{tag}");
+        assert_eq!(
+            waits,
+            [(backoff(0, 1.0), 1)],
+            "{tag}: one wait, between the calls"
+        );
+        let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+        assert_eq!(presented, ["dhr_r0", "dhr_r0"], "{tag}");
+        assert_eq!(dialed_tokens(&dialer), ["dha_a1"], "{tag}");
+    }
+}
+
+/// AC4: a `401` to a token held from before this attempt is that token
+/// expiring, and is refreshed once and redialled with no backoff.
+#[tokio::test]
+async fn an_upgrade_401_to_a_held_token_refreshes_once_and_redials() {
+    let rig = RefreshRig::new("hub_supervise_401_held", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.answer("dha_a2", "dhr_r2", 900);
+    rig.hub.refresh_access().await.expect("the held token");
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(DialFailure::Refused {
+        status: 401,
+        error: Some("invalid_token".to_owned()),
+    });
+    dialer.connect(closing_with(4002));
+
+    let (stopped, waits) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::Displaced);
+    let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+    assert_eq!(
+        presented,
+        ["dhr_r0", "dhr_r1"],
+        "one refresh while supervised"
+    );
+    assert_eq!(dialed_tokens(&dialer), ["dha_a1", "dha_a2"]);
+    assert!(waits.is_empty(), "{waits:?}");
+}
+
+/// AC4: a `401` to a token issued for this very attempt would meet a `401`
+/// again, so it stops instead of refreshing.
+#[tokio::test]
+async fn an_upgrade_401_to_a_freshly_refreshed_token_stops_unauthorized() {
+    let rig = RefreshRig::new("hub_supervise_401_fresh", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(DialFailure::Refused {
+        status: 401,
+        error: Some("invalid_token".to_owned()),
+    });
+
+    let (stopped, waits) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::Unauthorized);
+    assert_eq!(rig.endpoint.calls().len(), 1);
+    assert_eq!(dialed_tokens(&dialer), ["dha_a1"]);
+    assert!(waits.is_empty(), "{waits:?}");
+}
+
+/// AC4: a busy Hub is waited out with the token already held.
+#[tokio::test]
+async fn an_upgrade_503_backs_off_without_refreshing() {
+    let rig = RefreshRig::new("hub_supervise_503", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.hub.refresh_access().await.expect("the held token");
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(DialFailure::Refused {
+        status: 503,
+        error: Some("too_many_requests".to_owned()),
+    });
+    dialer.connect(closing_with(4002));
+
+    let (stopped, waits) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::Displaced);
+    assert_eq!(waits, [(backoff(0, 1.0), 1)]);
+    assert_eq!(
+        rig.endpoint.calls().len(),
+        1,
+        "only the refresh before supervising"
+    );
+    assert_eq!(dialed_tokens(&dialer), ["dha_a1", "dha_a1"]);
+}
+
+/// A `4001` on a just-issued token the local clock gives most of its life
+/// to is not that token expiring. Each one waits longer than the last, the
+/// ack of the session it ended notwithstanding, and is followed by exactly
+/// one refresh.
+#[tokio::test]
+async fn a_premature_4001_backs_off_longer_each_time_with_one_refresh_per_wait() {
+    let rig = RefreshRig::new("hub_supervise_premature_4001", "dhr_r0");
+    for n in 1..=4 {
+        rig.endpoint
+            .answer(&format!("dha_a{n}"), &format!("dhr_r{n}"), 900);
+    }
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    for _ in 0..3 {
+        dialer.connect(ScriptedConnection::new([
+            first_ack(),
+            SocketReceived::Closed(Some(4001)),
+        ]));
+    }
+    dialer.connect(closing_with(4002));
+
+    let (stopped, waits) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::Displaced);
+    assert_eq!(
+        waits,
+        [
+            (backoff(0, 1.0), 1),
+            (backoff(1, 1.0), 2),
+            (backoff(2, 1.0), 3)
+        ],
+        "a wait between every two /token calls, each longer"
+    );
+    assert_eq!(rig.endpoint.calls().len(), 4);
+    assert_eq!(
+        dialed_tokens(&dialer),
+        ["dha_a1", "dha_a2", "dha_a3", "dha_a4"]
+    );
+}
+
+/// Each end the Hub never acked waits longer than the last; a session it
+/// acked starts the count again, so the wait after it is the first one.
+#[tokio::test]
+async fn backoff_grows_until_a_session_is_acked_and_starts_again_after_it() {
+    let rig = RefreshRig::new("hub_supervise_backoff_resets", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let unreachable = || DialFailure::Unreachable("wss://hub.example.com/socket".to_owned());
+    dialer.refuse(unreachable());
+    dialer.refuse(unreachable());
+    dialer.connect(ScriptedConnection::new([
+        first_ack(),
+        SocketReceived::Closed(None),
+    ]));
+    dialer.refuse(unreachable());
+    dialer.connect(closing_with(4002));
+
+    let (stopped, waits) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::Displaced);
+    assert_eq!(
+        waits,
+        [
+            (backoff(0, 1.0), 1),
+            (backoff(1, 1.0), 1),
+            (backoff(0, 1.0), 1),
+            (backoff(1, 1.0), 1)
+        ]
+    );
+    assert_eq!(dialed_tokens(&dialer), ["dha_a1"; 5]);
+}
+
+/// Records each wait, then never wakes: a socket that backs off stays in
+/// that backoff until it is stopped, however late the test stops it.
+struct ParkedSleeper(tokio::sync::watch::Sender<Vec<Duration>>);
+
+impl ParkedSleeper {
+    fn new() -> Arc<Self> {
+        Arc::new(Self(tokio::sync::watch::Sender::new(Vec::new())))
+    }
+
+    /// Resolves, with the waits so far, once a socket has parked.
+    async fn parked(&self) -> Vec<Duration> {
+        let mut waits = self.0.subscribe();
+        waits
+            .wait_for(|waits| !waits.is_empty())
+            .await
+            .map(|parked| parked.clone())
+            .expect("the sender lives as long as self")
+    }
+}
+
+#[async_trait::async_trait]
+impl Sleeper for ParkedSleeper {
+    async fn sleep(&self, duration: Duration) {
+        self.0.send_modify(|waits| waits.push(duration));
+        std::future::pending::<()>().await;
+    }
+}
+
+fn socket_config(
+    db: &Arc<SqliteAdapter>,
+    dialer: &Arc<ScriptedSocketDialer>,
+    sleeper: &Arc<ParkedSleeper>,
+) -> SocketConfig {
+    let run_events = Arc::new(WakingRunEvents::new(db.clone()));
+    SocketConfig {
+        dialer: dialer.clone(),
+        wake: run_events.wake(),
+        run_events,
+        runtime: tokio::runtime::Handle::current(),
+        sleeper: sleeper.clone(),
+        jitter: || 1.0,
+    }
+}
+
+impl Rig {
+    /// A [`Rig`] whose pairing starts a socket on `dialer`, waiting on
+    /// `sleeper`.
+    fn socketed(
+        tag: &str,
+        reply: Reply,
+        dialer: &Arc<ScriptedSocketDialer>,
+        sleeper: &Arc<ParkedSleeper>,
+    ) -> Self {
+        let mut rig = Self::new(tag, reply);
+        let hub = HubPairing::new(rig.db.clone(), rig.secrets.clone(), rig.token.clone())
+            .with_socket(socket_config(&rig.db, dialer, sleeper));
+        rig.hub = Arc::new(hub);
+        rig
+    }
+}
+
+impl RefreshRig {
+    /// This rig's pairing, with a socket on `dialer`. A socket task holds a
+    /// clone of `dialer` while it runs, so its strong count tells a test
+    /// whether one is running.
+    fn socketed(&self, dialer: &Arc<ScriptedSocketDialer>) -> Arc<HubPairing> {
+        let token = Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        });
+        let hub = HubPairing::new(self.db.clone(), self.secrets.clone(), token)
+            .with_refresh_endpoint(self.endpoint.clone())
+            .with_socket(socket_config(&self.db, dialer, &ParkedSleeper::new()));
+        Arc::new(hub)
+    }
+}
+
+async fn settle() {
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// AC6.1: a desktop with nothing to authenticate a socket with spawns none.
+#[tokio::test]
+async fn a_socket_without_pins_or_a_refresh_token_dials_nothing() {
+    let no_pins = RefreshRig::new("hub_socket_no_pins", "dhr_r0");
+    no_pins.db.clear().unwrap();
+    let no_token = RefreshRig::new("hub_socket_no_token", "dhr_r0");
+    no_token
+        .secrets
+        .delete(&hub_keyring_account(
+            &no_token.db.install_id().unwrap(),
+            HubSecret::RefreshToken,
+        ))
+        .unwrap();
+
+    for (case, rig) in [("no pins", no_pins), ("no token", no_token)] {
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+        let hub = rig.socketed(&dialer);
+        let idle = Arc::strong_count(&dialer);
+
+        hub.start_socket();
+        assert_eq!(Arc::strong_count(&dialer), idle, "{case}: a socket task");
+        settle().await;
+
+        assert!(dialer.upgrades().is_empty(), "{case}");
+        assert!(rig.endpoint.calls().is_empty(), "{case}");
+    }
+}
+
+/// AC6.2: the socket dials with the access token the pairing was issued,
+/// and starting it again while it runs starts no second one. Its dial is
+/// refused, so it is parked in a backoff — nothing that contends for the
+/// refresh lock, and nothing that ends on its own — when `disconnect` has
+/// to wait for it to end.
+#[tokio::test]
+async fn a_pairing_starts_one_socket_and_disconnect_waits_for_it_to_end() {
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(DialFailure::Unreachable("connection refused".to_owned()));
+    let sleeper = ParkedSleeper::new();
+    let rig = Rig::socketed("hub_pair_starts_socket", Reply::Answer, &dialer, &sleeper);
+    let idle = Arc::strong_count(&dialer);
+
+    rig.pair(HUB_URL).await.expect("a pairing");
+    assert_eq!(Arc::strong_count(&dialer), idle + 1, "a socket task");
+    rig.hub.start_socket();
+    assert_eq!(Arc::strong_count(&dialer), idle + 1, "one socket task");
+
+    let waits = tokio::time::timeout(Duration::from_secs(5), sleeper.parked())
+        .await
+        .expect("the socket backs off");
+    rig.hub.disconnect().await.expect("a disconnect");
+
+    assert_eq!(
+        Arc::strong_count(&dialer),
+        idle,
+        "the socket task ended first"
+    );
+    assert_eq!(waits, [backoff(0, 1.0)]);
+    assert_eq!(dialed_tokens(&dialer), [ACCESS_TOKEN]);
+    assert_eq!(dialer.unscripted(), 0);
+}
+
+/// AC6.3: the socket's own refresh, parked in the endpoint, is dropped by
+/// the stop signal; `disconnect` neither waits on the endpoint nor leaves
+/// that refresh a keyring write to make once it is released.
+#[tokio::test]
+async fn disconnect_abandons_the_sockets_parked_refresh_and_leaves_no_secret() {
+    let rig = RefreshRig::new("hub_disconnect_socket_refresh", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.hold();
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let hub = rig.socketed(&dialer);
+    let idle = Arc::strong_count(&dialer);
+    hub.start_socket();
+    tokio::time::timeout(Duration::from_secs(5), rig.endpoint.called_times(1))
+        .await
+        .expect("the socket refreshes");
+    assert_eq!(Arc::strong_count(&dialer), idle + 1);
+
+    let status = tokio::time::timeout(Duration::from_secs(5), hub.disconnect())
+        .await
+        .expect("disconnect does not wait on the endpoint")
+        .expect("a disconnect");
+
+    assert_eq!(
+        Arc::strong_count(&dialer),
+        idle,
+        "the socket task ended first"
+    );
+    assert!(
+        rig.secrets.entries().is_empty(),
+        "{:?}",
+        rig.secrets.entries()
+    );
+    rig.endpoint.release();
+    settle().await;
+    assert!(
+        rig.secrets.entries().is_empty(),
+        "{:?}",
+        rig.secrets.entries()
+    );
+    assert!(!rig.secrets.written().iter().any(|v| v == "dhr_r1"));
+    assert_eq!(status.state, HubPairingState::Unpaired);
+    assert!(dialer.upgrades().is_empty());
+}
+
+/// AC6.3: a refresh another caller has parked in the endpoint holds the
+/// refresh lock, so `disconnect` deletes only after its rotation is stored,
+/// and the socket queued behind it never reaches the endpoint.
+#[tokio::test]
+async fn disconnect_deletes_only_after_a_refresh_in_the_endpoint_has_stored_its_rotation() {
+    let rig = RefreshRig::new("hub_disconnect_mid_refresh", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.hold();
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let hub = rig.socketed(&dialer);
+    let idle = Arc::strong_count(&dialer);
+    let refreshing = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.refresh_access().await.map(|_| ()) }
+    });
+    tokio::time::timeout(Duration::from_secs(5), rig.endpoint.called_times(1))
+        .await
+        .expect("the refresh reaches the endpoint");
+    hub.start_socket();
+    settle().await;
+    assert_eq!(Arc::strong_count(&dialer), idle + 1);
+
+    let (status, ()) = tokio::join!(hub.disconnect(), async {
+        settle().await;
+        rig.endpoint.release();
+    });
+
+    assert_eq!(
+        Arc::strong_count(&dialer),
+        idle,
+        "the socket task ended first"
+    );
+    assert!(
+        rig.secrets.entries().is_empty(),
+        "{:?}",
+        rig.secrets.entries()
+    );
+    let refreshed = refreshing.await.expect("the refresh did not panic");
+    assert!(refreshed.is_ok(), "{:?}", refreshed.err());
+    assert!(rig.secrets.written().iter().any(|v| v == "dhr_r1"));
+    settle().await;
+    assert!(
+        rig.secrets.entries().is_empty(),
+        "{:?}",
+        rig.secrets.entries()
+    );
+    assert!(hub.access_token().is_none());
+    assert_eq!(
+        status.expect("a disconnect").state,
+        HubPairingState::Unpaired
+    );
+    assert_eq!(rig.endpoint.calls().len(), 1, "the socket never refreshed");
+    assert!(dialer.upgrades().is_empty());
+}
+
+/// What an [`OpenConnection`] was sent, how often it was read, and the code
+/// it was closed with.
+#[derive(Clone, Default)]
+struct Traffic {
+    sent: Vec<String>,
+    reads: usize,
+    closed_with: Option<u16>,
+}
+
+/// Answers what the test feeds it, in order, and is otherwise open and
+/// silent: unlike a [`ScriptedConnection`], whose `Closed` is always ready,
+/// a session on it gets as far as sending events, and runs until stopped.
+struct OpenConnection {
+    inbound: tokio::sync::mpsc::UnboundedReceiver<SocketReceived>,
+    traffic: tokio::sync::watch::Sender<Traffic>,
+}
+
+impl OpenConnection {
+    fn new() -> (
+        Self,
+        tokio::sync::mpsc::UnboundedSender<SocketReceived>,
+        tokio::sync::watch::Receiver<Traffic>,
+    ) {
+        let (feed, inbound) = tokio::sync::mpsc::unbounded_channel();
+        let traffic = tokio::sync::watch::Sender::new(Traffic::default());
+        let seen = traffic.subscribe();
+        (Self { inbound, traffic }, feed, seen)
+    }
+}
+
+#[async_trait::async_trait]
+impl HubSocketConnection for OpenConnection {
+    async fn received(&mut self) -> SocketReceived {
+        self.traffic.send_modify(|t| t.reads += 1);
+        match self.inbound.recv().await {
+            Some(frame) => frame,
+            None => std::future::pending().await,
+        }
+    }
+
+    async fn send_text(&mut self, text: String) -> Result<(), SocketGone> {
+        self.traffic.send_modify(|t| t.sent.push(text));
+        Ok(())
+    }
+
+    async fn close(self: Box<Self>, code: u16) {
+        self.traffic.send_modify(|t| t.closed_with = Some(code));
+    }
+}
+
+async fn traffic_until(
+    traffic: &mut tokio::sync::watch::Receiver<Traffic>,
+    what: &str,
+    until: impl FnMut(&Traffic) -> bool,
+) -> Traffic {
+    tokio::time::timeout(Duration::from_secs(5), traffic.wait_for(until))
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting: {what}"))
+        .map(|seen| seen.clone())
+        .unwrap_or_else(|_| panic!("the connection went away: {what}"))
+}
+
+fn first_ack() -> SocketReceived {
+    SocketReceived::Text(r#"{"v":1,"offset":0}"#.to_owned())
+}
+
+/// `frame` read as the type `built` returns. The protocol's `Hello` and
+/// `RunEvent` are reachable from this package only that way, through
+/// [`hello`] and [`hub_event`].
+fn read_as<T: serde::de::DeserializeOwned>(_built: impl FnOnce() -> T, frame: &str) -> T {
+    serde_json::from_str(frame).unwrap_or_else(|e| panic!("{frame}: {e}"))
+}
+
+fn announced_scopes(frame: &str) -> Value {
+    let hello = read_as(|| hello("", "", "", "", &[]), frame);
+    serde_json::to_value(hello.scopes).expect("serialisable")
+}
+
+/// Re-pairing is how scopes narrow (docs/HUB.md §4), so the socket running
+/// when it happens is replaced: the old one has ended by the time `pair`
+/// returns, and the next Hello announces only what the new pairing granted.
+/// Without `read`, the row the first socket relayed is not sent again.
+#[tokio::test]
+async fn a_re_pairing_replaces_the_running_socket_with_one_on_its_scopes() {
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let (first, first_feed, mut first_traffic) = OpenConnection::new();
+    let (second, second_feed, mut second_traffic) = OpenConnection::new();
+    dialer.connect(first);
+    dialer.connect(second);
+    first_feed.send(first_ack()).unwrap();
+    second_feed.send(first_ack()).unwrap();
+    let rig = Rig::socketed(
+        "hub_repair_replaces_socket",
+        Reply::Scoped(&["read gates", "gates"]),
+        &dialer,
+        &ParkedSleeper::new(),
+    );
+    let row = rig
+        .db
+        .append(
+            "f-0123456789abcdef",
+            "feature_status",
+            Some(r#"{"status":"running"}"#),
+            1_700_000_000_000,
+        )
+        .unwrap();
+    let idle = Arc::strong_count(&dialer);
+
+    rig.pair(HUB_URL).await.expect("a pairing");
+    let relayed = traffic_until(&mut first_traffic, "the run event", |t| t.sent.len() >= 2).await;
+    assert_eq!(announced_scopes(&relayed.sent[0]), json!(["read", "gates"]));
+    let event = read_as(
+        || hub_event(&run_row("feature_status", Some(r#"{"status":"running"}"#))).unwrap(),
+        &relayed.sent[1],
+    );
+    assert_eq!(i64::try_from(event.offset).unwrap(), row);
+
+    rig.pair(HUB_URL).await.expect("a second pairing");
+    assert_eq!(
+        first_traffic.borrow().closed_with,
+        Some(1001),
+        "the first socket ended before pair returned"
+    );
+    assert_eq!(Arc::strong_count(&dialer), idle + 1, "one socket task");
+    let past_ack = traffic_until(&mut second_traffic, "the ack", |t| t.reads >= 2).await;
+    assert_eq!(
+        past_ack.sent.len(),
+        1,
+        "only the Hello: {:?}",
+        past_ack.sent
+    );
+    assert_eq!(announced_scopes(&past_ack.sent[0]), json!(["gates"]));
+
+    rig.hub.disconnect().await.expect("a disconnect");
+    assert_eq!(Arc::strong_count(&dialer), idle);
+    assert_eq!(second_traffic.borrow().sent.len(), 1);
+    assert_eq!(dialed_tokens(&dialer), [ACCESS_TOKEN, ACCESS_TOKEN]);
+    assert_eq!(dialer.unscripted(), 0);
+}
+
+/// `pair` awaits the old socket while holding the refresh lock. A refresh
+/// that socket queued on the lock behind the pairing is dropped by the stop
+/// signal, so the pairing neither deadlocks on it nor lets it reach the
+/// endpoint with the refresh token the pairing just replaced.
+#[tokio::test]
+async fn a_re_pairing_drops_the_sockets_refresh_queued_behind_it() {
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let (first, first_feed, mut first_traffic) = OpenConnection::new();
+    let (second, _second_feed, mut second_traffic) = OpenConnection::new();
+    dialer.connect(first);
+    dialer.connect(second);
+    let endpoint = Arc::new(ScriptedRefreshEndpoint::new());
+    endpoint.answer("dha_other", "dhr_other", 900);
+    endpoint.hold();
+    let mut rig = Rig::new(
+        "hub_repair_queued_refresh",
+        Reply::Scoped(&["read gates", "gates"]),
+    );
+    let hub = HubPairing::new(rig.db.clone(), rig.secrets.clone(), rig.token.clone())
+        .with_refresh_endpoint(endpoint.clone())
+        .with_socket(socket_config(&rig.db, &dialer, &ParkedSleeper::new()));
+    rig.hub = Arc::new(hub);
+    let idle = Arc::strong_count(&dialer);
+    rig.pair(HUB_URL).await.expect("a pairing");
+    traffic_until(&mut first_traffic, "the Hello", |t| !t.sent.is_empty()).await;
+
+    let other = tokio::spawn({
+        let hub = rig.hub.clone();
+        async move { hub.refresh_access().await.map(|_| ()) }
+    });
+    tokio::time::timeout(Duration::from_secs(5), endpoint.called_times(1))
+        .await
+        .expect("the other refresh holds the lock in the endpoint");
+    let re_pairing = tokio::spawn({
+        let hub = rig.hub.clone();
+        let redirect = rig.redirect();
+        async move { hub.pair(HUB_URL, &redirect, Duration::from_secs(10)).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while rig.token.verifiers.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the re-pairing exchanged its code and queued on the lock");
+    first_feed.send(SocketReceived::Closed(Some(4001))).unwrap();
+    settle().await;
+    endpoint.release();
+
+    let status = tokio::time::timeout(Duration::from_secs(5), re_pairing)
+        .await
+        .expect("the re-pairing does not wait on the socket's refresh")
+        .expect("the re-pairing did not panic")
+        .expect("a second pairing");
+
+    assert_eq!(status.state, HubPairingState::Paired);
+    assert!(other.await.unwrap().is_ok());
+    assert_eq!(endpoint.calls().len(), 1, "the socket never refreshed");
+    assert_eq!(endpoint.unscripted(), 0);
+    assert_eq!(
+        rig.secrets.entries()[&rig.account(HubSecret::RefreshToken)],
+        REFRESH_TOKEN
+    );
+    assert_eq!(Arc::strong_count(&dialer), idle + 1, "one socket task");
+    let hello = traffic_until(&mut second_traffic, "the Hello", |t| !t.sent.is_empty()).await;
+    assert_eq!(announced_scopes(&hello.sent[0]), json!(["gates"]));
+    assert_eq!(dialed_tokens(&dialer), [ACCESS_TOKEN, ACCESS_TOKEN]);
+    rig.hub.disconnect().await.expect("a disconnect");
+    assert_eq!(dialer.unscripted(), 0);
 }

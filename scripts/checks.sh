@@ -171,6 +171,13 @@ step "Rust format check (cargo fmt --all -- --check)"
 step "Rust clippy (--workspace --all-targets -D warnings)"
 ( cd src-tauri && cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings )
 
+# demeteo-runner links core with default features off, but every other step
+# here selects core beside a crate that turns them on, and features unify. So
+# this is the only step that compiles the `cfg(not(feature = ...))` side of
+# `keyring` and `hub-socket` — the shape the runner ships.
+step "Core without default features (cargo clippy -p demeteo-core --no-default-features)"
+cargo clippy -p demeteo-core --no-default-features -- -D warnings
+
 # Comment rot, in the two forms a machine can see. `cargo doc` resolves every
 # `[`Foo`]` intra-doc link (denied via `[workspace.lints.rustdoc]`), catching a
 # rename the prose was not revisited for; check-doc-refs.sh resolves the file

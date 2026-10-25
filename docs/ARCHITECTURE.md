@@ -416,20 +416,24 @@ browser control plane over many instances — adds three more. All three exist, 
 Hub is built only in part: storage, the `KeyService` port, `/healthz`, static serving,
 passkey auth, the Hub's half of pairing, the Hub's side of the instance socket and the
 session JSON API that queues requests for an instance, plus the Compose bundle in
-`deploy/hub`. Nothing on the desktop talks to the Hub — the desktop's half of pairing and its
-socket client included
+`deploy/hub`. The desktop pairs with the Hub and holds its socket, relaying the
+run events of local runs; it answers no request and sends no snapshot yet
 ([HUB.md §2](HUB.md#2-status-of-the-parts) has the state per part):
 
 | Path | What it is |
 |---|---|
 | `crates/demeteo-hub` | the axum server — partly built: passkey registration, sign-in, sessions, endorsement and revocation under `/v1`, pairing in `crates/demeteo-hub/src/pairing/` (`GET /authorize`, the consent routes under `/v1/pairing`, `POST /token`), and the instance socket in `crates/demeteo-hub/src/socket/` (`GET /socket`: admission by access token, presence, the run mirror, the latest snapshot, the signed request queue and its outcomes), and the session JSON API in `crates/demeteo-hub/src/api/` (fleet and run reads, dispatch, cancel, step assignment, gate challenge and decision, request status). It depends on `crates/demeteo-hub-protocol` |
-| `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — built, and the Hub is its only dependant so far |
+| `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — built; `demeteo-hub` and `demeteo-core` both depend on it |
 | `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in, passkey management and the pairing approval page built; the fleet views are placeholders |
 
 The Hub does not link `demeteo-core` in v1. The desktop's client for it is a slice of the
-hexagon above — `domain/hub_pairing/`, `ports/hub.rs`, `adapters/hub/` — composed only
-under `ExecutionMode::Router` ([HUB.md §9](HUB.md#9-storage-custody-and-layout)); the Hub
-never dials a desktop. Spec:
+hexagon above — `domain/hub_pairing/` and `domain/hub_socket/`, `ports/hub.rs`,
+`adapters/hub/` with the socket in `adapters/hub/socket/` — composed only under
+`ExecutionMode::Router` ([HUB.md §9](HUB.md#9-storage-custody-and-layout)); the Hub
+never dials a desktop. What a `run_events` row may become on the wire is decided in
+[`domain/hub_socket/projection.rs`](../crates/demeteo-core/src/domain/hub_socket/projection.rs)
+alone, and no source file but `adapters/hub/socket/ws_transport.rs` names the WebSocket crate,
+behind `demeteo-core`'s default `hub-socket` feature that `demeteo-runner` builds without. Spec:
 [HUB.md](HUB.md); decisions 61–68 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
 
 ## 4. Tauri Command Surface
