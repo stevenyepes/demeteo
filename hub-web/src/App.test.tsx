@@ -43,6 +43,7 @@ function json(body: unknown, status = 200): Response {
 const SIGNED_IN: Answers = {
   'GET /v1/session': () => json({ csrf_token: 'csrf-1', credential_id: 'cred-1' }),
   'GET /v1/passkeys': () => json({ passkeys: [] }),
+  'GET /v1/fleet': () => json({ instances: [] }),
   'POST /v1/pairing/start': () =>
     json({
       pairing_id: 'pairing-1',
@@ -59,6 +60,8 @@ const SIGNED_IN: Answers = {
 const SIGNED_OUT: Answers = {
   'GET /v1/session': () => json({ error: 'unauthenticated' }, 401),
 };
+
+const INSTANCE_UUID = '6f1c2b3a-0000-4000-8000-000000000001';
 
 const NAV_HREFS = ['#/fleet', '#/runs', '#/dispatch', '#/add-instance', '#/passkeys'];
 
@@ -342,15 +345,20 @@ describe('App shell, signing out', () => {
   });
 
   it('takes the failure down on leaving the view, and not on another spelling of the same route', async () => {
-    stubHub({ ...SIGNED_IN, 'POST /v1/session/end': () => json({ error: 'internal' }, 500) });
-    window.location.hash = '#/instances/inst-7';
+    // A real instance id whose read never lands, so the only alert is the sign-out failure.
+    stubHub({
+      ...SIGNED_IN,
+      [`GET /v1/instances/${INSTANCE_UUID}`]: () => new Promise<never>(() => {}),
+      'POST /v1/session/end': () => json({ error: 'internal' }, 500),
+    });
+    window.location.hash = `#/instances/${INSTANCE_UUID}`;
     render(<App />);
     await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/^internal$/);
     const onHashChange = vi.fn();
     window.addEventListener('hashchange', onHashChange, { once: true });
 
-    window.location.hash = '#/instances/inst-7/';
+    window.location.hash = `#/instances/${INSTANCE_UUID}/`;
 
     await waitFor(() => expect(onHashChange).toHaveBeenCalledOnce());
     expect(screen.getByRole('alert')).toHaveTextContent(/^internal$/);
