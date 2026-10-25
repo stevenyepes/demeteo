@@ -9,6 +9,7 @@
 
 use super::runs::owned;
 use super::{ApiContext, PostgresApi};
+use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::challenge::base64url_encode;
 use crate::auth::handlers::{store_failed, unix_now, ApiError, CurrentSession};
 use crate::routes::AppState;
@@ -108,7 +109,8 @@ pub async fn get_request(
     Path((instance_id, request_id)): Path<(String, String)>,
 ) -> Result<Json<RequestStatusView>, ApiError> {
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     request_status(&api, current.user, &instance_id, &request_id, unix_now())
         .await
         .map(Json)

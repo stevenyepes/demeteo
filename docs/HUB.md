@@ -41,9 +41,9 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`. It depends on `crates/demeteo-hub-protocol`. **Not built:** the desktop's socket client, so nothing dials the socket and no queued request is delivered yet; unpairing and revoking an instance; and the attachment fetch (§6.3) |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. **Not built:** the desktop's socket client, so nothing dials the socket, no queued request is delivered and no attachment is fetched yet; and unpairing and revoking an instance |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub compiles against it; the desktop does not yet |
-| `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The access token is dropped and the refresh token is held but never used: nothing refreshes yet. Unpairing is local-only (§4 *Revocation*) |
 | Desktop side: Settings › Hub tab, socket client | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint |
@@ -760,20 +760,66 @@ An attachment is something the user attached to a Feature in the browser. It is 
 one piece of user-authored content the Hub holds, and its lifecycle is built so the
 Hub holds it as briefly and as opaquely as it can.
 
-1. **Upload.** The browser sends the file to the Hub over TLS.
+1. **Upload.** The browser sends the file to the Hub over TLS, as the raw body
+   of `POST /v1/instances/{instance_id}/attachments` (§6.4). It needs `spend`, the
+   scope of the `start_feature` that will name it. A body over the configured
+   size limit is refused `413 attachment_too_large` before Transit is asked for
+   anything. The answer is the attachment's id, its size, the SHA-256 of its
+   content and when it expires.
 2. **Encrypt.** The Hub encrypts it before it is stored, as an envelope under
    OpenBao Transit: a per-attachment data key, itself wrapped by Transit, with the
-   plaintext key discarded. Postgres holds ciphertext and a wrapped key, never
-   plaintext.
+   plaintext key discarded. The content and its SHA-256 are each sealed under that
+   key with AES-256-GCM, bound to the attachment's id, tenant and instance, so one
+   row's ciphertext does not open as another's. Postgres holds ciphertext and a
+   wrapped key, never plaintext and never a plaintext digest: a digest beside
+   the ciphertext would let anyone who reads the database confirm a guessed file
+   without the key. The columns are in §9.
 3. **Reference.** The `start_feature` body names the attachment by id, size and the
-   SHA-256 of the plaintext. No attachment bytes ride in an envelope.
-4. **Fetch once.** The instance fetches it with its access token (a DPoP-bound
-   request). The Hub unwraps the key through Transit and streams the plaintext.
-   The instance checks the SHA-256 and refuses the request on a mismatch.
-5. **Delete.** A completed fetch consumes the attachment: the Hub deletes it. An
-   interrupted fetch may be retried until the request expires. A request that
-   expires, is refused, or is cancelled before a fetch deletes its attachments
-   too.
+   SHA-256 of the plaintext. No attachment bytes ride in an envelope. `size` is
+   the content's length in bytes and `sha256` is the lowercase hex of its digest,
+   the spelling the desktop names a stored attachment by
+   ([`attachment_store.rs`](../crates/demeteo-core/src/ports/attachment_store.rs)).
+   The Hub opens the sealed digest to sign it, and binds each attachment to the
+   request in the transaction that queues it: either the request is queued and
+   every attachment it names is bound to it, or nothing is. A dispatch may name
+   only the tenant's own attachments of that instance that are neither bound nor
+   expired, at most `MAX_ATTACHMENTS_PER_DISPATCH` (10) of them, each once.
+4. **Fetch once.** The instance fetches it **before it answers the request**, with
+   its access token (a DPoP-bound request to `GET /attachments/{attachment_id}`,
+   admitted as the socket is, §5, with a proof for that one URL). The Hub
+   unwraps the key through Transit, opens the content, deletes the row, and
+   answers the plaintext. A fetch is served only while the request it is bound to
+   is unanswered and before its `expires_at` by the Hub's clock, so an instance
+   that answers first has nothing left to fetch. The instance checks the SHA-256
+   and refuses the request with `attachment_mismatch` on a mismatch.
+5. **Delete.** A completed fetch consumes the attachment: the row is deleted
+   before the response is sent, and a second fetch answers `404` as if it never
+   existed. The delete re-checks that the request is still queued and
+   unexpired, so a request answered or expired while the fetch was opening the
+   row gets `404` and no content. **There is no retry after a completed response.** A transfer
+   interrupted after the delete loses the attachment, and the instance refuses
+   the request; a retry is a new upload and a new dispatch. A fetch that fails
+   *before* the delete — the key service sealed or unreachable, a row that does
+   not authenticate — leaves the row, to be fetched again while the request is
+   live. A request whose outcome is recorded — refused, cancelled or done —
+   deletes its unfetched attachments in the transaction that records it. One
+   that passes its expiry unanswered makes them unfetchable at once, and the
+   sweep deletes them at the request's expiry.
+
+**Every attachment carries an expiry, and a sweep deletes it.** A staged
+attachment expires its TTL after the upload (`DEMETEO_HUB_ATTACHMENT_TTL_SECS`,
+default 3600 seconds); a dispatch that names one past it is refused
+`409 attachment_unavailable`, or `404 not_found` once the sweep has deleted it. Binding it moves its expiry to its request's, 600
+seconds after queueing (§6.1), whatever the TTL. Every
+`DEMETEO_HUB_ATTACHMENT_SWEEP_SECS` (default 60) the Hub deletes every row at or
+past its expiry, staged or bound, tenant by tenant. That is unlike the request
+queue, which has no sweep (§5): a request row is kept as the record of what was
+asked, and an attachment is content, held for no longer than its request can be
+delivered. The size limit is `DEMETEO_HUB_ATTACHMENT_MAX_BYTES` (default 25 MiB,
+26,214,400 bytes); the Hub buffers a whole upload and a whole fetch in memory.
+Each must be a positive integer, and the Hub refuses to start on any other value.
+The lifecycle's rules as the code keeps them are in the module rustdoc of
+[`attachments/mod.rs`](../crates/demeteo-hub/src/attachments/mod.rs).
 
 The Hub is not trusted with the attachment's integrity, which is why step 4 checks
 a hash the envelope carries and the envelope is signed.
@@ -792,12 +838,24 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url}` and its live runs |
 | `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
 | `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, steps, ticket progress, pending gates and events in offset order |
-| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued |
+| `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
+| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/cancel` | `spend` | `202`, a `cancel_feature` queued |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment` | `spend` | `202`, a `set_step_assignment` queued |
 | `POST /v1/instances/{instance_id}/gates/challenge` | `gates` | `200`, a held challenge and the `navigator.credentials.get` options over it |
 | `POST /v1/instances/{instance_id}/gates/decision` | `gates` | `202 {request_id, expires_at}`, a `gate_decision` queued |
 | `GET /v1/instances/{instance_id}/requests/{request_id}` | none beyond owning the instance | `200`, the request's kind, derived status, `deliveries`, `expires_at` and `answered_at` |
+
+**The attachment fetch is not a session route.** `GET /attachments/{attachment_id}`
+is outside `/v1`, beside `/socket` and `/token`, because its caller is an
+instance, which sends no `Origin` and holds no session. It takes the instance's
+access token and one DPoP proof whose `htu` is that attachment's URL (§6.3 step
+4), and answers `200 application/octet-stream`, once. A credential fault is
+`401 invalid_token` with `WWW-Authenticate: DPoP`, as on the socket. Every other
+miss — an id of another instance or tenant, one not bound to a request, one whose
+request is answered or expired, one already fetched or never minted, one that
+is not a UUID — is the same `404 not_found`. A key service that cannot unwrap is
+`503 key_service_unavailable`, and the row stays.
 
 **Which data needs `read`.** What the Hub holds of its own about an instance —
 presence, the labels its `hello` gave, the scopes it last reported — and the
@@ -810,7 +868,9 @@ filtered to it, is refused. A route that queues needs its kind's scope alone,
 not `read` beside it: the set is flat (§7). None of this is enforcement (§7).
 
 **Order of checks.** Once a body parses as JSON of its shape: ownership, then
-scope, then what the body says, then the work. An instance, run or request that
+scope, then what the body says, then the work. An upload's size is what its body
+says, judged before any call to the key service; a dispatch's attachments are
+resolved after the rest of its body and before it is signed. An instance, run or request that
 is another tenant's answers `404 not_found` exactly as one that does not exist,
 and so does an id that does not parse. A missing scope is refused before the
 body is judged, so it queues nothing and holds no challenge.
@@ -821,14 +881,15 @@ body is judged, so it queues nothing and holds no challenge.
 
 | Status | `error` | When |
 |---|---|---|
-| 404 | `not_found` | the instance, run or request is not the tenant's, or its id does not parse |
+| 404 | `not_found` | the instance, run, request or attachment is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too |
 | 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it |
-| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter |
-| 400 | `attachments_not_supported` | a dispatch with a non-empty `attachment_ids`: the attachment upload and fetch (§6.3) are not built, so `attachments` is always empty |
+| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter, an `attachment_ids` that repeats an id or names more than `MAX_ATTACHMENTS_PER_DISPATCH` |
+| 413 | `attachment_too_large` | an upload over `DEMETEO_HUB_ATTACHMENT_MAX_BYTES` (§6.3); nothing is stored |
+| 409 | `attachment_unavailable` | a dispatch naming an attachment of the tenant's instance that is already bound to a request or has expired; nothing is queued and no attachment is bound |
 | 409 | `challenge_mismatch` | a decision whose `request_id` is not the one its challenge minted |
 | 400 | `assertion_malformed` | an assertion that fails the structural check below |
 | 400 | `ceremony_expired` | a decision naming a challenge that is not held — never issued, already spent, evicted, held for another session or user, or whose request has expired |
-| 503 | `key_service_unavailable`, `too_many_ceremonies` | the envelope could not be signed; the Hub holds as many challenges as it will |
+| 503 | `key_service_unavailable`, `too_many_ceremonies` | the envelope could not be signed, or an attachment's data key could not be minted or unwrapped; the Hub holds as many challenges as it will |
 | 500 | `internal` | a store failure |
 
 **A request's status is derived, never stored.** The store holds `queued`,
@@ -1116,7 +1177,7 @@ as Docker Compose with four services:
 | Service | Role |
 |---|---|
 | `hub` | the axum server |
-| `postgres` | tenants, passkey public keys, instance records, device-key public halves, event store, snapshots, request queue, access- and refresh-token hashes |
+| `postgres` | tenants, passkey public keys, instance records, device-key public halves, event store, snapshots, request queue, access- and refresh-token hashes, and staged attachments as ciphertext and a wrapped key |
 | `openbao` | custody; the Transit engine encrypts attachments and holds the Hub's secrets |
 | `caddy` | TLS termination in front of the `hub` |
 
@@ -1140,6 +1201,35 @@ adds columns to two of the tables that were there:
 It also closes `instance_requests.status` to `queued`, `expired` and `answered`,
 with `answered` holding exactly when an outcome does, so the status and the
 outcome are written in one statement or the write is refused.
+
+**What attachments added** is the lifecycle of §6.3 on the `attachments` table
+the first migration made.
+[`0008_attachment_lifecycle.sql`](../crates/demeteo-hub/migrations/0008_attachment_lifecycle.sql)
+changes it so:
+
+| Column | What it means |
+|---|---|
+| `attachments.request_id` | now **nullable**: null while the attachment is staged, set once, at dispatch, to the request that names it. The foreign key to `instance_requests` goes unchecked while it is null |
+| `attachments.expires_at` | when the sweep deletes the row: the upload plus the attachment TTL while staged, the request's own `expires_at` once bound (§6.3) |
+| `attachments.sealed_digest` | the SHA-256 of the content, sealed under the row's own data key. Dispatch opens it to sign the digest into the request |
+| `attachments.sha256` | unchanged: the SHA-256 of the **ciphertext**, never of the content |
+| `attachments.size_bytes` | unchanged: the ciphertext's length, now held non-negative. The content's length is it less the nonce and tag |
+
+A row holds the ciphertext, the sealed digest and the wrapped data key, and
+nothing from which the content or its digest could be read without Transit
+(§6.3 step 2 says why the digest is sealed too). The statements are in
+[`store/attachments.rs`](../crates/demeteo-hub/src/store/attachments.rs).
+
+> **Accepted residual: the signed envelope stores the plaintext digest.** A
+> `start_feature` names each attachment by the SHA-256 of its content (§6.3
+> step 3), and the envelope is stored with its signature (§6.1) in
+> `instance_requests.envelope`, whose rows are never deleted (§5). Anyone who
+> reads the database can therefore confirm a guess of a file a tenant attached,
+> after the attachment itself is gone — the confirmation the `attachments` row
+> refuses. It is accepted, not solved: the instance has to check a digest the
+> Hub signed, and redacting it from the stored envelope once answered would
+> leave a stored row whose signature no longer verifies. A human may decide
+> otherwise (§11 item 19).
 
 **Hub server secrets live in OpenBao or are encrypted under Transit — never
 plaintext in Postgres.** That includes the request-signing key (§4) and the key
@@ -1184,13 +1274,14 @@ process.
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing, the instance socket and the session API **built**; unpairing and the attachment fetch **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
-| `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
+| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing, the instance socket, the session API and attachments **built**; unpairing **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, `access.rs` is the admission of a DPoP-bound access token that the socket and the attachment fetch share, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
 | `crates/demeteo-core/src/ports/hub.rs` | the four ports pairing reaches the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`), the Hub's `/token` and a browser — **built**. Only the keyring port carries a secret |
 | `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters. It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
-| `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds admission (`admitted`) and the `GET /socket` upgrade, `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
-| `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs` and `request_status.rs`. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
+| `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds the `GET /socket` upgrade and its admission (`admitted`, which names the socket's URL to `pairing/access.rs`), `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
+| `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs`, `request_status.rs` and `attachments.rs`, the upload. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
+| `crates/demeteo-hub/src/attachments/` | attachments (§6.3) — **built**. `envelope.rs` is the sealing and the decisions, synchronous and without I/O: the size verdict, the expiry and which ids a dispatch may bind. `port.rs` is the `AttachmentStore` port, `postgres.rs` the store over `store/attachments.rs`, `fetch.rs` the fetch-once use-case and its route, and `sweep.rs` the TTL sweep `main.rs` spawns. The upload is a session route, so it is `api/attachments.rs` |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; the Hub is its only dependant so far |
 | `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in, passkey management and the pairing approval page built** (SignUp, SignIn, Passkeys, ApprovePairing at `#/pair/<segment>`, and a session gate in front of every route but the first two); Fleet reads `GET /v1/fleet` with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, AddInstance explains desktop pairing only, and Runs, Run and Dispatch are placeholder routes with no data wiring yet; no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
@@ -1229,15 +1320,16 @@ are not:
   nothing writes `device_keys.revoked_at`. The desktop's disconnect is local
   (§4 *Revocation*). Until a route exists a pairing ends by reuse detection, by
   its refresh token expiring, or by being replaced (§4).
-- **The attachment fetch (§6.3).** One route takes an access token, the socket
-  (§5): its admission is the first caller of `access_verdict` in
-  [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs), with the lookup by
-  hash beside it in the store. The attachment fetch is the second and is not
-  built, so the session API refuses a dispatch that names an attachment
-  (§6.4).
+- **An attach control in the browser.** The Hub's half of attachments (§6.3)
+  is built — the upload, a dispatch that names them, the fetch and the sweep —
+  but `hub-web`'s Dispatch view is a placeholder, so nothing on screen uploads
+  a file yet, and no desktop fetches one.
 
 The session API (§6.4) queues requests, so the Hub has requests to send; with
-no desktop socket client, none reaches a desktop yet.
+no desktop socket client, none reaches a desktop yet. Two routes take an access
+token, the socket (§5) and the attachment fetch (§6.3), and both are admitted
+by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
+`access_verdict` in [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs).
 
 **Runner dispatch is out of scope for this ticket set,** and a separate discovery
 owns it. A `demeteo-runner` host is not paired with the Hub (decision 63), and no
@@ -1312,8 +1404,9 @@ what a desktop client implements.
 9. **Defaults carried, not measured:** ES256 for the device key, EdDSA for the
    envelope, 128 bits for a request id, the field lists of the two passkey
    challenges, and an upper bound on `expires_at` an instance will accept.
-   Pairing carries more, listed under *Pairing's carried defaults* below, and
-   the socket under *The socket's carried defaults*. One
+   Pairing carries more, listed under *Pairing's carried defaults* below, the
+   socket under *The socket's carried defaults*, and attachments under *The
+   attachments' carried defaults*. One
    more is already in stored data: the Hub's own endorsement and revocation
    assertions bind `instance_id = "*"`, a fresh `request_id` and a 300-second
    `expires_at`, all stored with the record (§8). How an instance accepts such
@@ -1401,6 +1494,12 @@ what a desktop client implements.
     **Default built:** one row per instance, replaced wholesale (§5).
     Splitting it — so that a change to one Project does not resend every
     Workflow — is a change to the protocol crate first.
+19. **The plaintext digest in a stored envelope.** A `start_feature` signs
+    each attachment's content digest, and the stored envelope keeps it for as
+    long as the request row lives, which is for good (§9).
+    **Default built:** kept, so the stored signature still verifies. Redacting
+    it once the request is answered or expired, deleting old request rows, or
+    signing something other than the content digest are each open.
 
 ### Pairing's carried defaults
 
@@ -1443,6 +1542,23 @@ Carried with them, and stated in §5 and §6.1: frames with no tag, a proof's
 `htu` in its `https` spelling, the close codes, signing the pre-image with no
 digest in between, and signing once at enqueue. The two that answer an open
 question — the `4001` close and the version gate — are items 6 and 8 above.
+
+### The attachments' carried defaults
+
+The numbers attachments run on (§6.3) are carried defaults in the same sense.
+The first three are configuration, with defaults in
+[`attachments/mod.rs`](../crates/demeteo-hub/src/attachments/mod.rs); the fourth
+is a constant there.
+
+| Default | Value | What moving it changes |
+|---|---|---|
+| Largest upload, `DEMETEO_HUB_ATTACHMENT_MAX_BYTES` | 25 MiB | the largest file a Feature can be started with from the Hub, and what one upload or fetch makes the Hub buffer |
+| Staged TTL, `DEMETEO_HUB_ATTACHMENT_TTL_SECS` | 3600 seconds | how long a file may wait for the dispatch that names it. It does not bound a bound attachment, whose expiry is its request's |
+| Sweep interval, `DEMETEO_HUB_ATTACHMENT_SWEEP_SECS` | 60 seconds | how long a row may outlive its expiry before it is deleted |
+| Attachments per dispatch, `MAX_ATTACHMENTS_PER_DISPATCH` | 10 | kept equal by hand to the desktop's own limit per Feature |
+
+No per-tenant cap on staged uploads is built: a tenant can stage as many as it
+uploads within one TTL.
 
 ---
 

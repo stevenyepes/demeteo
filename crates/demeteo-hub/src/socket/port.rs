@@ -12,6 +12,7 @@ use crate::store::requests::{NewRequest, QueuedRequest, RequestId, RequestState}
 use crate::store::{InstanceId, StoreError};
 use async_trait::async_trait;
 use demeteo_hub_protocol::{Hello, RunEvent, Scope, Snapshot};
+use uuid::Uuid;
 
 /// One thing the peer did, as far as a session can tell them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +113,35 @@ pub trait SocketStore: Send + Sync {
     /// derived from it here: its columns are the ones `request` names.
     async fn request_inserted(&self, request: NewRequest) -> Result<(), StoreError>;
 
+    /// [`request_inserted`](Self::request_inserted), and the binding of
+    /// every id of `attachments` to the request, as one step: each must be a
+    /// row of this instance that is bound to no request and whose
+    /// `expires_at` is after `now` (Unix seconds), and each takes the
+    /// request's `id` and `expires_at`. If any is not, nothing is written,
+    /// neither the request nor a binding, and the answer is
+    /// [`StoreError::AttachmentUnavailable`]. `attachments` must name no id
+    /// twice; one that does is refused the same way.
+    ///
+    /// Which ids a dispatch may name is the caller's verdict, reached on a
+    /// read of the rows before it signs; this is where that read is held to
+    /// what the rows are by the time of the write.
+    ///
+    /// The default is a store that holds no attachment rows, so it has none
+    /// of these to bind. `PostgresStore` and `MemoryStore` hold them and
+    /// override it.
+    async fn request_inserted_binding(
+        &self,
+        request: NewRequest,
+        attachments: &[Uuid],
+        now: u64,
+    ) -> Result<(), StoreError> {
+        let _ = now;
+        if !attachments.is_empty() {
+            return Err(StoreError::AttachmentUnavailable);
+        }
+        self.request_inserted(request).await
+    }
+
     /// The instance's requests that are still `queued`, oldest first, the
     /// overdue among them: whether one may be sent is
     /// [`delivery_verdict`](super::requests::delivery_verdict)'s to say and
@@ -135,7 +165,8 @@ pub trait SocketStore: Send + Sync {
 
     /// Shows `decide` the instance's request `id` as it stands and writes
     /// what it answers: for [`OutcomeChange::Record`] the status `answered`,
-    /// that outcome and `now` (Unix seconds) together, and for
+    /// that outcome and `now` (Unix seconds) together, with every attachment
+    /// bound to the request deleted in the same write, and for
     /// [`OutcomeChange::Keep`] nothing. `false` when the instance has no
     /// request under `id`; `decide` is then not asked and nothing is written.
     ///

@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod api;
+pub mod attachments;
 pub mod auth;
 pub mod config;
 pub mod pairing;

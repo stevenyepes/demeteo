@@ -16,6 +16,7 @@ use demeteo_hub::api::request_status::request_status;
 use demeteo_hub::api::runs::{run_detail, runs, RunsFilter};
 use demeteo_hub::api::testing::MemoryFleet;
 use demeteo_hub::api::{ApiContext, ApiStore, MirrorEvent};
+use demeteo_hub::attachments::AttachmentSettings;
 use demeteo_hub::auth::ceremonies::{Ceremonies, Ceremony};
 use demeteo_hub::auth::challenge::{base64url_decode, base64url_encode};
 use demeteo_hub::auth::handlers::ApiError;
@@ -378,6 +379,7 @@ struct Parts {
     connections: Connections,
     ceremonies: Ceremonies,
     rp: RelyingParty,
+    settings: AttachmentSettings,
 }
 
 impl Parts {
@@ -391,6 +393,7 @@ impl Parts {
                 rp_id: "hub.example".to_owned(),
                 origin: "https://hub.example".to_owned(),
             },
+            settings: AttachmentSettings::default(),
         }
     }
 
@@ -402,6 +405,9 @@ impl Parts {
             connections: &self.connections,
             ceremonies: &self.ceremonies,
             rp: &self.rp,
+            attachments: store,
+            transit_key: SIGNING_KEY,
+            settings: &self.settings,
         }
     }
 }
@@ -1064,14 +1070,12 @@ async fn a_dispatch_with_an_attachment_or_a_nul_is_refused_and_nothing_is_queued
     let mut long_project = full_dispatch();
     long_project["project_id"] = json!("p".repeat(257));
 
+    let invalid = (400, json!({"error": "invalid_request"}));
     for (body, expected) in [
-        (
-            with_attachment,
-            json!({"error": "attachments_not_supported"}),
-        ),
-        (nul_title, json!({"error": "invalid_request"})),
-        (nul_override, json!({"error": "invalid_request"})),
-        (long_project, json!({"error": "invalid_request"})),
+        (with_attachment, (404, json!({"error": "not_found"}))),
+        (nul_title, invalid.clone()),
+        (nul_override, invalid.clone()),
+        (long_project, invalid),
     ] {
         let refused = dispatch(
             &api,
@@ -1082,11 +1086,7 @@ async fn a_dispatch_with_an_attachment_or_a_nul_is_refused_and_nothing_is_queued
         )
         .await
         .expect_err("the body is refused");
-        assert_eq!(
-            answered(refused).await,
-            (400, expected.clone()),
-            "{expected}"
-        );
+        assert_eq!(answered(refused).await, expected, "{expected:?}");
     }
     assert_eq!(t.fleet.requests(t.a_instance), before);
 }

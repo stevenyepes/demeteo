@@ -34,6 +34,7 @@ use super::policy::Status;
 use super::webauthn::RelyingPartyError;
 use super::RelyingParty;
 use crate::adapters::memory_keys::MemoryKeys;
+use crate::attachments::AttachmentSettings;
 use crate::ports::KeyService;
 use crate::routes::AppState;
 use crate::store::passkeys::Passkey;
@@ -309,6 +310,9 @@ pub fn lazy_state(database_url: &str, rp: RelyingParty) -> Result<AppState, Lazy
 /// [`lazy_state`] over a key service of the caller's, which is asked for the
 /// request-signing key by the name `signing_key`. Keep a clone of `keys` to
 /// sign with the key the routes advertise.
+///
+/// `signing_key` is also the transit key, being the one name `keys` is known
+/// to hold; attachments get the default [`AttachmentSettings`].
 pub fn lazy_state_with_keys(
     database_url: &str,
     rp: RelyingParty,
@@ -316,7 +320,14 @@ pub fn lazy_state_with_keys(
     signing_key: &str,
 ) -> Result<AppState, LazyStateError> {
     let db = pool::connect_lazy(database_url)?;
-    Ok(AppState::new(db, rp, keys, signing_key.to_owned())?)
+    Ok(AppState::new(
+        db,
+        rp,
+        keys,
+        signing_key.to_owned(),
+        signing_key.to_owned(),
+        AttachmentSettings::default(),
+    )?)
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -4,6 +4,7 @@
 //! (`tests/no_literals.rs`), so an image never bakes one in.
 
 use crate::adapters::openbao::{is_key_name, KEY_NAME_ALPHABET};
+use crate::attachments::AttachmentSettings;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -25,6 +26,9 @@ const OPENBAO_TOKEN_FILE: &str = "OPENBAO_TOKEN_FILE";
 const TRANSIT_MOUNT: &str = "DEMETEO_HUB_TRANSIT_MOUNT";
 const TRANSIT_KEY: &str = "DEMETEO_HUB_TRANSIT_KEY";
 const SIGNING_KEY: &str = "DEMETEO_HUB_SIGNING_KEY";
+const ATTACHMENT_MAX_BYTES: &str = "DEMETEO_HUB_ATTACHMENT_MAX_BYTES";
+const ATTACHMENT_TTL_SECS: &str = "DEMETEO_HUB_ATTACHMENT_TTL_SECS";
+const ATTACHMENT_SWEEP_SECS: &str = "DEMETEO_HUB_ATTACHMENT_SWEEP_SECS";
 
 const REDACTED: &str = "<redacted>";
 
@@ -56,6 +60,7 @@ pub struct Config {
     /// never leaves OpenBao, so there is no material here to redact.
     pub signing_key: String,
     pub web_dir: PathBuf,
+    pub attachments: AttachmentSettings,
 }
 
 impl Config {
@@ -118,6 +123,25 @@ impl Config {
             });
         }
 
+        let positive_or_default = |var: &'static str, default: u64| {
+            let Some(text) = lookup(var).filter(|v| !v.is_empty()) else {
+                return Ok(default);
+            };
+            match text.parse::<u64>() {
+                Ok(value) if value > 0 => Ok(value),
+                _ => Err(ConfigError::Invalid {
+                    var,
+                    reason: format!("`{text}` is not a positive integer"),
+                }),
+            }
+        };
+        let defaults = AttachmentSettings::default();
+        let attachments = AttachmentSettings {
+            max_bytes: positive_or_default(ATTACHMENT_MAX_BYTES, defaults.max_bytes)?,
+            ttl_secs: positive_or_default(ATTACHMENT_TTL_SECS, defaults.ttl_secs)?,
+            sweep_secs: positive_or_default(ATTACHMENT_SWEEP_SECS, defaults.sweep_secs)?,
+        };
+
         Ok(Self {
             bind,
             public_url,
@@ -130,6 +154,7 @@ impl Config {
             transit_key: or_default(TRANSIT_KEY, DEFAULT_TRANSIT_KEY),
             signing_key,
             web_dir: PathBuf::from(or_default(WEB_DIR, DEFAULT_WEB_DIR)),
+            attachments,
         })
     }
 }
@@ -310,6 +335,7 @@ impl fmt::Debug for Config {
             .field("transit_key", &self.transit_key)
             .field("signing_key", &self.signing_key)
             .field("web_dir", &self.web_dir)
+            .field("attachments", &self.attachments)
             .finish()
     }
 }
@@ -566,6 +592,69 @@ mod tests {
             shown.contains(r#"origin: "https://hub.example.com""#),
             "{shown}"
         );
+    }
+
+    #[test]
+    fn attachment_settings_default_to_attachment_settings_default() {
+        assert_eq!(
+            load(&full()).unwrap().attachments,
+            AttachmentSettings::default()
+        );
+        let mut env = full();
+        for var in [
+            ATTACHMENT_MAX_BYTES,
+            ATTACHMENT_TTL_SECS,
+            ATTACHMENT_SWEEP_SECS,
+        ] {
+            env.insert(var, String::new());
+        }
+        assert_eq!(
+            load(&env).unwrap().attachments,
+            AttachmentSettings::default()
+        );
+    }
+
+    #[test]
+    fn each_attachment_setting_is_read_from_its_own_variable() {
+        let mut env = full();
+        env.insert(ATTACHMENT_MAX_BYTES, "1024".to_owned());
+        env.insert(ATTACHMENT_TTL_SECS, "90".to_owned());
+        env.insert(ATTACHMENT_SWEEP_SECS, "7".to_owned());
+        assert_eq!(
+            load(&env).unwrap().attachments,
+            AttachmentSettings {
+                max_bytes: 1024,
+                ttl_secs: 90,
+                sweep_secs: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn an_attachment_setting_that_is_not_a_positive_integer_names_its_variable() {
+        for var in [
+            ATTACHMENT_MAX_BYTES,
+            ATTACHMENT_TTL_SECS,
+            ATTACHMENT_SWEEP_SECS,
+        ] {
+            for value in ["0", "abc", "-5", "1.5"] {
+                let mut env = full();
+                env.insert(var, value.to_owned());
+                match load(&env) {
+                    Err(ConfigError::Invalid { var: named, reason }) => {
+                        assert_eq!(named, var, "{var}={value}");
+                        assert!(reason.contains(value), "{var}={value}: {reason}");
+                    }
+                    other => panic!("{var}={value} was not refused: {:?}", other.map(|_| ())),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn debug_shows_the_attachment_settings() {
+        let shown = format!("{:?}", load(&full()).unwrap());
+        assert!(shown.contains("max_bytes: 26214400"), "{shown}");
     }
 
     #[test]

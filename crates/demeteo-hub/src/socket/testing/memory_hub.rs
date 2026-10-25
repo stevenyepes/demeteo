@@ -6,11 +6,13 @@ use demeteo_hub_protocol::{Hello, RequestOutcome, RunEvent, Scope, SignedRequest
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 use crate::socket::connections::ConnectionId;
 use crate::socket::handler::Admission;
 use crate::socket::port::SocketStore;
 use crate::socket::requests::OutcomeChange;
+use crate::store::attachments::{AttachmentMeta, NewAttachment, StagedAttachment};
 use crate::store::requests::{
     NewRequest, QueuedEnvelope, QueuedRequest, RequestId, RequestState, RequestStatus,
 };
@@ -98,6 +100,9 @@ struct Rows {
     /// the rows because a [`RequestView`] keeps the envelope it was queued
     /// with, which is what a test compares a delivery against.
     unreadable: HashSet<RequestId>,
+    /// In the order they were staged. Under the same lock as `requests`, so
+    /// that a request and the binding of its attachments are one write.
+    attachments: Vec<StagedAttachment>,
     failure: Option<StoreError>,
     departure_takes: Duration,
 }
@@ -147,6 +152,7 @@ impl MemoryHub {
             requests: Vec::new(),
             created_at: HashMap::new(),
             unreadable: HashSet::new(),
+            attachments: Vec::new(),
             failure: None,
             departure_takes: Duration::ZERO,
         };
@@ -304,6 +310,117 @@ impl MemoryHub {
         self.rows().departure_takes = takes;
     }
 
+    /// Every attachment row the instance holds, in the order staged.
+    pub fn attachments(&self) -> Vec<StagedAttachment> {
+        self.rows().attachments.clone()
+    }
+
+    /// `size_bytes` is the ciphertext's length, as the real insert computes
+    /// it. An id the instance already holds is a panic, as a request's is
+    /// in [`SocketStore::request_inserted`]: the real refusal is a database
+    /// error, and which one is not this double's to make up.
+    pub fn attachment_staged(&self, new: NewAttachment) -> AttachmentMeta {
+        let mut rows = self.rows();
+        if rows.attachments.iter().any(|held| held.id == new.id) {
+            panic!("memory hub: an attachment under an id the instance already holds");
+        }
+        let staged = StagedAttachment {
+            id: new.id,
+            instance_id: new.instance_id,
+            request_id: None,
+            size_bytes: new.ciphertext.len() as u64,
+            ciphertext: new.ciphertext,
+            wrapped_key: new.wrapped_key.as_str().to_owned(),
+            sealed_digest: new.sealed_digest,
+            expires_at: new.expires_at,
+        };
+        let meta = staged.meta();
+        rows.attachments.push(staged);
+        meta
+    }
+
+    /// The rows of `ids`, whatever their state, each once however often
+    /// `ids` names it, as `id = ANY(..)` reads them.
+    pub fn attachments_named(&self, ids: &[Uuid]) -> Vec<AttachmentMeta> {
+        self.rows()
+            .attachments
+            .iter()
+            .filter(|held| ids.contains(&held.id))
+            .map(StagedAttachment::meta)
+            .collect()
+    }
+
+    /// The join the real read makes: the row is bound, and its request is
+    /// still `queued` and not past its `expires_at`. The row's own
+    /// `expires_at` is not consulted, as it is not there.
+    pub fn attachment_fetchable(&self, id: Uuid, now: u64) -> Option<StagedAttachment> {
+        let rows = self.rows();
+        let at = Self::fetchable_at(&rows, id, now)?;
+        Some(rows.attachments[at].clone())
+    }
+
+    /// Deletes the row only while [`attachment_fetchable`](Self::attachment_fetchable)
+    /// would answer it, judged under the same lock as the delete, as the real
+    /// delete's `EXISTS` is.
+    pub fn attachment_consumed(&self, id: Uuid, now: u64) -> bool {
+        let mut rows = self.rows();
+        match Self::fetchable_at(&rows, id, now) {
+            Some(at) => {
+                rows.attachments.remove(at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn fetchable_at(rows: &Rows, id: Uuid, now: u64) -> Option<usize> {
+        let at = rows.attachments.iter().position(|held| held.id == id)?;
+        let request_id = rows.attachments[at].request_id?;
+        rows.requests
+            .iter()
+            .find(|request| request.id == request_id)
+            .filter(|request| request.status == RequestStatus::Queued && request.expires_at > now)
+            .map(|_| at)
+    }
+
+    /// Deletes every row whose `expires_at` is at or before `now`, bound or
+    /// not, and answers how many.
+    pub fn attachments_expired(&self, now: u64) -> u64 {
+        let mut rows = self.rows();
+        let before = rows.attachments.len();
+        rows.attachments.retain(|held| held.expires_at > now);
+        (before - rows.attachments.len()) as u64
+    }
+
+    /// Binds attachment `id` to `request` and moves its expiry to the
+    /// request's, as a dispatch does, whatever state the row was in: a test
+    /// that needs a bound row should not have to dispatch for it. Both must
+    /// be held; the real foreign key refuses a request that is not.
+    pub fn attachment_bound(&self, id: Uuid, request: RequestId) {
+        let mut rows = self.rows();
+        let expires_at = Self::request(&mut rows, request).expires_at;
+        let row = Self::attachment(&mut rows, id);
+        row.request_id = Some(request);
+        row.expires_at = expires_at;
+    }
+
+    /// Flips every bit of the last ciphertext byte of attachment `id`, as a
+    /// corrupted or tampered row would hold it.
+    pub fn attachment_tampered(&self, id: Uuid) {
+        let mut rows = self.rows();
+        match Self::attachment(&mut rows, id).ciphertext.last_mut() {
+            Some(byte) => *byte ^= 0xff,
+            None => panic!("memory hub: an attachment with no ciphertext to tamper with"),
+        }
+    }
+
+    fn attachment(rows: &mut Rows, id: Uuid) -> &mut StagedAttachment {
+        match rows.attachments.iter_mut().find(|held| held.id == id) {
+            Some(attachment) => attachment,
+            None => panic!("memory hub: an attachment the instance does not hold"),
+        }
+    }
+
     /// The row of a request a session names. The ids a session has are the
     /// ones it read from these rows, and no row is ever removed, so one that
     /// is not here was made up.
@@ -395,26 +512,45 @@ impl SocketStore for MemoryStore {
         Ok(self.0.written()?.scopes.clone())
     }
 
-    /// An id the instance already holds is a panic where Postgres answers
-    /// with the primary key's refusal: that is a database error, and which
-    /// one is not this double's to make up.
     async fn request_inserted(&self, request: NewRequest) -> Result<(), StoreError> {
         let mut rows = self.0.written()?;
-        if rows.requests.iter().any(|held| held.id == request.id) {
-            panic!("memory hub: a request under an id the instance already holds");
+        queued(&mut rows, request);
+        Ok(())
+    }
+
+    /// Every row is judged under the one lock before anything is written, so
+    /// a refusal leaves the queue and the rows as they were. The rows matched
+    /// are counted against `attachments.len()`, as the real `UPDATE`'s are,
+    /// so an id named twice is refused here as it is there.
+    async fn request_inserted_binding(
+        &self,
+        request: NewRequest,
+        attachments: &[Uuid],
+        now: u64,
+    ) -> Result<(), StoreError> {
+        let mut rows = self.0.written()?;
+        let instance = self.0.instance;
+        let bindable = |held: &StagedAttachment| {
+            attachments.contains(&held.id)
+                && held.instance_id == instance
+                && held.request_id.is_none()
+                && held.expires_at > now
+        };
+        if rows
+            .attachments
+            .iter()
+            .filter(|held| bindable(held))
+            .count()
+            != attachments.len()
+        {
+            return Err(StoreError::AttachmentUnavailable);
         }
-        rows.created_at.insert(request.id, wall_clock());
-        rows.requests.push(RequestView {
-            id: request.id,
-            kind: request.kind,
-            status: RequestStatus::Queued,
-            deliveries: 0,
-            last_sent_at: None,
-            outcome: None,
-            answered_at: None,
-            envelope: request.envelope,
-            expires_at: request.expires_at,
-        });
+        let (id, expires_at) = (request.id, request.expires_at);
+        queued(&mut rows, request);
+        for held in rows.attachments.iter_mut().filter(|held| bindable(held)) {
+            held.request_id = Some(id);
+            held.expires_at = expires_at;
+        }
         Ok(())
     }
 
@@ -478,6 +614,7 @@ impl SocketStore for MemoryStore {
                 request.status = RequestStatus::Answered;
                 request.outcome = Some(outcome);
                 request.answered_at = Some(now);
+                rows.attachments.retain(|held| held.request_id != Some(id));
             }
             OutcomeChange::Keep => {}
         }
@@ -499,9 +636,133 @@ impl SocketStore for MemoryStore {
     }
 }
 
+/// An id the instance already holds is a panic where Postgres answers with
+/// the primary key's refusal: that is a database error, and which one is not
+/// this double's to make up.
+fn queued(rows: &mut Rows, request: NewRequest) {
+    if rows.requests.iter().any(|held| held.id == request.id) {
+        panic!("memory hub: a request under an id the instance already holds");
+    }
+    rows.created_at.insert(request.id, wall_clock());
+    rows.requests.push(RequestView {
+        id: request.id,
+        kind: request.kind,
+        status: RequestStatus::Queued,
+        deliveries: 0,
+        last_sent_at: None,
+        outcome: None,
+        answered_at: None,
+        envelope: request.envelope,
+        expires_at: request.expires_at,
+    });
+}
+
 fn wall_clock() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(since) => since.as_secs(),
         Err(_) => panic!("memory hub: a wall clock before 1970"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::attachments::WrappedKey;
+    use demeteo_hub_protocol::{CancelFeature, RequestPayload};
+
+    const NOW: u64 = 1_700_000_000;
+
+    fn staged(hub: &MemoryHub, expires_at: u64) -> Uuid {
+        let id = Uuid::new_v4();
+        hub.attachment_staged(NewAttachment {
+            id,
+            instance_id: hub.instance_id(),
+            ciphertext: vec![0x5a; 64],
+            wrapped_key: WrappedKey::parse("vault:v1:filler").unwrap(),
+            sealed_digest: vec![0xa5; 60],
+            expires_at,
+        });
+        id
+    }
+
+    fn request(id: u8, instance: InstanceId) -> NewRequest {
+        let envelope = SignedRequest {
+            v: 1,
+            request_id: String::new(),
+            instance_id: instance.0.to_string(),
+            issued_at: NOW,
+            expires_at: NOW + 600,
+            payload: RequestPayload::CancelFeature(CancelFeature {
+                feature_id: "f-1".to_owned(),
+            }),
+            signature: String::new(),
+        };
+        NewRequest {
+            id: [id; 16],
+            kind: "cancel_feature".to_owned(),
+            expires_at: envelope.expires_at,
+            envelope,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bind_that_cannot_take_every_id_queues_nothing_and_changes_no_row() {
+        let hub = MemoryHub::paired(&[]);
+        let other = MemoryHub::paired(&[]);
+        let store = hub.store();
+        let live = staged(&hub, NOW + 60);
+        let expired = staged(&hub, NOW);
+        let bound = staged(&hub, NOW + 60);
+        store
+            .request_inserted(request(1, hub.instance_id()))
+            .await
+            .unwrap();
+        hub.attachment_bound(bound, [1; 16]);
+        let foreign = staged(&other, NOW + 60);
+        let requests = hub.requests();
+        let rows = hub.attachments();
+
+        for refused in [
+            vec![Uuid::new_v4()],
+            vec![foreign],
+            vec![bound],
+            vec![expired],
+            vec![live, foreign],
+            vec![live, live],
+        ] {
+            let err = store
+                .request_inserted_binding(request(2, hub.instance_id()), &refused, NOW)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, StoreError::AttachmentUnavailable), "{err}");
+            assert_eq!(hub.requests(), requests, "{refused:?}");
+            assert_eq!(hub.attachments(), rows, "{refused:?}");
+        }
+        assert!(other.attachments()[0].request_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_bind_of_live_staged_rows_queues_the_request_and_binds_every_one() {
+        let hub = MemoryHub::paired(&[]);
+        let store = hub.store();
+        let (a, b) = (staged(&hub, NOW + 60), staged(&hub, NOW + 1));
+        let untouched = staged(&hub, NOW + 60);
+
+        store
+            .request_inserted_binding(request(3, hub.instance_id()), &[b, a], NOW)
+            .await
+            .unwrap();
+
+        let requests = hub.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].id, [3; 16]);
+        assert_eq!(requests[0].status, RequestStatus::Queued);
+        for row in hub.attachments() {
+            if row.id == untouched {
+                assert_eq!((row.request_id, row.expires_at), (None, NOW + 60));
+            } else {
+                assert_eq!((row.request_id, row.expires_at), (Some([3; 16]), NOW + 600));
+            }
+        }
     }
 }

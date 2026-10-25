@@ -51,8 +51,9 @@ pub use pool::{connect, migrate, Db};
 
 /// The field is private so nothing outside the store can name a tenant from
 /// an arbitrary UUID, such as a path parameter: an existing tenant's id comes
-/// only from [`pool::create_user`], [`pool::register_user`] or a lookup that
-/// establishes the tenant.
+/// only from [`pool::create_user`], [`pool::register_user`], a lookup that
+/// establishes the tenant, or [`pool::tenants`], the attachment sweeper's read
+/// of every tenant so that each of its deletes names one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, sqlx::Type)]
 #[sqlx(transparent)]
 pub struct UserId(Uuid);
@@ -134,6 +135,12 @@ pub enum StoreError {
     NoSuchRequest,
     #[error("a {0} does not convert to JSON")]
     Unencodable(&'static str),
+    #[error("stored size {0} is not a length")]
+    SizeOutOfRange(i64),
+    /// Of the attachments a dispatch named, at least one was not bound: it was
+    /// bound to another request already, past its expiry, or gone.
+    #[error("an attachment is no longer staged for this instance")]
+    AttachmentUnavailable,
 }
 
 /// Refuses rather than saturates: a clamped time would be stored as a moment

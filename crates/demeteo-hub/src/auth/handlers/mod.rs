@@ -23,6 +23,8 @@ use super::ceremonies::InsertError;
 use super::challenge::base64url_encode;
 use super::policy::Refusal;
 use super::session::{self, SessionError, SessionSecret, SESSION_TTL_SECS};
+use crate::attachments::envelope::AttachmentRefusal;
+use crate::ports::KeyServiceError;
 use crate::routes::AppState;
 use crate::socket::connections::Full;
 use crate::store::{sessions, StoreError, UserId};
@@ -82,8 +84,10 @@ impl ApiError {
     pub const NOT_FOUND: Self = Self::new(StatusCode::NOT_FOUND, "not_found");
     pub const CHALLENGE_MISMATCH: Self = Self::new(StatusCode::CONFLICT, "challenge_mismatch");
     pub const ASSERTION_MALFORMED: Self = Self::new(StatusCode::BAD_REQUEST, "assertion_malformed");
-    pub const ATTACHMENTS_NOT_SUPPORTED: Self =
-        Self::new(StatusCode::BAD_REQUEST, "attachments_not_supported");
+    pub const ATTACHMENT_TOO_LARGE: Self =
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, "attachment_too_large");
+    pub const ATTACHMENT_UNAVAILABLE: Self =
+        Self::new(StatusCode::CONFLICT, "attachment_unavailable");
 
     pub(crate) const fn new(status: StatusCode, code: &'static str) -> Self {
         Self {
@@ -129,10 +133,42 @@ impl From<Refusal> for ApiError {
     }
 }
 
+impl From<AttachmentRefusal> for ApiError {
+    fn from(refusal: AttachmentRefusal) -> Self {
+        match refusal {
+            AttachmentRefusal::Invalid => Self::INVALID_REQUEST,
+            AttachmentRefusal::NotFound => Self::NOT_FOUND,
+            AttachmentRefusal::Unavailable => Self::ATTACHMENT_UNAVAILABLE,
+        }
+    }
+}
+
 impl From<Full> for ApiError {
     fn from(full: Full) -> Self {
         match full {
             Full => Self::TOO_MANY_CONNECTIONS,
+        }
+    }
+}
+
+/// A failed attachment data-key call: a service that is sealed or away is
+/// one to wait for, and a name or answer it refuses is the Hub's own fault.
+impl From<KeyServiceError> for ApiError {
+    fn from(error: KeyServiceError) -> Self {
+        match error {
+            KeyServiceError::Sealed
+            | KeyServiceError::UnknownKey(_)
+            | KeyServiceError::Transport(_)
+            | KeyServiceError::Upstream { .. } => {
+                tracing::warn!(%error, "an attachment key could not be had");
+                Self::KEY_SERVICE_UNAVAILABLE
+            }
+            KeyServiceError::InvalidKeyName(_)
+            | KeyServiceError::InvalidMount(_)
+            | KeyServiceError::Malformed(_) => {
+                tracing::error!(%error, "the attachment transit key is misconfigured");
+                Self::INTERNAL
+            }
         }
     }
 }
@@ -339,6 +375,28 @@ mod tests {
     }
 
     #[test]
+    fn a_key_service_to_wait_for_is_503_and_a_misconfigured_one_500() {
+        for waiting in [
+            KeyServiceError::Sealed,
+            KeyServiceError::UnknownKey("transit".to_owned()),
+            KeyServiceError::Transport("refused".to_owned()),
+            KeyServiceError::Upstream {
+                status: 500,
+                detail: "down".to_owned(),
+            },
+        ] {
+            assert_eq!(ApiError::from(waiting), ApiError::KEY_SERVICE_UNAVAILABLE);
+        }
+        for broken in [
+            KeyServiceError::InvalidKeyName("a/b".to_owned()),
+            KeyServiceError::InvalidMount("m".to_owned()),
+            KeyServiceError::Malformed("x".to_owned()),
+        ] {
+            assert_eq!(ApiError::from(broken), ApiError::INTERNAL);
+        }
+    }
+
+    #[test]
     fn every_guard_rejection_is_403_under_its_own_code() {
         for (rejection, code) in [
             (session::Rejection::OriginMismatch, "origin_mismatch"),
@@ -418,6 +476,33 @@ mod tests {
 
         assert!(expiry >= before + ttl, "{expiry}");
         assert!(expiry <= OffsetDateTime::now_utc() + ttl, "{expiry}");
+    }
+
+    #[tokio::test]
+    async fn each_attachment_refusal_has_its_own_answer() {
+        for (refusal, status, body) in [
+            (
+                AttachmentRefusal::Invalid,
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"invalid_request"}"#,
+            ),
+            (
+                AttachmentRefusal::NotFound,
+                StatusCode::NOT_FOUND,
+                r#"{"error":"not_found"}"#,
+            ),
+            (
+                AttachmentRefusal::Unavailable,
+                StatusCode::CONFLICT,
+                r#"{"error":"attachment_unavailable"}"#,
+            ),
+        ] {
+            assert_eq!(
+                rendered(ApiError::from(refusal)).await,
+                (status, body.to_owned()),
+                "{refusal:?}"
+            );
+        }
     }
 
     #[tokio::test]

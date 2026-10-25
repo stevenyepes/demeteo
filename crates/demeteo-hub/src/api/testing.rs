@@ -7,14 +7,21 @@
 //! on [`socket::testing`](crate::socket::testing). A pair it does not hold is
 //! not such a call: "not yours" has an answer, the one the SQL gives, and
 //! answering it is what the tenant rule of [the module](super) is tested by.
+//!
+//! It is the [`AttachmentStore`] of those tests too. Each instance's
+//! attachments are held by its hub, beside its requests and under the same
+//! lock, so a row of another tenant or another instance is absent by
+//! construction rather than by a filter here.
 
 use super::port::{mirror_event, snapshot_read, ApiStore, MirrorEvent, SnapshotRead};
+use crate::attachments::port::AttachmentStore;
 use crate::pairing::authorize::scope_name;
 use crate::socket::connections::{ConnectionId, Connections};
 use crate::socket::cursor;
 use crate::socket::port::SocketStore;
 use crate::socket::requests::OutcomeChange;
 use crate::socket::testing::{MemoryHub, MemoryStore, RequestView};
+use crate::store::attachments::{AttachmentMeta, NewAttachment, StagedAttachment, WrappedKey};
 use crate::store::instances::{Instance, NewInstanceLabels};
 use crate::store::requests::{NewRequest, QueuedRequest, RequestId, RequestRecord, RequestState};
 use crate::store::run_mirror::MirrorRecord;
@@ -25,6 +32,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// What [`MemoryFleet::paired`] writes as the consent screen's labels: the
 /// columns a pairing fills and a `hello` overwrites. Spelled so that a test
@@ -137,6 +145,33 @@ impl MemoryFleet {
     /// Every request ever queued for the instance, oldest first.
     pub fn requests(&self, instance: InstanceId) -> Vec<RequestView> {
         self.hub(instance).requests()
+    }
+
+    /// Every attachment row the instance holds, every field as stored.
+    pub fn attachments(&self, instance: InstanceId) -> Vec<StagedAttachment> {
+        self.hub(instance).attachments()
+    }
+
+    /// Stages a row of the instance that expires at `expires_at` (Unix
+    /// seconds) and answers its id. Its ciphertext and keys are filler that
+    /// no key service opens: it is for a test of which rows live, not of
+    /// what they hold.
+    pub fn staged_until(&self, instance: InstanceId, expires_at: u64) -> Uuid {
+        let id = Uuid::new_v4();
+        self.hub(instance)
+            .attachment_staged(filler(id, instance, expires_at));
+        id
+    }
+
+    /// Binds the attachment to `request`, which the instance must hold, and
+    /// moves its expiry to the request's, without a dispatch.
+    pub fn force_bound(&self, instance: InstanceId, id: Uuid, request: RequestId) {
+        self.hub(instance).attachment_bound(id, request);
+    }
+
+    /// Changes one byte of the attachment's ciphertext.
+    pub fn tampered(&self, instance: InstanceId, id: Uuid) {
+        self.hub(instance).attachment_tampered(id);
     }
 
     /// The store a session of the instance writes through. Unlike
@@ -281,6 +316,81 @@ impl ApiStore for MemoryFleet {
     }
 }
 
+#[async_trait]
+impl AttachmentStore for MemoryFleet {
+    /// A pair the fleet does not hold is a panic: the real insert meets the
+    /// instance foreign key, and the upload asks [`ApiStore::instance`]
+    /// before it ever gets here.
+    async fn staged(&self, user: UserId, new: NewAttachment) -> Result<AttachmentMeta, StoreError> {
+        match self.held_by(user, new.instance_id) {
+            Some(hub) => Ok(hub.attachment_staged(new)),
+            None => panic!("memory fleet: an attachment staged for a pair the fleet does not hold"),
+        }
+    }
+
+    async fn staged_of(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        ids: &[Uuid],
+    ) -> Result<Vec<AttachmentMeta>, StoreError> {
+        Ok(self
+            .held_by(user, instance)
+            .map(|hub| hub.attachments_named(ids))
+            .unwrap_or_default())
+    }
+
+    async fn fetchable(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        id: Uuid,
+        now: u64,
+    ) -> Result<Option<StagedAttachment>, StoreError> {
+        Ok(self
+            .held_by(user, instance)
+            .and_then(|hub| hub.attachment_fetchable(id, now)))
+    }
+
+    async fn consumed(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        id: Uuid,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        Ok(self
+            .held_by(user, instance)
+            .is_some_and(|hub| hub.attachment_consumed(id, now)))
+    }
+
+    /// Each hub is one tenant's instance, so a delete within one never
+    /// reaches another tenant's rows.
+    async fn expired_deleted(&self, now: u64) -> Result<u64, StoreError> {
+        let hubs: Vec<MemoryHub> = self
+            .fleet()
+            .held
+            .iter()
+            .map(|held| held.hub.clone())
+            .collect();
+        Ok(hubs.iter().map(|hub| hub.attachments_expired(now)).sum())
+    }
+}
+
+fn filler(id: Uuid, instance: InstanceId, expires_at: u64) -> NewAttachment {
+    let Some(wrapped_key) = WrappedKey::parse("vault:v1:filler") else {
+        panic!("memory fleet: filler that is not a wrapped key");
+    };
+    NewAttachment {
+        id,
+        instance_id: instance,
+        ciphertext: vec![0x5a; 64],
+        wrapped_key,
+        sealed_digest: vec![0xa5; 60],
+        expires_at,
+    }
+}
+
 fn instance_row(held: &Held) -> Instance {
     let view = held.hub.instance();
     let connection = held.hub.connection();
@@ -340,6 +450,15 @@ impl SocketStore for NotHeld {
         unscripted()
     }
 
+    async fn request_inserted_binding(
+        &self,
+        _: NewRequest,
+        _: &[Uuid],
+        _: u64,
+    ) -> Result<(), StoreError> {
+        unscripted()
+    }
+
     async fn queued_requests(&self) -> Result<Vec<QueuedRequest>, StoreError> {
         unscripted()
     }
@@ -393,5 +512,150 @@ fn wall_clock() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(since) => since.as_secs(),
         Err(_) => panic!("memory fleet: a wall clock before 1970"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use demeteo_hub_protocol::{CancelFeature, RequestPayload, SignedRequest};
+
+    const NOW: u64 = 1_700_000_000;
+
+    async fn queued(fleet: &MemoryFleet, user: UserId, instance: InstanceId) -> RequestId {
+        let id = [7; 16];
+        let envelope = SignedRequest {
+            v: 1,
+            request_id: "BwcHBwcHBwcHBwcHBwcHBw".to_owned(),
+            instance_id: instance.0.to_string(),
+            issued_at: NOW,
+            expires_at: NOW + 600,
+            payload: RequestPayload::CancelFeature(CancelFeature {
+                feature_id: "f-1".to_owned(),
+            }),
+            signature: String::new(),
+        };
+        let inserted = fleet
+            .store(user, instance)
+            .request_inserted(NewRequest {
+                id,
+                kind: "cancel_feature".to_owned(),
+                expires_at: envelope.expires_at,
+                envelope,
+            })
+            .await;
+        assert!(inserted.is_ok());
+        id
+    }
+
+    #[tokio::test]
+    async fn a_row_of_one_pair_is_absent_to_every_other_pair() {
+        let fleet = MemoryFleet::new();
+        let (u, v) = (fleet.tenant(), fleet.tenant());
+        let a = fleet.paired(u, &[]);
+        let b = fleet.paired(u, &[]);
+        let c = fleet.paired(v, &[]);
+        let id = Uuid::new_v4();
+        let staged = fleet.staged(u, filler(id, a, NOW + 60)).await.unwrap();
+        fleet.force_bound(a, id, queued(&fleet, u, a).await);
+
+        assert_eq!(fleet.staged_of(u, a, &[id]).await.unwrap().len(), 1);
+        assert!(fleet.fetchable(u, a, id, NOW).await.unwrap().is_some());
+        for (user, instance) in [(u, b), (v, c), (v, a)] {
+            assert!(fleet
+                .staged_of(user, instance, &[id])
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(fleet
+                .fetchable(user, instance, id, NOW)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(!fleet.consumed(user, instance, id, NOW).await.unwrap());
+        }
+        assert_eq!(fleet.attachments(a).len(), 1);
+        assert_eq!(fleet.attachments(a)[0].id, staged.id);
+
+        assert!(fleet.consumed(u, a, id, NOW).await.unwrap());
+        assert!(fleet.attachments(a).is_empty());
+        assert!(!fleet.consumed(u, a, id, NOW).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_row_is_fetchable_only_while_bound_to_a_queued_unexpired_request() {
+        let fleet = MemoryFleet::new();
+        let user = fleet.tenant();
+        let instance = fleet.paired(user, &[]);
+        let id = fleet.staged_until(instance, NOW + 60);
+        assert!(fleet
+            .fetchable(user, instance, id, NOW)
+            .await
+            .unwrap()
+            .is_none());
+
+        let request = queued(&fleet, user, instance).await;
+        fleet.force_bound(instance, id, request);
+        assert_eq!(fleet.attachments(instance)[0].expires_at, NOW + 600);
+        assert!(fleet
+            .fetchable(user, instance, id, NOW + 599)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(fleet
+            .fetchable(user, instance, id, NOW + 600)
+            .await
+            .unwrap()
+            .is_none());
+
+        let expired = fleet.store(user, instance).request_expired(request).await;
+        assert!(expired.is_ok());
+        assert!(fleet
+            .fetchable(user, instance, id, NOW)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn the_sweep_deletes_what_has_expired_of_every_tenant_and_nothing_else() {
+        let fleet = MemoryFleet::new();
+        let (u, v) = (fleet.tenant(), fleet.tenant());
+        let a = fleet.paired(u, &[]);
+        let c = fleet.paired(v, &[]);
+        fleet.staged_until(a, NOW);
+        let live = fleet.staged_until(a, NOW + 1);
+        fleet.staged_until(c, NOW - 1);
+
+        assert_eq!(fleet.expired_deleted(NOW).await.unwrap(), 2);
+        assert_eq!(
+            fleet
+                .attachments(a)
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            [live]
+        );
+        assert!(fleet.attachments(c).is_empty());
+    }
+
+    #[test]
+    fn a_tampered_row_differs_in_its_ciphertext_only() {
+        let fleet = MemoryFleet::new();
+        let instance = fleet.paired(fleet.tenant(), &[]);
+        let id = fleet.staged_until(instance, NOW);
+        let before = fleet.attachments(instance);
+
+        fleet.tampered(instance, id);
+
+        let after = fleet.attachments(instance);
+        assert_ne!(before[0].ciphertext, after[0].ciphertext);
+        assert_eq!(
+            StagedAttachment {
+                ciphertext: before[0].ciphertext.clone(),
+                ..after[0].clone()
+            },
+            before[0]
+        );
     }
 }

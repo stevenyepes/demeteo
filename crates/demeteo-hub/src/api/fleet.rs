@@ -7,6 +7,7 @@
 use super::run_state::{by_feature, fold, FeatureStatus, PendingGate};
 use super::scope::read_verdict;
 use super::{ApiContext, PostgresApi, SnapshotRead};
+use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::handlers::{store_failed, unix_now, ApiError, CurrentSession};
 use crate::pairing::authorize::scope_named;
 use crate::routes::AppState;
@@ -205,7 +206,8 @@ pub async fn get_fleet(
     current: CurrentSession,
 ) -> Result<Json<FleetView>, ApiError> {
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     fleet(&api, current.user, unix_now()).await.map(Json)
 }
 
@@ -217,7 +219,8 @@ pub async fn get_instance(
     Path(instance_id): Path<String>,
 ) -> Result<Json<InstanceDetailView>, ApiError> {
     let store = PostgresApi::new(state.db().clone());
-    let api = ApiContext::of(&state, &store);
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
     instance_detail(&api, current.user, &instance_id, unix_now())
         .await
         .map(Json)

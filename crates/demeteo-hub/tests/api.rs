@@ -7,6 +7,7 @@
 mod support;
 
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
+use demeteo_hub::attachments::AttachmentSettings;
 use demeteo_hub::auth::challenge::base64url_decode;
 use demeteo_hub::auth::policy::Status;
 use demeteo_hub::auth::session::SessionSecret;
@@ -27,10 +28,19 @@ use support::http::{enrol, get_as, open_session, post_as, rp, serve_state};
 use support::in_fresh_schema;
 
 const SIGNING_KEY: &str = "demeteo-hub-signing";
+const TRANSIT_KEY: &str = "demeteo-hub";
 
 fn state_over(db: Db) -> AppState {
-    let keys = MemoryKeys::with_keys([SIGNING_KEY]);
-    AppState::new(db, rp(), Arc::new(keys), SIGNING_KEY.to_owned()).unwrap()
+    let keys = MemoryKeys::with_keys([SIGNING_KEY, TRANSIT_KEY]);
+    AppState::new(
+        db,
+        rp(),
+        Arc::new(keys),
+        SIGNING_KEY.to_owned(),
+        TRANSIT_KEY.to_owned(),
+        AttachmentSettings::default(),
+    )
+    .unwrap()
 }
 
 /// A tenant signed in with its one trusted passkey, and one instance of its
