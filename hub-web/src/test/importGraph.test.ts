@@ -370,3 +370,35 @@ describe('the real tree, walked from hub-web and the canvas', () => {
     expect(visited).not.toContain('src/lib/workflows.ts');
   });
 });
+
+describe('the real tree, walked from hub-web alone', () => {
+  const HUB_ROOT = 'hub-web/src/main.tsx';
+  const RUN_VIEW = 'hub-web/src/views/Run.tsx';
+  const PIPELINE = 'hub-web/src/components/DispatchPipeline.tsx';
+  const CANVAS = 'src/components/canvas/WorkflowCanvas.tsx';
+
+  it('reaches the shared canvas, and only through the Run view and the dispatch pipeline', () => {
+    const withoutRun: SourceTree = {
+      read: (path) => (path === RUN_VIEW || path === PIPELINE ? null : checkout.read(path)),
+    };
+
+    expect(findImportViolations([HUB_ROOT], checkout).visited).toEqual(
+      expect.arrayContaining([RUN_VIEW, PIPELINE, CANVAS]),
+    );
+    expect(findImportViolations([HUB_ROOT], withoutRun).visited).not.toContain(CANVAS);
+  });
+
+  it('never visits the desktop catalogues, node types or node panel, which reach Tauri or the transcript', () => {
+    const { visited } = findImportViolations([HUB_ROOT], checkout);
+
+    expect(
+      visited.filter(
+        (path) =>
+          path === 'src/lib/agentCatalog.ts' ||
+          path === 'src/lib/agentModels.ts' ||
+          path === 'src/components/canvas/useNodeTypes.ts' ||
+          /^src\/components\/canvas\/(NodePanel|nodePanel)/.test(path),
+      ),
+    ).toEqual([]);
+  });
+});

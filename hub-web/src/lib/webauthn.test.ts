@@ -6,6 +6,7 @@ import {
   createCredential,
   getAssertion,
   getCredential,
+  getGateAssertion,
   WebAuthnCancelledError,
   WebAuthnMalformedError,
   WebAuthnUnavailableError,
@@ -101,6 +102,7 @@ const CEREMONIES = [
   { name: 'createCredential', method: 'create', run: () => createCredential(CREATION_OPTIONS) },
   { name: 'getCredential', method: 'get', run: () => getCredential(REQUEST_OPTIONS) },
   { name: 'getAssertion', method: 'get', run: () => getAssertion(REQUEST_OPTIONS) },
+  { name: 'getGateAssertion', method: 'get', run: () => getGateAssertion(REQUEST_OPTIONS.publicKey) },
 ] as const;
 
 afterEach(() => {
@@ -283,6 +285,45 @@ describe('getAssertion', () => {
       signature: 'CA',
     });
     expect(octetsOf(credentials.get.mock.calls[0]?.[0]?.publicKey?.challenge)).toEqual([0xfb, 0xff, 0xbf]);
+  });
+});
+
+describe('getGateAssertion', () => {
+  const { userVerification: _, ...withoutUserVerification } = REQUEST_OPTIONS.publicKey;
+
+  it.each([
+    ['discouraged', { ...REQUEST_OPTIONS.publicKey, userVerification: 'discouraged' }],
+    ['preferred', { ...REQUEST_OPTIONS.publicKey, userVerification: 'preferred' }],
+    ['absent', withoutUserVerification],
+  ])('requires user verification when the Hub sent it %s', async (_case, publicKey) => {
+    const credentials = stubWebAuthn({ get: async () => ASSERTION });
+
+    await getGateAssertion(publicKey);
+
+    expect(credentials.get).toHaveBeenCalledTimes(1);
+    expect(credentials.get.mock.calls[0]?.[0]?.publicKey?.userVerification).toBe('required');
+  });
+
+  it('takes the bare options of a gate challenge and returns the four assertion fields', async () => {
+    const credentials = stubWebAuthn({ get: async () => ASSERTION });
+
+    await expect(getGateAssertion(REQUEST_OPTIONS.publicKey)).resolves.toStrictEqual({
+      credential_id: '-_8',
+      authenticator_data: 'BAUGBw',
+      client_data_json: 'AQID',
+      signature: 'CA',
+    });
+    const publicKey = credentials.get.mock.calls[0]?.[0]?.publicKey;
+    expect(octetsOf(publicKey?.challenge)).toEqual([0xfb, 0xff, 0xbf]);
+    expect(publicKey?.allowCredentials?.map((descriptor) => octetsOf(descriptor.id))).toEqual([[4, 5], [6]]);
+    expect(publicKey).toMatchObject({ rpId: 'hub.example', timeout: 300_000 });
+  });
+
+  it('refuses options wrapped as a passkey start reply before reaching the authenticator', async () => {
+    const credentials = stubWebAuthn();
+
+    expect(await rejectionOf(getGateAssertion(REQUEST_OPTIONS))).toBeInstanceOf(WebAuthnMalformedError);
+    expect(credentials.get).not.toHaveBeenCalled();
   });
 });
 

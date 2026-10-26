@@ -137,14 +137,22 @@ export async function getCredential(options: unknown): Promise<SignInCredential>
 
 /** Asserts over the Hub-chosen challenge of an endorsement or a revocation. */
 export async function getAssertion(options: unknown): Promise<AssertionFields> {
-  const credential = await assertionCeremony(options);
-  const response = memberOf(credential, 'response');
-  return {
-    credential_id: encoded(credential, 'rawId'),
-    authenticator_data: encoded(response, 'authenticatorData'),
-    client_data_json: encoded(response, 'clientDataJSON'),
-    signature: encoded(response, 'signature'),
-  };
+  return assertionFieldsOf(await assertionCeremony(options));
+}
+
+/**
+ * Asserts over the `public_key` of a gate challenge, which the Hub sends bare
+ * rather than wrapped as `{ publicKey }`. User verification is required here
+ * whatever the Hub asked for: the Hub checks only an assertion's shape, and
+ * the desktop's check of the user-verified flag (docs/HUB.md §8) is not built
+ * (§2), so the Hub's options must not be able to ask for less.
+ */
+export async function getGateAssertion(publicKey: unknown): Promise<AssertionFields> {
+  const credential = await assertionCeremony({ publicKey }, (request) => ({
+    ...request,
+    userVerification: 'required',
+  }));
+  return assertionFieldsOf(credential);
 }
 
 type DescriptorJson = Omit<PublicKeyCredentialDescriptor, 'id'> & { id: string };
@@ -212,11 +220,24 @@ function descriptorArgument(json: DescriptorJson): PublicKeyCredentialDescriptor
   return { ...json, id: base64UrlToBytes(json.id).buffer };
 }
 
-async function assertionCeremony(options: unknown): Promise<Credential> {
+async function assertionCeremony(
+  options: unknown,
+  amend: (request: PublicKeyCredentialRequestOptions) => PublicKeyCredentialRequestOptions = (request) => request,
+): Promise<Credential> {
   const credentials = credentialsContainer();
   if (!isRequestOptions(options)) throw new WebAuthnMalformedError('The Hub sent unusable request options');
-  const publicKey = requestArgument(options.publicKey);
+  const publicKey = amend(requestArgument(options.publicKey));
   return ceremony(() => credentials.get({ publicKey }));
+}
+
+function assertionFieldsOf(credential: Credential): AssertionFields {
+  const response = memberOf(credential, 'response');
+  return {
+    credential_id: encoded(credential, 'rawId'),
+    authenticator_data: encoded(response, 'authenticatorData'),
+    client_data_json: encoded(response, 'clientDataJSON'),
+    signature: encoded(response, 'signature'),
+  };
 }
 
 function credentialsContainer(): CredentialsContainer {
