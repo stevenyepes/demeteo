@@ -3,17 +3,22 @@
 //! See [`crate::domain`] for why nothing here is `async`;
 //! `src-tauri/tests/hub_layout.rs` fails the build if anything here becomes
 //! one. What crosses the socket is decided here and only here: [`hub_event`]
-//! is the allowlist a `run_events` row has to pass, and [`hello`] the scopes
-//! an instance announces. What follows a connection's end is decided here
+//! is the allowlist a `run_events` row has to pass, [`hello`] the scopes
+//! an instance announces, and [`snapshot`] what an instance reports of its
+//! Projects. What follows a connection's end is decided here
 //! too: [`after`], [`after_close`], [`resets_backoff`], [`refresh_refusal`],
 //! [`after_refresh`] and [`backoff`].
 
 use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
 mod projection;
+mod snapshot;
 mod verdict;
 
 pub use projection::{hub_event, MAX_FEATURE_ID_BYTES};
+pub use snapshot::{
+    snapshot, ProjectInput, SnapshotInput, MAX_SNAPSHOT_BYTES, SNAPSHOT_DEBOUNCE_SECS,
+};
 pub use verdict::{
     after, after_close, after_refresh, backoff, refresh_refusal, resets_backoff, Reconnect,
     RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS, LIVENESS_DEADLINE_SECS,

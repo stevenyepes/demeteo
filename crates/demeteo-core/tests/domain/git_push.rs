@@ -112,6 +112,52 @@ fn rewriting_is_idempotent() {
     assert_eq!(token_free_origin(&once), None);
 }
 
+/// A PAT is accepted as the username, so the user goes with the password.
+#[test]
+fn the_whole_userinfo_is_dropped_and_everything_else_kept() {
+    assert_eq!(
+        without_userinfo("https://ghp_x@github.com/o/r").as_deref(),
+        Some("https://github.com/o/r")
+    );
+    assert_eq!(
+        without_userinfo("https://oauth2:tok@host:8443/o/r?x=1#f").as_deref(),
+        Some("https://host:8443/o/r?x=1#f")
+    );
+    assert_eq!(
+        without_userinfo("http://:tok@host").as_deref(),
+        Some("http://host")
+    );
+}
+
+#[test]
+fn a_url_without_userinfo_is_returned_unchanged_and_idempotently() {
+    let url = "https://host:8443/o/r.git";
+    assert_eq!(without_userinfo(url).as_deref(), Some(url));
+    let once = without_userinfo("https://u:p@host/o/r").unwrap();
+    assert_eq!(without_userinfo(&once), Some(once));
+}
+
+#[test]
+fn a_remote_that_is_not_http_has_no_userinfo_to_drop() {
+    for url in [
+        "git@github.com:o/r.git",
+        "ssh://git@github.com/o/r.git",
+        "file:///srv/r.git",
+        "",
+    ] {
+        assert_eq!(without_userinfo(url), None, "rewrote: {url}");
+    }
+}
+
+/// The parser ends the authority at the first `/`, so the rest of such a
+/// userinfo lands in the path — a caller reporting the URL has to check for a
+/// surviving `@` itself.
+#[test]
+fn a_password_with_an_unencoded_delimiter_leaves_its_at_in_the_path() {
+    let url = without_userinfo("https://u:p/ss@host/r").unwrap();
+    assert!(url.contains('@'), "{url}");
+}
+
 #[test]
 fn the_embedded_password_is_the_part_after_the_first_colon() {
     assert_eq!(
