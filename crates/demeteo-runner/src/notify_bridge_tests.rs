@@ -32,6 +32,10 @@ impl RunEventsPort for FakeRunEvents {
     fn list_since(&self, _run_id: &str, _from_offset: i64) -> Result<Vec<RunEvent>, String> {
         Ok(vec![])
     }
+
+    fn list_after(&self, _from_offset: i64, _limit: usize) -> Result<Vec<RunEvent>, String> {
+        Err("the runner never pages its log instance-wide".to_string())
+    }
 }
 
 struct FakeRunnerRuns {

@@ -91,7 +91,11 @@ pub fn build_core_context(
     let merge_audit_repo: Arc<dyn ports::db::MergeAuditRepository> = db_adapter.clone();
     let notifications_repo: Arc<dyn ports::db::NotificationRepository> = db_adapter.clone();
     let runner_runs_repo: Arc<dyn ports::runner_run::RunnerRunPort> = db_adapter.clone();
-    let run_events_repo: Arc<dyn ports::run_events::RunEventsPort> = db_adapter.clone();
+    // `RunEventRecorder` appends through `ctx.run_events`; handed the bare
+    // repo instead, every row would wait for the socket's next connection.
+    let waking_run_events = adapters::hub::socket::wake::WakingRunEvents::new(db_adapter.clone());
+    let run_events_wake = waking_run_events.wake();
+    let run_events_repo: Arc<dyn ports::run_events::RunEventsPort> = Arc::new(waking_run_events);
     let remote_run_mirror_repo: Arc<dyn ports::remote_run_mirror::RemoteRunMirrorPort> =
         db_adapter.clone();
     let sync_sessions_repo: Arc<dyn ports::sync_session::SyncSessionPort> = db_adapter.clone();
@@ -329,7 +333,11 @@ pub fn build_core_context(
 
     let app_version = AppVersion::default();
     let hub = match execution_mode {
-        ExecutionMode::Router => hub_pairing(db_adapter.clone(), app_version.clone()),
+        ExecutionMode::Router => hub_pairing(
+            db_adapter.clone(),
+            app_version.clone(),
+            hub_socket(run_events_repo.clone(), run_events_wake, runtime.clone()),
+        ),
         ExecutionMode::LocalOnly => None,
     };
 
@@ -403,26 +411,34 @@ pub fn build_core_context(
 
 /// Shares `app_version` with the context, so the version the desktop sets
 /// after this returns is the one the Hub's consent page shows.
+///
+/// The socket is attached here but not started: its `Hello` announces that
+/// same version, which is still unset until this returns, so the desktop
+/// starts it (`src-tauri/src/lib.rs`) once the version is set.
 #[cfg(feature = "keyring")]
 fn hub_pairing(
     pins: Arc<dyn ports::hub::HubPinRepository>,
     app_version: AppVersion,
+    socket: Option<adapters::hub::socket::SocketConfig>,
 ) -> Option<Arc<adapters::hub::HubPairing>> {
     let token = match adapters::hub::token_client::ReqwestTokenEndpoint::new() {
-        Ok(token) => token,
+        Ok(token) => Arc::new(token),
         Err(e) => {
             tracing::warn!(error = %e, "Hub pairing is off: no HTTP client for /token");
             return None;
         }
     };
-    Some(Arc::new(
-        adapters::hub::HubPairing::new(
-            pins,
-            Arc::new(adapters::hub::keyring_store::KeyringSecretStore),
-            Arc::new(token),
-        )
-        .with_app_version(app_version),
-    ))
+    let pairing = adapters::hub::HubPairing::new(
+        pins,
+        Arc::new(adapters::hub::keyring_store::KeyringSecretStore),
+        token.clone(),
+    )
+    .with_refresh_endpoint(token)
+    .with_app_version(app_version);
+    Some(Arc::new(match socket {
+        Some(socket) => pairing.with_socket(socket),
+        None => pairing,
+    }))
 }
 
 /// No keyring, no pairing: a file in its place is what AGENTS.md §2 forbids.
@@ -430,7 +446,42 @@ fn hub_pairing(
 fn hub_pairing(
     _pins: Arc<dyn ports::hub::HubPinRepository>,
     _app_version: AppVersion,
+    _socket: Option<adapters::hub::socket::SocketConfig>,
 ) -> Option<Arc<adapters::hub::HubPairing>> {
+    None
+}
+
+/// `run_events` and `wake` have to come from one
+/// [`WakingRunEvents`](adapters::hub::socket::wake::WakingRunEvents). With
+/// no dialer the desktop still pairs; it just never dials.
+#[cfg(feature = "hub-socket")]
+fn hub_socket(
+    run_events: Arc<dyn ports::run_events::RunEventsPort>,
+    wake: Arc<tokio::sync::Notify>,
+    runtime: tokio::runtime::Handle,
+) -> Option<adapters::hub::socket::SocketConfig> {
+    match adapters::hub::socket::ws_transport::WsSocketDialer::new() {
+        Ok(dialer) => Some(adapters::hub::socket::SocketConfig {
+            dialer: Arc::new(dialer),
+            run_events,
+            wake,
+            runtime,
+            sleeper: Arc::new(adapters::hub::socket::TokioSleeper),
+            jitter: adapters::hub::socket::os_jitter,
+        }),
+        Err(e) => {
+            tracing::warn!(error = %e, "the Hub socket is off: no WebSocket client");
+            None
+        }
+    }
+}
+
+#[cfg(not(feature = "hub-socket"))]
+fn hub_socket(
+    _run_events: Arc<dyn ports::run_events::RunEventsPort>,
+    _wake: Arc<tokio::sync::Notify>,
+    _runtime: tokio::runtime::Handle,
+) -> Option<adapters::hub::socket::SocketConfig> {
     None
 }
 

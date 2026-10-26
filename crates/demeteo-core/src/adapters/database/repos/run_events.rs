@@ -59,6 +59,28 @@ impl RunEventsPort for SqliteAdapter {
         }
         Ok(list)
     }
+
+    fn list_after(&self, from_offset: i64, limit: usize) -> Result<Vec<RunEvent>, String> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, run_id, kind, payload_json, created_at
+                 FROM run_events
+                 WHERE id > ?1
+                 ORDER BY id ASC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![from_offset, limit], row_to_event)
+            .map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter {
+            list.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(list)
+    }
 }
 
 #[cfg(test)]

@@ -17,6 +17,10 @@ use std::process::Command;
 
 const HUB: &str = "demeteo-hub";
 const FORBIDDEN_DEPS: [&str; 1] = ["demeteo-core"];
+const CORE: &str = "demeteo-core";
+/// Matched by exact package name, so `demeteo-hub-protocol` — the wire types
+/// both ends compile against — stays allowed.
+const CORE_FORBIDDEN_DEPS: [&str; 1] = [HUB];
 const FORBIDDEN_SQLX_FEATURES: [&str; 3] = ["sqlite", "mysql", "any"];
 
 fn repo_root() -> PathBuf {
@@ -51,11 +55,15 @@ fn workspace_metadata() -> Value {
     serde_json::from_slice(&out.stdout).expect("cargo metadata emitted invalid JSON")
 }
 
-fn hub_package(metadata: &Value) -> Option<&Value> {
+fn package<'a>(metadata: &'a Value, name: &str) -> Option<&'a Value> {
     metadata["packages"]
         .as_array()?
         .iter()
-        .find(|p| p["name"] == HUB)
+        .find(|p| p["name"] == name)
+}
+
+fn hub_package(metadata: &Value) -> Option<&Value> {
+    package(metadata, HUB)
 }
 
 fn is_workspace_member(metadata: &Value) -> bool {
@@ -76,14 +84,16 @@ fn dependencies(pkg: &Value) -> &[Value] {
 
 /// `cargo metadata` reports `kind` as null for normal dependencies, so every
 /// kind (normal, dev, build) is covered by not filtering on it.
-fn forbidden_dependency_violations(pkg: &Value) -> Vec<String> {
+/// `name` is the package name even under `package = "…"` renames, and
+/// target-specific tables are listed alongside the rest.
+fn forbidden_dependency_violations(pkg: &Value, owner: &str, forbidden: &[&str]) -> Vec<String> {
     dependencies(pkg)
         .iter()
         .filter_map(|d| {
             let name = d["name"].as_str()?;
-            FORBIDDEN_DEPS.contains(&name).then(|| {
+            forbidden.contains(&name).then(|| {
                 let kind = d["kind"].as_str().unwrap_or("normal");
-                format!("{HUB} has a {kind} dependency on `{name}`")
+                format!("{owner} has a {kind} dependency on `{name}`")
             })
         })
         .collect()
@@ -169,10 +179,22 @@ fn hub_is_a_workspace_member() {
 fn hub_does_not_depend_on_core() {
     let metadata = workspace_metadata();
     let pkg = hub_package(&metadata).unwrap_or_else(|| panic!("`{HUB}` package not found"));
-    let violations = forbidden_dependency_violations(pkg);
+    let violations = forbidden_dependency_violations(pkg, HUB, &FORBIDDEN_DEPS);
     assert!(
         violations.is_empty(),
         "crates/{HUB}/Cargo.toml:\n  - {}",
+        violations.join("\n  - ")
+    );
+}
+
+#[test]
+fn core_does_not_depend_on_hub() {
+    let metadata = workspace_metadata();
+    let pkg = package(&metadata, CORE).unwrap_or_else(|| panic!("`{CORE}` package not found"));
+    let violations = forbidden_dependency_violations(pkg, CORE, &CORE_FORBIDDEN_DEPS);
+    assert!(
+        violations.is_empty(),
+        "crates/{CORE}/Cargo.toml:\n  - {}",
         violations.join("\n  - ")
     );
 }
@@ -217,6 +239,42 @@ fn hub_uses_no_compile_time_checked_queries() {
     );
 }
 
+/// `domain/` holds no `async fn` (see `crates/demeteo-core/src/domain/mod.rs`);
+/// the socket policy is checked here because it is the half of the desktop
+/// client most tempting to fold back into the session loop.
+const HUB_SOCKET_POLICY: &str = "crates/demeteo-core/src/domain/hub_socket";
+
+fn async_fn_needles() -> Vec<String> {
+    vec!["async fn".to_owned()]
+}
+
+#[test]
+fn hub_socket_policy_has_no_async_fn() {
+    let root = repo_root();
+    let dir = root.join(HUB_SOCKET_POLICY);
+    assert!(dir.is_dir(), "{} does not exist", dir.display());
+
+    let mut files = Vec::new();
+    collect_files(&dir, &mut files);
+    assert!(!files.is_empty(), "{HUB_SOCKET_POLICY} holds no files");
+    let mut violations = Vec::new();
+    for path in files {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let label = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        violations.extend(needle_violations(&label, &text, &async_fn_needles()));
+    }
+    assert!(
+        violations.is_empty(),
+        "socket policy is synchronous; move the I/O to adapters/hub/socket:\n  - {}",
+        violations.join("\n  - ")
+    );
+}
+
 #[test]
 fn detectors_fire_on_violations() {
     let member = serde_json::json!({
@@ -234,14 +292,21 @@ fn detectors_fire_on_violations() {
         "packages": []
     })));
 
-    for kind in [Value::Null, "dev".into(), "build".into()] {
-        for name in FORBIDDEN_DEPS {
-            let pkg = serde_json::json!({ "dependencies": [{ "name": name, "kind": kind }] });
-            assert_eq!(forbidden_dependency_violations(&pkg).len(), 1, "{name}");
+    for (owner, forbidden) in [(HUB, FORBIDDEN_DEPS), (CORE, CORE_FORBIDDEN_DEPS)] {
+        for kind in [Value::Null, "dev".into(), "build".into()] {
+            for name in forbidden {
+                let pkg = serde_json::json!({ "dependencies": [{ "name": name, "kind": kind }] });
+                let hits = forbidden_dependency_violations(&pkg, owner, &forbidden);
+                assert_eq!(hits.len(), 1, "{owner} -> {name}");
+            }
         }
     }
     let clean = serde_json::json!({ "dependencies": [{ "name": "serde", "kind": null }] });
-    assert!(forbidden_dependency_violations(&clean).is_empty());
+    assert!(forbidden_dependency_violations(&clean, HUB, &FORBIDDEN_DEPS).is_empty());
+    let protocol_only = serde_json::json!({ "dependencies": [
+        { "name": "demeteo-hub-protocol", "kind": null }
+    ] });
+    assert!(forbidden_dependency_violations(&protocol_only, CORE, &CORE_FORBIDDEN_DEPS).is_empty());
 
     let good = serde_json::json!({ "dependencies": [{
         "name": "sqlx", "kind": null, "uses_default_features": false,
@@ -270,6 +335,20 @@ fn detectors_fire_on_violations() {
         assert!(hits[0].starts_with("src/store.rs:2:"), "{}", hits[0]);
     }
     assert!(needle_violations("x", "sqlx::query(\"select 1\")", &needles).is_empty());
+
+    let async_fn = async_fn_needles();
+    for text in [
+        "async fn dial() {}",
+        "pub async fn run(&self) {}",
+        "    pub(crate) async fn x()",
+    ] {
+        assert_eq!(
+            needle_violations("projection.rs", text, &async_fn).len(),
+            1,
+            "{text}"
+        );
+    }
+    assert!(needle_violations("projection.rs", "pub fn hub_event() {}", &async_fn).is_empty());
 }
 
 /// `cargo tree -i libsqlite3-sys` hides inactive optional dependencies and
@@ -369,6 +448,251 @@ fn sqlite_lockstep_detector_fires_on_violations() {
     );
     assert_eq!(sqlite_lockstep_violations(&no_sqlx).len(), 1);
     assert_eq!(sqlite_lockstep_violations("").len(), 3);
+}
+
+/// The desktop's Hub socket client: the crates only it uses, the default
+/// feature that turns them on, and the one core file allowed to name the
+/// WebSocket crate (`crates/demeteo-core/src/adapters/hub/socket/ws_transport.rs`).
+/// `demeteo-runner` links core with default features off and must keep them
+/// off: it never pairs, and its musl binary should not carry a TLS client.
+const HUB_SOCKET_FEATURE: &str = "hub-socket";
+const HUB_SOCKET_DEPS: [&str; 3] = ["tokio-tungstenite", "rustls", "rustls-platform-verifier"];
+const RUNNER: &str = "demeteo-runner";
+const CORE_SRC: &str = "crates/demeteo-core/src";
+
+fn ws_crate_needles() -> Vec<String> {
+    vec![format!("tokio{}tungstenite", '_')]
+}
+
+/// The labels of the `.rs` files among `files` that name the WebSocket crate.
+fn ws_crate_files(files: &[(String, String)]) -> Vec<String> {
+    let needles = ws_crate_needles();
+    files
+        .iter()
+        .filter(|(label, text)| {
+            label.ends_with(".rs") && !needle_violations(label, text, &needles).is_empty()
+        })
+        .map(|(label, _)| label.clone())
+        .collect()
+}
+
+fn feature_list<'a>(pkg: &'a Value, feature: &str) -> Vec<&'a str> {
+    pkg["features"][feature]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+fn hub_socket_dep_violations(core: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let defaults = feature_list(core, "default");
+    if !defaults.contains(&HUB_SOCKET_FEATURE) {
+        out.push(format!(
+            "`{HUB_SOCKET_FEATURE}` is not in {CORE}'s `default` features"
+        ));
+    }
+    let enabled = feature_list(core, HUB_SOCKET_FEATURE);
+    for name in HUB_SOCKET_DEPS {
+        let entries: Vec<&Value> = dependencies(core)
+            .iter()
+            .filter(|d| d["name"] == name)
+            .collect();
+        if entries.is_empty() {
+            out.push(format!("{CORE} declares no `{name}` dependency"));
+        }
+        if entries.iter().any(|d| d["optional"] != Value::Bool(true)) {
+            out.push(format!("{CORE}'s `{name}` must be `optional = true`"));
+        }
+        if !enabled.contains(&format!("dep:{name}").as_str()) {
+            out.push(format!(
+                "`{HUB_SOCKET_FEATURE}` does not enable `dep:{name}`"
+            ));
+        }
+    }
+    out
+}
+
+/// Every route by which the runner could turn the feature on: core's
+/// defaults, the feature named on the dependency, or a runner feature that
+/// forwards it.
+fn runner_hub_socket_violations(runner: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for dep in dependencies(runner).iter().filter(|d| d["name"] == CORE) {
+        let kind = dep["kind"].as_str().unwrap_or("normal");
+        if dep["uses_default_features"] != Value::Bool(false) {
+            out.push(format!(
+                "{RUNNER}'s {kind} `{CORE}` dependency must set `default-features = false`"
+            ));
+        }
+        let features = dep["features"].as_array().into_iter().flatten();
+        if features
+            .filter_map(Value::as_str)
+            .any(|f| f == HUB_SOCKET_FEATURE)
+        {
+            out.push(format!(
+                "{RUNNER}'s {kind} `{CORE}` dependency enables `{HUB_SOCKET_FEATURE}`"
+            ));
+        }
+    }
+    let forwards = [
+        format!("{CORE}/{HUB_SOCKET_FEATURE}"),
+        format!("{CORE}?/{HUB_SOCKET_FEATURE}"),
+    ];
+    if let Some(features) = runner["features"].as_object() {
+        for (name, enables) in features {
+            let enables = enables.as_array().into_iter().flatten();
+            if enables
+                .filter_map(Value::as_str)
+                .any(|f| forwards.iter().any(|fw| fw == f))
+            {
+                out.push(format!(
+                    "{RUNNER}'s `{name}` feature enables `{CORE}/{HUB_SOCKET_FEATURE}`"
+                ));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn only_ws_transport_names_the_websocket_crate() {
+    let root = repo_root();
+    let mut paths = Vec::new();
+    collect_files(&root.join(CORE_SRC), &mut paths);
+    let files: Vec<(String, String)> = paths
+        .into_iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let label = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            Some((label.replace('\\', "/"), text))
+        })
+        .collect();
+    let naming = ws_crate_files(&files);
+    assert_eq!(
+        naming,
+        vec![format!("{CORE_SRC}/adapters/hub/socket/ws_transport.rs")],
+        "the WebSocket crate belongs to ws_transport.rs alone"
+    );
+}
+
+#[test]
+fn hub_socket_deps_are_optional_and_on_by_default() {
+    let metadata = workspace_metadata();
+    let core = package(&metadata, CORE).unwrap_or_else(|| panic!("`{CORE}` package not found"));
+    let violations = hub_socket_dep_violations(core);
+    assert!(
+        violations.is_empty(),
+        "crates/{CORE}/Cargo.toml:\n  - {}",
+        violations.join("\n  - ")
+    );
+}
+
+#[test]
+fn the_runner_never_enables_hub_socket() {
+    let metadata = workspace_metadata();
+    let runner =
+        package(&metadata, RUNNER).unwrap_or_else(|| panic!("`{RUNNER}` package not found"));
+    let violations = runner_hub_socket_violations(runner);
+    assert!(
+        violations.is_empty(),
+        "crates/{RUNNER}/Cargo.toml:\n  - {}",
+        violations.join("\n  - ")
+    );
+}
+
+#[test]
+fn hub_socket_detectors_fire_on_violations() {
+    let file = |label: &str, text: &str| (label.to_owned(), text.to_owned());
+    let named = format!("use {}::Connector;", ws_crate_needles()[0]);
+    let files = [
+        file("a/ws_transport.rs", &named),
+        file(
+            "a/session.rs",
+            "use crate::ports::hub::HubSocketConnection;",
+        ),
+        file("a/notes.md", &named),
+    ];
+    assert_eq!(ws_crate_files(&files), vec!["a/ws_transport.rs".to_owned()]);
+    let leaked = [file("a/ws_transport.rs", &named), file("a/mod.rs", &named)];
+    assert_eq!(ws_crate_files(&leaked).len(), 2);
+
+    let dep =
+        |name: &str, optional: bool| serde_json::json!({ "name": name, "optional": optional });
+    let core = |deps: Vec<Value>, default: Vec<&str>, socket: Vec<&str>| {
+        serde_json::json!({
+            "dependencies": deps,
+            "features": { "default": default, HUB_SOCKET_FEATURE: socket },
+        })
+    };
+    let all_deps = || {
+        HUB_SOCKET_DEPS
+            .iter()
+            .map(|n| dep(n, true))
+            .collect::<Vec<_>>()
+    };
+    let enabling: Vec<String> = HUB_SOCKET_DEPS.iter().map(|n| format!("dep:{n}")).collect();
+    let enabling: Vec<&str> = enabling.iter().map(String::as_str).collect();
+    let good = core(
+        all_deps(),
+        vec!["keyring", HUB_SOCKET_FEATURE],
+        enabling.clone(),
+    );
+    assert!(hub_socket_dep_violations(&good).is_empty());
+    let off_by_default = core(all_deps(), vec!["keyring"], enabling.clone());
+    assert_eq!(hub_socket_dep_violations(&off_by_default).len(), 1);
+    for name in HUB_SOCKET_DEPS {
+        let required = HUB_SOCKET_DEPS.iter().map(|n| dep(n, *n != name)).collect();
+        let pkg = core(required, vec![HUB_SOCKET_FEATURE], enabling.clone());
+        assert_eq!(hub_socket_dep_violations(&pkg).len(), 1, "{name} required");
+        let unenabled = enabling
+            .iter()
+            .copied()
+            .filter(|e| *e != format!("dep:{name}"));
+        let pkg = core(all_deps(), vec![HUB_SOCKET_FEATURE], unenabled.collect());
+        assert_eq!(hub_socket_dep_violations(&pkg).len(), 1, "{name} unenabled");
+        let missing = HUB_SOCKET_DEPS
+            .iter()
+            .filter(|n| **n != name)
+            .map(|n| dep(n, true));
+        let pkg = core(
+            missing.collect(),
+            vec![HUB_SOCKET_FEATURE],
+            enabling.clone(),
+        );
+        assert_eq!(hub_socket_dep_violations(&pkg).len(), 1, "{name} missing");
+    }
+
+    let runner = |uses_default: bool, features: Vec<&str>, own: Value| {
+        serde_json::json!({
+            "dependencies": [{
+                "name": CORE, "kind": null,
+                "uses_default_features": uses_default, "features": features,
+            }],
+            "features": own,
+        })
+    };
+    let clean = runner(false, vec!["vendored-openssl"], serde_json::json!({}));
+    assert!(runner_hub_socket_violations(&clean).is_empty());
+    let defaults = runner(true, vec![], serde_json::json!({}));
+    assert_eq!(runner_hub_socket_violations(&defaults).len(), 1);
+    let named = runner(false, vec![HUB_SOCKET_FEATURE], serde_json::json!({}));
+    assert_eq!(runner_hub_socket_violations(&named).len(), 1);
+    for forward in [
+        format!("{CORE}/{HUB_SOCKET_FEATURE}"),
+        format!("{CORE}?/{HUB_SOCKET_FEATURE}"),
+    ] {
+        let own = serde_json::json!({ "desktop": [forward] });
+        assert_eq!(
+            runner_hub_socket_violations(&runner(false, vec![], own)).len(),
+            1
+        );
+    }
 }
 
 const EXPECTED_TABLES: [&str; 12] = [

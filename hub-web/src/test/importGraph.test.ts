@@ -361,6 +361,8 @@ describe('the real tree, walked from hub-web and the canvas', () => {
     expect(visited).toEqual(
       expect.arrayContaining([
         'hub-web/src/App.tsx',
+        'hub-web/src/views/Dispatch.tsx',
+        'hub-web/src/components/DispatchPipeline.tsx',
         'src/components/canvas/nodeCatalog.ts',
         'src/components/canvas/nodes/WorkflowNode.tsx',
       ]),
@@ -372,13 +374,16 @@ describe('the real tree, walked from hub-web and the canvas', () => {
 describe('the real tree, walked from hub-web alone', () => {
   const HUB_ROOT = 'hub-web/src/main.tsx';
   const RUN_VIEW = 'hub-web/src/views/Run.tsx';
+  const PIPELINE = 'hub-web/src/components/DispatchPipeline.tsx';
   const CANVAS = 'src/components/canvas/WorkflowCanvas.tsx';
 
-  it('reaches the shared canvas, and only through the Run view', () => {
-    const withoutRun: SourceTree = { read: (path) => (path === RUN_VIEW ? null : checkout.read(path)) };
+  it('reaches the shared canvas, and only through the Run view and the dispatch pipeline', () => {
+    const withoutRun: SourceTree = {
+      read: (path) => (path === RUN_VIEW || path === PIPELINE ? null : checkout.read(path)),
+    };
 
     expect(findImportViolations([HUB_ROOT], checkout).visited).toEqual(
-      expect.arrayContaining([RUN_VIEW, CANVAS]),
+      expect.arrayContaining([RUN_VIEW, PIPELINE, CANVAS]),
     );
     expect(findImportViolations([HUB_ROOT], withoutRun).visited).not.toContain(CANVAS);
   });

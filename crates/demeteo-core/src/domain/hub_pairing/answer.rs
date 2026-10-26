@@ -32,6 +32,7 @@ pub struct HubPins {
 /// A token that must reach neither a log, an IPC payload nor SQLite: no
 /// `Display`, no `Serialize`, and a `Debug` that prints `<redacted>`, so the
 /// only way to its text is the deliberate [`SecretString::expose`].
+#[derive(Clone)]
 pub struct SecretString(String);
 
 impl SecretString {
@@ -57,11 +58,10 @@ pub struct IssuedTokens {
 #[derive(Deserialize)]
 pub struct PairingAnswer {
     access_token: String,
-    /// Read by nothing yet — no Hub route accepts an access token — but
-    /// declared so an answer without them is malformed rather than accepted.
+    /// Not read: the Hub issues only `DPoP` tokens. Declared so an answer
+    /// without it is malformed rather than accepted.
     #[allow(dead_code)]
     token_type: String,
-    #[allow(dead_code)]
     expires_in: u64,
     refresh_token: String,
     scope: String,
@@ -78,6 +78,11 @@ struct AnswerPasskey {
 }
 
 impl PairingAnswer {
+    /// Seconds the access token is valid for.
+    pub fn expires_in(&self) -> u64 {
+        self.expires_in
+    }
+
     /// `origin` is [`super::hub_origin`]'s, `jkt` the device key's
     /// thumbprint, `now` unix seconds. The Hub joins its scopes with single
     /// spaces.
@@ -107,6 +112,33 @@ impl PairingAnswer {
     }
 }
 
+/// What `/token` answers a rotation with: a `Deserialize` mirror of
+/// demeteo-hub's `RefreshResponse` (`crates/demeteo-hub/src/pairing/grant.rs`).
+/// Private fields and no `Debug`, as [`PairingAnswer`].
+#[derive(Deserialize)]
+pub struct RefreshAnswer {
+    access_token: String,
+    /// Not read, for the reason given on [`PairingAnswer`].
+    #[allow(dead_code)]
+    token_type: String,
+    expires_in: u64,
+    refresh_token: String,
+}
+
+impl RefreshAnswer {
+    /// Seconds the access token is valid for.
+    pub fn expires_in(&self) -> u64 {
+        self.expires_in
+    }
+
+    pub fn into_tokens(self) -> IssuedTokens {
+        IssuedTokens {
+            refresh: SecretString(self.refresh_token),
+            access: SecretString(self.access_token),
+        }
+    }
+}
+
 /// The `application/x-www-form-urlencoded` body of the code redemption.
 /// Encoded by hand because reqwest's `form` feature is not enabled.
 pub fn token_form_body(code: &str, verifier: &str, redirect_uri: &str) -> String {
@@ -115,6 +147,14 @@ pub fn token_form_body(code: &str, verifier: &str, redirect_uri: &str) -> String
         percent_encode(code),
         percent_encode(verifier),
         percent_encode(redirect_uri)
+    )
+}
+
+/// The body of a `refresh_token` grant, encoded as [`token_form_body`] is.
+pub fn refresh_form_body(refresh_token: &str) -> String {
+    format!(
+        "grant_type=refresh_token&refresh_token={}",
+        percent_encode(refresh_token)
     )
 }
 

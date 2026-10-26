@@ -239,6 +239,15 @@ impl MemoryHub {
             .or_insert_with(|| "{}".to_owned());
     }
 
+    /// Stores a snapshot whose text is no [`Snapshot`], as Postgres holds
+    /// one written by another build.
+    pub fn snapshot_unreadable(&self) {
+        self.rows().snapshot = Some(SnapshotRow {
+            body: "{}".to_owned(),
+            updated_at: 0,
+        });
+    }
+
     pub fn instance(&self) -> InstanceView {
         let rows = self.rows();
         InstanceView {

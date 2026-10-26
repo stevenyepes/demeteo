@@ -84,6 +84,27 @@ const WIRE_RUN = {
 
 const WIRE_PROJECT = { id: 'p-1', name: 'demeteo', remote_url: 'https://example.com/demeteo.git' };
 
+const WIRE_NODE = { id: 's-implement', type: 'agent', title: 'Implement', position: { x: 120, y: 40 } };
+
+const WIRE_WORKFLOW = {
+  workflow_id: 'wf-feature',
+  version: 3,
+  name: 'Feature',
+  graph: {
+    nodes: [WIRE_NODE, { id: 's-gate', type: 'gate', title: 'Review', position: null }],
+    edges: [{ from: 's-implement', to: 's-gate' }],
+  },
+};
+
+const WIRE_RUN_SHAPE = {
+  project_id: 'p-1',
+  default_agent_kind: 'claude-code',
+  default_model: 'opus',
+  default_effort: 'xhigh',
+  default_workflow_id: 'wf-feature',
+  default_max_budget_cents: 500,
+};
+
 const WIRE_DETAIL = {
   id: INSTANCE_ID,
   present: true,
@@ -98,6 +119,8 @@ const WIRE_DETAIL = {
   projects: [WIRE_PROJECT],
   live_runs: [WIRE_RUN],
   harnesses: null,
+  workflows: [WIRE_WORKFLOW],
+  run_shape: [WIRE_RUN_SHAPE],
 };
 
 const DETAIL_PATH = `/v1/instances/${INSTANCE_ID}`;
@@ -283,6 +306,30 @@ describe('getInstance', () => {
         },
       ],
       harnesses: null,
+      workflows: [
+        {
+          workflowId: 'wf-feature',
+          version: 3,
+          name: 'Feature',
+          graph: {
+            nodes: [
+              { id: 's-implement', type: 'agent', title: 'Implement', position: { x: 120, y: 40 } },
+              { id: 's-gate', type: 'gate', title: 'Review', position: null },
+            ],
+            edges: [{ from: 's-implement', to: 's-gate' }],
+          },
+        },
+      ],
+      runShape: [
+        {
+          projectId: 'p-1',
+          agentKind: 'claude-code',
+          model: 'opus',
+          effort: 'xhigh',
+          workflowId: 'wf-feature',
+          maxBudgetCents: 500,
+        },
+      ],
     });
     expect(pending).toEqual([]);
   });
@@ -300,6 +347,8 @@ describe('getInstance', () => {
         read_granted: false,
         projects: null,
         live_runs: null,
+        workflows: null,
+        run_shape: null,
       }),
     ]);
 
@@ -314,13 +363,58 @@ describe('getInstance', () => {
       projects: null,
       liveRuns: null,
       harnesses: null,
+      workflows: null,
+      runShape: null,
     });
   });
 
-  it('keeps an empty project and run list empty, distinct from withheld', async () => {
-    stubFetch([get(DETAIL_PATH, { ...WIRE_DETAIL, projects: [], live_runs: [] })]);
+  it('keeps an empty project, run, workflow and run-shape list empty, distinct from withheld', async () => {
+    stubFetch([
+      get(DETAIL_PATH, { ...WIRE_DETAIL, projects: [], live_runs: [], workflows: [], run_shape: [] }),
+    ]);
 
-    await expect(getInstance(INSTANCE_ID)).resolves.toMatchObject({ projects: [], liveRuns: [] });
+    await expect(getInstance(INSTANCE_ID)).resolves.toMatchObject({
+      projects: [],
+      liveRuns: [],
+      workflows: [],
+      runShape: [],
+    });
+  });
+
+  it('accepts a workflow with no readable graph and run-shape defaults that are all null', async () => {
+    stubFetch([
+      get(DETAIL_PATH, {
+        ...WIRE_DETAIL,
+        workflows: [{ ...WIRE_WORKFLOW, graph: null }],
+        run_shape: [
+          {
+            project_id: 'p-1',
+            default_agent_kind: null,
+            default_model: null,
+            default_effort: null,
+            default_workflow_id: null,
+            default_max_budget_cents: null,
+          },
+        ],
+      }),
+    ]);
+
+    await expect(getInstance(INSTANCE_ID)).resolves.toMatchObject({
+      workflows: [{ workflowId: 'wf-feature', graph: null }],
+      runShape: [
+        { projectId: 'p-1', agentKind: null, model: null, effort: null, workflowId: null, maxBudgetCents: null },
+      ],
+    });
+  });
+
+  it.each(['extreme', 'High'])('maps the unknown effort %j to null instead of refusing the answer', async (effort) => {
+    stubFetch([get(DETAIL_PATH, { ...WIRE_DETAIL, run_shape: [{ ...WIRE_RUN_SHAPE, default_effort: effort }] })]);
+
+    const detail = await getInstance(INSTANCE_ID);
+
+    expect(detail.runShape).toEqual([
+      { projectId: 'p-1', agentKind: 'claude-code', model: 'opus', effort: null, workflowId: 'wf-feature', maxBudgetCents: 500 },
+    ]);
   });
 
   it('accepts a run whose started_at and remote_url are null', async () => {
@@ -388,6 +482,42 @@ describe('getInstance', () => {
     ['no harnesses', { ...WIRE_DETAIL, harnesses: undefined }],
     ['a project with no name', { ...WIRE_DETAIL, projects: [{ ...WIRE_PROJECT, name: undefined }] }],
     ['a project with no remote_url', { ...WIRE_DETAIL, projects: [{ id: 'p-1', name: 'demeteo' }] }],
+    ['no workflows', { ...WIRE_DETAIL, workflows: undefined }],
+    ['no run_shape', { ...WIRE_DETAIL, run_shape: undefined }],
+    ['workflows that are no list', { ...WIRE_DETAIL, workflows: {} }],
+    ['a run_shape that is no list', { ...WIRE_DETAIL, run_shape: 'p-1' }],
+    ['a workflow with a string version', { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, version: '3' }] }],
+    ['a workflow with no graph', { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, graph: undefined }] }],
+    [
+      'a graph with no edges',
+      { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, graph: { nodes: [WIRE_NODE] } }] },
+    ],
+    [
+      'a node with no type',
+      { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, graph: { nodes: [{ ...WIRE_NODE, type: undefined }], edges: [] } }] },
+    ],
+    [
+      'a node with a string position',
+      { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, graph: { nodes: [{ ...WIRE_NODE, position: '0,0' }], edges: [] } }] },
+    ],
+    [
+      'a node position with no y',
+      { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, graph: { nodes: [{ ...WIRE_NODE, position: { x: 0 } }], edges: [] } }] },
+    ],
+    [
+      'an edge with no to',
+      { ...WIRE_DETAIL, workflows: [{ ...WIRE_WORKFLOW, graph: { nodes: [WIRE_NODE], edges: [{ from: 's-implement' }] } }] },
+    ],
+    ['a run-shape entry with no project_id', { ...WIRE_DETAIL, run_shape: [{ ...WIRE_RUN_SHAPE, project_id: undefined }] }],
+    [
+      'a run-shape entry with no default_effort',
+      { ...WIRE_DETAIL, run_shape: [{ ...WIRE_RUN_SHAPE, default_effort: undefined }] },
+    ],
+    ['a numeric default_effort', { ...WIRE_DETAIL, run_shape: [{ ...WIRE_RUN_SHAPE, default_effort: 7 }] }],
+    [
+      'a string default_max_budget_cents',
+      { ...WIRE_DETAIL, run_shape: [{ ...WIRE_RUN_SHAPE, default_max_budget_cents: '500' }] },
+    ],
     ['null', null],
   ])('refuses a detail with %s', async (_, detail) => {
     stubFetch([get(DETAIL_PATH, detail)]);

@@ -1030,6 +1030,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "demeteo-core",
+ "demeteo-hub-protocol",
  "futures",
  "getrandom 0.3.4",
  "jsonschema",
@@ -1039,6 +1040,8 @@ dependencies = [
  "refinery",
  "reqwest",
  "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -1048,6 +1051,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -5758,7 +5762,10 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
 ]
 
@@ -6065,6 +6072,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1 0.10.7",
  "thiserror 2.0.19",
 ]

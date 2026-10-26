@@ -6,15 +6,17 @@
 //! — the origin spelling, the authorize parameters, the loopback redirect —
 //! are mirrored here and table-tested in `src-tauri/tests/infrastructure/hub.rs`.
 //!
-//! [`hub_origin`] is the single source of the origin: `/authorize`, `/token`
-//! and the DPoP `htu` are all derived from it. A trailing slash, an
+//! [`hub_origin`] is the single source of the origin: `/authorize`, `/token`,
+//! `/socket` and the DPoP `htu` are all derived from it. A trailing slash, an
 //! uppercase host or an explicit `:443` that reached any one of them would
 //! make every proof fail the Hub's exact `htu` comparison.
 
 use std::time::Duration;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use reqwest::Url;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub mod answer;
@@ -24,11 +26,12 @@ pub mod jwk;
 pub mod keyring_names;
 pub mod pkce;
 
-pub use answer::{HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, SecretString};
+pub use answer::{
+    HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, RefreshAnswer, SecretString,
+};
 
-/// The scopes a desktop requests, in the Hub's spelling
-/// (`demeteo-hub-protocol`'s `Scope`). Spelled here rather than imported so
-/// the core does not take a dependency on the Hub's protocol crate.
+/// The scopes a desktop requests: every [`demeteo_hub_protocol::Scope`], in its
+/// wire spelling, space-separated as the OAuth `scope` parameter carries them.
 pub const SCOPES: &str = "read spend gates";
 
 /// The Hub's consent TTL (300 s) plus its authorization-code TTL (60 s),
@@ -51,9 +54,10 @@ pub enum HubSecret {
     RefreshToken,
 }
 
-/// Whether this install is paired. Not liveness: no Hub route accepts an
-/// access token yet, so "paired" means only that both halves of the pairing
-/// are present locally.
+/// Whether this install is paired, judged from local storage alone — the
+/// pins and both keyring halves, see [`pairing_state`] — with no call to the
+/// Hub. Not socket liveness: a socket that has stopped, after a refused
+/// refresh for instance, still reads `Paired`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HubPairingState {
@@ -124,10 +128,10 @@ pub fn token_error(code: &str) -> HubPairingError {
     }
 }
 
-/// [`token_error`] of a non-2xx `/token` body. Anything but a code in the
-/// Hub's own spelling is malformed, so a body from a proxy or a hostile
-/// server never reaches the user's error text.
-pub fn token_refusal(body: &[u8]) -> HubPairingError {
+/// The `{"error": code}` of a Hub refusal body, `/token`'s or `/socket`'s.
+/// Anything but a code in the Hub's own spelling is `None`, so a body from a
+/// proxy or a hostile server never reaches the user's error text.
+pub fn hub_error_code(body: &[u8]) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct ErrorBody {
         error: String,
@@ -139,9 +143,18 @@ pub fn token_refusal(body: &[u8]) -> HubPairingError {
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
     };
-    match serde_json::from_slice::<ErrorBody>(body) {
-        Ok(ErrorBody { error }) if is_hub_code(&error) => token_error(&error),
-        _ => {
+    serde_json::from_slice::<ErrorBody>(body)
+        .ok()
+        .map(|body| body.error)
+        .filter(|code| is_hub_code(code))
+}
+
+/// [`token_error`] of a non-2xx `/token` body; one without a
+/// [`hub_error_code`] is malformed.
+pub fn token_refusal(body: &[u8]) -> HubPairingError {
+    match hub_error_code(body) {
+        Some(error) => token_error(&error),
+        None => {
             HubPairingError::MalformedAnswer("the Hub refused /token without an error code".into())
         }
     }
@@ -265,9 +278,39 @@ pub fn hub_origin(hub_url: &str) -> Result<String, HubPairingError> {
     })
 }
 
-/// The token endpoint, which is also the DPoP `htu` of every proof.
+/// The token endpoint, which is also the DPoP `htu` of every proof to it.
 pub fn token_url(origin: &str) -> String {
     format!("{origin}/token")
+}
+
+/// The DPoP `htu` of a `GET /socket` proof: the origin's `https` spelling,
+/// never the `wss` one [`socket_dial_url`] dials. The Hub builds the `htu`
+/// it compares from its configured origin (`spent_proof` in
+/// `crates/demeteo-hub/src/socket/handler.rs`), so this is the only spelling
+/// a proof can match.
+pub fn socket_url(origin: &str) -> String {
+    format!("{origin}/socket")
+}
+
+/// The URL the socket is dialled at. `origin` is one [`hub_origin`] returned,
+/// so `http` here is only ever `localhost`.
+pub fn socket_dial_url(origin: &str) -> Result<String, HubPairingError> {
+    let (scheme, rest) = if let Some(rest) = origin.strip_prefix("https://") {
+        ("wss", rest)
+    } else if let Some(rest) = origin.strip_prefix("http://") {
+        ("ws", rest)
+    } else {
+        return Err(HubPairingError::InvalidHubUrl(
+            "the Hub origin must use https".into(),
+        ));
+    };
+    Ok(format!("{scheme}://{rest}/socket"))
+}
+
+/// A proof's `ath` (RFC 9449 §4.2): unpadded base64url of SHA-256 over the
+/// access token's bytes, taken as presented.
+pub fn access_token_hash(token: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
 }
 
 /// The variable parameters of the Hub's `GET /authorize`. The Hub requires
