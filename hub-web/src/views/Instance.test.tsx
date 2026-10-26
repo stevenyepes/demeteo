@@ -55,6 +55,8 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
     projects: [],
     live_runs: [],
     harnesses: null,
+    workflows: [],
+    run_shape: [],
     ...overrides,
   };
 }
@@ -158,7 +160,7 @@ describe('Instance', () => {
   });
 
   it('shows runs and projects as withheld, not empty, when read is off', async () => {
-    await renderLoaded(detail({ read_granted: false, scopes: [], projects: null, live_runs: null }));
+    await renderLoaded(detail({ read_granted: false, scopes: [], projects: null, live_runs: null, workflows: null, run_shape: null }));
 
     const running = screen.getByRole('region', { name: 'Running now' });
     const projects = screen.getByRole('region', { name: 'Projects' });
@@ -170,10 +172,10 @@ describe('Instance', () => {
     expect(projects).not.toHaveTextContent(/no projects/i);
   });
 
-  it('links Run here to Dispatch', async () => {
+  it('links Run here to Dispatch on this instance', async () => {
     await renderLoaded(detail());
 
-    expect(screen.getByRole('link', { name: 'Run here' })).toHaveAttribute('href', '#/dispatch');
+    expect(screen.getByRole('link', { name: 'Run here' })).toHaveAttribute('href', `#/instances/${ID}/dispatch`);
   });
 
   it('shows presence, platform and connection facts', async () => {

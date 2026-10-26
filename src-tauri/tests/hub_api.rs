@@ -25,8 +25,9 @@ use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::protocol::{
     CancelFeature, Decision, Effort, GateDecision, ProjectSnapshot, RefusalReason, RequestOutcome,
-    RequestPayload, RunEvent, RunEventKind, RunEventPayload, Scope, SetStepAssignment, Snapshot,
-    StartFeature, StepOverride, WebAuthnAssertion,
+    RequestPayload, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings, Scope,
+    SetStepAssignment, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
+    WorkflowVersionSnapshot,
 };
 use demeteo_hub::socket::connections::Connections;
 use demeteo_hub::socket::port::SocketStore;
@@ -549,6 +550,174 @@ async fn an_instance_shows_its_projects_and_live_runs_and_nothing_unreported() {
     assert_eq!(detail["read_granted"], json!(true));
     assert_eq!(detail["scopes"], json!(["read", "spend", "gates"]));
     assert_eq!(detail["present"], json!(false));
+}
+
+/// Strings the instance holds that the browser must never read: a node's
+/// prompt and command, an edge's guard, the v1 step list and the note.
+const WITHHELD: [&str; 5] = [
+    "SENTINEL-PROMPT",
+    "SENTINEL-COMMAND",
+    "SENTINEL-GUARD",
+    "SENTINEL-STEPS",
+    "SENTINEL-NOTE",
+];
+
+fn workflow_version(
+    workflow_id: &str,
+    version: u32,
+    definition_json: Option<String>,
+) -> WorkflowVersionSnapshot {
+    WorkflowVersionSnapshot {
+        id: format!("{workflow_id}@{version}"),
+        workflow_id: workflow_id.to_owned(),
+        version,
+        steps_json: r#"[{"prompt_template":"SENTINEL-STEPS"}]"#.to_owned(),
+        definition_json,
+        note: Some("SENTINEL-NOTE".to_owned()),
+        created_at: 1_700_000_000,
+    }
+}
+
+fn definition(name: &str, title: &str) -> String {
+    json!({
+        "schema_version": 2,
+        "id": "wf-a",
+        "name": name,
+        "nodes": [
+            {"id": "s-plan", "type": "agent", "type_version": 1, "title": title,
+             "config": {"prompt_template": "SENTINEL-PROMPT"},
+             "retry": {"verdict": {"max_attempts": 2}}, "join": "all_success",
+             "position": {"x": 10.0, "y": 20.5}},
+            {"id": "s-build", "type": "command", "title": "Build",
+             "config": {"command": "SENTINEL-COMMAND"}},
+        ],
+        "edges": [{"from": "s-plan", "to": "s-build", "when": "SENTINEL-GUARD"}],
+        "defaults": {"join": "all_done"},
+    })
+    .to_string()
+}
+
+/// [`two_projects`] with three versions of `wf-a`, the latest not last; a
+/// `wf-b` from before schema v2; a `wf-c` whose document is no JSON; and one
+/// project's run shape.
+fn two_projects_with_workflows() -> Snapshot {
+    Snapshot {
+        workflows: vec![
+            workflow_version("wf-a", 1, Some(definition("Alpha v1", "Plan v1"))),
+            workflow_version("wf-a", 3, Some(definition("Alpha", "Plan"))),
+            workflow_version("wf-a", 2, Some(definition("Alpha v2", "Plan v2"))),
+            workflow_version("wf-b", 1, None),
+            workflow_version("wf-c", 4, Some("not json".to_owned())),
+        ],
+        run_shape: vec![RunShapeSettings {
+            project_id: "p-1".to_owned(),
+            default_agent_kind: Some("claude-code".to_owned()),
+            default_model: Some("opus".to_owned()),
+            default_effort: Some(Effort::High),
+            default_workflow_id: Some("wf-a".to_owned()),
+            default_loop_iterations: Some(3),
+            default_max_budget_cents: Some(500),
+        }],
+        ..two_projects()
+    }
+}
+
+#[tokio::test]
+async fn an_instance_offers_each_workflow_once_at_its_latest_version_as_a_graph_alone() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    fleet
+        .snapshot_sent(instance, two_projects_with_workflows())
+        .await;
+
+    let detail = detail_json(&parts.over(&fleet), user, &instance.0.to_string()).await;
+
+    assert_eq!(
+        detail["workflows"],
+        json!([
+            {"workflow_id": "wf-a", "version": 3, "name": "Alpha", "graph": {
+                "nodes": [
+                    {"id": "s-plan", "type": "agent", "title": "Plan",
+                     "position": {"x": 10.0, "y": 20.5}},
+                    {"id": "s-build", "type": "command", "title": "Build", "position": null},
+                ],
+                "edges": [{"from": "s-plan", "to": "s-build"}],
+            }},
+            {"workflow_id": "wf-b", "version": 1, "name": "wf-b", "graph": null},
+            {"workflow_id": "wf-c", "version": 4, "name": "wf-c", "graph": null},
+        ])
+    );
+    assert_eq!(
+        detail["run_shape"],
+        json!([{
+            "project_id": "p-1",
+            "default_agent_kind": "claude-code",
+            "default_model": "opus",
+            "default_effort": "high",
+            "default_workflow_id": "wf-a",
+            "default_max_budget_cents": 500,
+        }])
+    );
+    assert_eq!(detail["projects"][0]["id"], json!("p-1"));
+}
+
+#[tokio::test]
+async fn an_instances_workflows_carry_no_prompt_command_guard_or_step_list() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    fleet
+        .snapshot_sent(instance, two_projects_with_workflows())
+        .await;
+
+    let detail = detail_json(&parts.over(&fleet), user, &instance.0.to_string()).await;
+
+    let text = detail.to_string();
+    assert!(text.contains("s-plan"), "the graph is shown: {text}");
+    for sentinel in WITHHELD {
+        assert!(
+            !text.contains(sentinel),
+            "{sentinel} reached the browser: {text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_instance_with_no_readable_snapshot_offers_no_workflows_and_no_run_shape() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    let api = parts.over(&fleet);
+
+    let unsent = detail_json(&api, user, &instance.0.to_string()).await;
+    fleet.snapshot_unreadable(instance);
+    let unreadable = detail_json(&api, user, &instance.0.to_string()).await;
+
+    for detail in [unsent, unreadable] {
+        assert_eq!(member(&detail, "workflows"), &json!([]));
+        assert_eq!(member(&detail, "run_shape"), &json!([]));
+        assert_eq!(member(&detail, "projects"), &json!([]));
+    }
+}
+
+#[tokio::test]
+async fn an_instance_without_read_withholds_its_workflows_and_run_shape() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &[Scope::Spend, Scope::Gates]);
+    fleet
+        .snapshot_sent(instance, two_projects_with_workflows())
+        .await;
+
+    let detail = detail_json(&parts.over(&fleet), user, &instance.0.to_string()).await;
+
+    assert_eq!(member(&detail, "workflows"), &Value::Null);
+    assert_eq!(member(&detail, "run_shape"), &Value::Null);
 }
 
 #[tokio::test]

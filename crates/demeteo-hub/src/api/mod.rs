@@ -43,6 +43,7 @@ pub mod request_status;
 pub mod run_state;
 pub mod runs;
 pub mod scope;
+pub mod snapshot_view;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 

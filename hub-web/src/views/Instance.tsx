@@ -93,7 +93,7 @@ function Loaded({ detail, id }: { detail: InstanceDetail; id: ReactNode }) {
         </span>
         <span className="text-xs text-slate-400">{platform === '' ? 'Platform not reported' : platform}</span>
         <a
-          href={routeHref({ name: 'dispatch' })}
+          href={routeHref({ name: 'dispatch', instanceId: detail.id })}
           className="btn-primary ml-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
         >
           Run here

@@ -132,6 +132,10 @@ impl MemoryFleet {
         }
     }
 
+    pub fn snapshot_unreadable(&self, instance: InstanceId) {
+        self.hub(instance).snapshot_unreadable();
+    }
+
     /// The credential ids, as unpadded base64url, of `user`'s trusted
     /// passkeys from here on.
     pub fn trusted(&self, user: UserId, credential_ids: Vec<String>) {

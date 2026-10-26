@@ -11,7 +11,7 @@ export type Route =
   | { name: 'instance'; instanceId: string }
   | { name: 'runs' }
   | { name: 'run'; instanceId: string; featureId: string }
-  | { name: 'dispatch' }
+  | { name: 'dispatch'; instanceId?: string }
   | { name: 'add-instance' }
   | { name: 'pair'; request: string }
   | { name: 'sign-up' }
@@ -32,12 +32,13 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
   switch (route.name) {
     case 'fleet':
     case 'runs':
-    case 'dispatch':
     case 'add-instance':
     case 'sign-up':
     case 'sign-in':
     case 'passkeys':
       return [route.name];
+    case 'dispatch':
+      return route.instanceId === undefined ? ['dispatch'] : ['instances', route.instanceId, 'dispatch'];
     case 'pair':
       return ['pair', route.request];
     case 'instance':
@@ -79,6 +80,7 @@ function matchSegments(segments: string[] | null): Route | null {
   if (head === 'pair') return segments.length === 2 ? { name: 'pair', request: segments[1] } : null;
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };
+  if (segments.length === 3 && tail === 'dispatch') return { name: 'dispatch', instanceId };
   if (segments.length === 4 && tail === 'runs') return { name: 'run', instanceId, featureId };
   return null;
 }

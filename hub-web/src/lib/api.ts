@@ -14,13 +14,22 @@ export class HubApiError extends Error {
   readonly status: number | null;
   /** The `error` string of a non-2xx JSON body, or null when it carried none. */
   readonly code: string | null;
+  /** The `scope` string of a non-2xx JSON body — the withheld scope of a `scope_not_granted` — or null. */
+  readonly scope: string | null;
 
-  constructor(message: string, path: string, status: number | null, code: string | null = null) {
+  constructor(
+    message: string,
+    path: string,
+    status: number | null,
+    code: string | null = null,
+    scope: string | null = null,
+  ) {
     super(message);
     this.name = 'HubApiError';
     this.path = path;
     this.status = status;
     this.code = code;
+    this.scope = scope;
   }
 }
 
@@ -66,6 +75,17 @@ export function postJson<T>(path: string, body: unknown, guard: Guard<T>): Promi
   return request(path, { method: 'POST', headers, body: JSON.stringify(body) }, guard);
 }
 
+/**
+ * The `Blob` is the body as it stands, with no Content-Type set here: the Hub
+ * reads the raw request body as the file and answers its SHA-256, so any
+ * encoding — JSON, base64, a multipart envelope — would become part of the file.
+ */
+export function postBytes<T>(path: string, body: Blob, guard: Guard<T>): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (csrfToken !== null) headers['X-CSRF-Token'] = csrfToken;
+  return request(path, { method: 'POST', headers, body }, guard);
+}
+
 async function request<T>(path: string, init: RequestInit | undefined, guard: Guard<T>): Promise<T> {
   if (!isSameOriginPath(path)) {
     throw new HubApiError(`Not a same-origin path: ${path}`, path, null);
@@ -80,12 +100,8 @@ async function request<T>(path: string, init: RequestInit | undefined, guard: Gu
   }
   if (response.status === 401 && endsSessionOf(heldWhenSent)) dropSession();
   if (!response.ok) {
-    throw new HubApiError(
-      `${path} answered HTTP ${response.status}`,
-      path,
-      response.status,
-      await errorCodeOf(response),
-    );
+    const { code, scope } = await errorOf(response);
+    throw new HubApiError(`${path} answered HTTP ${response.status}`, path, response.status, code, scope);
   }
 
   let body: unknown;
@@ -111,16 +127,20 @@ function endsSessionOf(heldWhenSent: string | null): boolean {
   return heldWhenSent !== null && heldWhenSent === csrfToken;
 }
 
-async function errorCodeOf(response: Response): Promise<string | null> {
+async function errorOf(response: Response): Promise<{ code: string | null; scope: string | null }> {
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    return null;
+    return { code: null, scope: null };
   }
-  if (typeof body !== 'object' || body === null) return null;
+  if (typeof body !== 'object' || body === null) return { code: null, scope: null };
   const code: unknown = Reflect.get(body, 'error');
-  return typeof code === 'string' ? code : null;
+  const scope: unknown = Reflect.get(body, 'scope');
+  return {
+    code: typeof code === 'string' ? code : null,
+    scope: typeof scope === 'string' ? scope : null,
+  };
 }
 
 /**

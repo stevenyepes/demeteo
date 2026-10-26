@@ -851,7 +851,7 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | Method and path | Scope | Answer |
 |---|---|---|
 | `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs` and `needs_you` |
-| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url}` and its live runs |
+| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url}`, its `workflows` (graph-only, below), its `run_shape` and its live runs |
 | `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
 | `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, steps, ticket progress, pending gates and events in offset order |
 | `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
@@ -861,6 +861,22 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | `POST /v1/instances/{instance_id}/gates/challenge` | `gates` | `200`, a held challenge and the `navigator.credentials.get` options over it |
 | `POST /v1/instances/{instance_id}/gates/decision` | `gates` | `202 {request_id, expires_at}`, a `gate_decision` queued |
 | `GET /v1/instances/{instance_id}/requests/{request_id}` | none beyond owning the instance | `200`, the request's kind, derived status, `deliveries`, `expires_at` and `answered_at` |
+
+**An instance's workflows are graph-only.** `workflows` holds one entry per
+`workflow_id`, at its highest `version`, as `{workflow_id, version, name,
+graph}`, ordered by `name`. `name` is the definition's own, or the
+`workflow_id` when it has none. `graph` is `{nodes: [{id, type, title,
+position}], edges: [{from, to}]}`, read from `definition_json`, and `null` when
+the version has no such document or it does not parse; the Hub does not derive
+one from `steps_json`. No node `config`, `retry` or `join`, no edge `when`, and
+neither `steps_json` nor `note` reaches the browser: the browser needs only the
+shape to choose a workflow and name its steps, and §11 item 11 leaves open
+whether that text may reach the Hub at all. `run_shape` is each project's
+dispatch defaults — agent kind, model, effort, workflow id and maximum budget in
+cents; `default_loop_iterations` is left out, since a dispatch has no field for
+it. Both follow the read-scope rule of `projects`: `null` without `read`, `[]`
+until a readable snapshot arrives. The projection is
+[`api/snapshot_view.rs`](../crates/demeteo-hub/src/api/snapshot_view.rs).
 
 **The attachment fetch is not a session route.** `GET /attachments/{attachment_id}`
 is outside `/v1`, beside `/socket` and `/token`, because its caller is an
@@ -1342,10 +1358,10 @@ are built, and four things are not:
   nothing writes `device_keys.revoked_at`. The desktop's disconnect is local
   (§4 *Revocation*). Until a route exists a pairing ends by reuse detection, by
   its refresh token expiring, or by being replaced (§4).
-- **An attach control in the browser.** The Hub's half of attachments (§6.3)
-  is built — the upload, a dispatch that names them, the fetch and the sweep —
-  but `hub-web`'s Dispatch view is a placeholder, so nothing on screen uploads
-  a file yet, and no desktop fetches one.
+- **A desktop that fetches an attachment.** The Hub's half of attachments
+  (§6.3) is built — the upload, a dispatch that names them, the fetch and the
+  sweep — and `hub-web`'s Dispatch view uploads files before it dispatches, but
+  no desktop fetches one yet.
 
 The session API (§6.4) queues requests, so the Hub has requests to send; they
 reach a paired desktop, and none is answered yet. Two routes take an access

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { dropSession, getJson, HubApiError, onSessionGone, postJson, setCsrfToken } from './api';
+import {
+  dropSession,
+  getJson,
+  HubApiError,
+  onSessionGone,
+  postBytes,
+  postJson,
+  setCsrfToken,
+} from './api';
 
 interface Fleet {
   instances: string[];
@@ -213,6 +221,78 @@ describe('postJson', () => {
   );
 });
 
+describe('postBytes', () => {
+  it('posts the Blob itself as the body, with no Content-Type of its own', async () => {
+    setCsrfToken('tok-1');
+    const fetchDouble = stubFetch({ '/v1/instances/i-1/attachments': json({ instances: ['a-1'] }, 201) });
+    const file = new Blob(['%PDF-1.7 raw'], { type: 'application/pdf' });
+
+    await expect(postBytes('/v1/instances/i-1/attachments', file, isFleet)).resolves.toEqual({
+      instances: ['a-1'],
+    });
+
+    expect(fetchDouble).toHaveBeenCalledTimes(1);
+    const init = fetchDouble.mock.calls[0]?.[1];
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(file);
+    expect(sentHeaders(fetchDouble).get('X-CSRF-Token')).toBe('tok-1');
+    expect(sentHeaders(fetchDouble).has('Content-Type')).toBe(false);
+  });
+
+  it('sends no X-CSRF-Token while no token is set', async () => {
+    const before = stubFetch({ '/v1/up': json({ instances: [] }) });
+    await postBytes('/v1/up', new Blob(['x']), isFleet);
+    expect(sentHeaders(before).has('X-CSRF-Token')).toBe(false);
+  });
+
+  it('rejects a 413 with the code attachment_too_large', async () => {
+    setCsrfToken('tok-1');
+    stubFetch({ '/v1/up': json({ error: 'attachment_too_large' }, 413) });
+
+    const error = await rejectionOf(postBytes('/v1/up', new Blob(['x']), isFleet));
+
+    expect(error.status).toBe(413);
+    expect(error.code).toBe('attachment_too_large');
+    expect(error.scope).toBeNull();
+  });
+
+  it.each(['https://evil.example/x', '//evil.example/x', 'v1/up', '/\\evil.example/x'])(
+    'rejects the path %j without calling fetch',
+    async (path) => {
+      const fetchDouble = stubFetch();
+
+      const error = await rejectionOf(postBytes(path, new Blob(['x']), isFleet));
+
+      expect(error.status).toBeNull();
+      expect(fetchDouble).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('HubApiError.scope', () => {
+  it('carries the scope of a scope_not_granted answer', async () => {
+    stubFetch({ '/v1/up': json({ error: 'scope_not_granted', scope: 'spend' }, 409) });
+
+    const error = await rejectionOf(postBytes('/v1/up', new Blob(['x']), isFleet));
+
+    expect(error.status).toBe(409);
+    expect(error.code).toBe('scope_not_granted');
+    expect(error.scope).toBe('spend');
+  });
+
+  it.each([
+    ['another error code', json({ error: 'forbidden' }, 403)],
+    ['a scope that is not a string', json({ error: 'scope_not_granted', scope: 7 }, 409)],
+    ['a body that is not JSON', new Response('<!doctype html>', { status: 409 })],
+  ])('is null for %s', async (_shape, response) => {
+    stubFetch({ '/v1/fleet': response });
+
+    const error = await rejectionOf(postJson('/v1/fleet', {}, isFleet));
+
+    expect(error.scope).toBeNull();
+  });
+});
+
 describe('a 401 answered while a token is held', () => {
   const UNAUTHENTICATED = { error: 'unauthenticated' };
 
@@ -225,6 +305,7 @@ describe('a 401 answered while a token is held', () => {
   it.each([
     ['getJson', () => getJson('/v1/passkeys', isFleet)],
     ['postJson', () => postJson('/v1/passkeys', {}, isFleet)],
+    ['postBytes', () => postBytes('/v1/passkeys', new Blob(['x']), isFleet)],
   ])('through %s, tells the listener once, drops the token and still rejects', async (_verb, send) => {
     const { told, stop } = listen();
     setCsrfToken('tok-1');
