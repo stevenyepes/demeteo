@@ -73,6 +73,22 @@ pub fn token_free_origin(remote_url: &str) -> Option<String> {
     ))
 }
 
+/// The same remote with its whole userinfo removed (`https://user:tok@h/r` →
+/// `https://h/r`), or `None` when it is not an http(s) URL; a URL without
+/// userinfo comes back unchanged.
+///
+/// Unlike [`token_free_origin`], which keeps the user for a credential helper
+/// to key on, this is for a URL that leaves the machine, so the user goes too:
+/// a PAT is accepted as the *username* (`https://ghp_x@github.com/o/r`), and
+/// dropping only the password would report it.
+pub fn without_userinfo(remote_url: &str) -> Option<String> {
+    let remote = HttpRemote::parse(remote_url)?;
+    Some(format!(
+        "{}{}{}",
+        remote.scheme, remote.host_port, remote.tail
+    ))
+}
+
 /// The password embedded in an http(s) URL's userinfo, exactly as written —
 /// still percent-encoded if the URL spelled it that way.
 ///

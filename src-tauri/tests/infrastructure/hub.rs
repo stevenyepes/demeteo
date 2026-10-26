@@ -17,7 +17,7 @@ use crate::adapters::hub::socket::wake::WakingRunEvents;
 use crate::adapters::hub::socket::{supervise, Sleeper, SocketConfig, SupervisorDeps};
 use crate::adapters::hub::testing::{
     MemorySecretStore, RefreshCall, ScriptedConnection, ScriptedRefreshEndpoint,
-    ScriptedSocketDialer,
+    ScriptedSnapshotSource, ScriptedSocketDialer,
 };
 use crate::adapters::hub::token_client::ReqwestTokenEndpoint;
 use crate::adapters::hub::HubPairing;
@@ -40,10 +40,10 @@ use crate::domain::hub_pairing::{
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, backoff, hello, hub_event, refresh_refusal, resets_backoff,
     sends_events, Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS,
-    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS,
+    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
-use crate::domain::models::{Feature, Project};
+use crate::domain::models::{Feature, Project, Workflow, WorkflowVersion};
 use crate::error::AppError;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::hub::{
@@ -1768,6 +1768,101 @@ async fn an_append_through_the_context_wakes_the_socket_the_pairing_holds() {
 }
 
 #[tokio::test]
+async fn a_router_context_hands_the_socket_a_snapshot_wake() {
+    let ctx = core_context("router-snapshot-wake", ExecutionMode::Router);
+    assert!(ctx
+        .hub
+        .as_ref()
+        .and_then(|hub| hub.snapshot_wake())
+        .is_some());
+}
+
+fn snapshot_wake(ctx: &AppContext) -> Arc<tokio::sync::Notify> {
+    ctx.hub
+        .as_ref()
+        .and_then(|hub| hub.snapshot_wake())
+        .expect("a Router context attaches the socket")
+}
+
+async fn not_woken(wake: &tokio::sync::Notify) -> bool {
+    tokio::time::timeout(Duration::from_millis(50), wake.notified())
+        .await
+        .is_err()
+}
+
+fn composed_project(id: &str) -> Project {
+    Project {
+        id: ProjectId::from(id.to_owned()),
+        name: "hub".to_owned(),
+        compute_type: "local".to_owned(),
+        remote_host: None,
+        status: "idle".to_owned(),
+        nodes: 1,
+        spend: 0.0,
+        tokens: 0,
+        created_at: 1000,
+    }
+}
+
+#[tokio::test]
+async fn a_version_saved_through_the_context_wakes_the_snapshot_the_socket_holds() {
+    let ctx = core_context("router-snapshot-version", ExecutionMode::Router);
+    let wake = snapshot_wake(&ctx);
+    assert!(not_woken(&wake).await, "nothing was written yet");
+    ctx.workflows
+        .create(Workflow {
+            id: "wf-1".into(),
+            name: "Ship".to_owned(),
+            description: String::new(),
+            is_starter: false,
+            created_at: 0,
+            updated_at: 0,
+            schedule: None,
+        })
+        .unwrap();
+    assert!(woken(&wake).await, "creating the workflow wakes it too");
+
+    ctx.workflows
+        .save_version(WorkflowVersion {
+            id: "wf-1-v1".into(),
+            workflow_id: "wf-1".into(),
+            version: 1,
+            steps_json: "[]".to_owned(),
+            definition_json: None,
+            note: None,
+            created_at: 0,
+        })
+        .unwrap();
+    assert!(woken(&wake).await);
+}
+
+#[tokio::test]
+async fn a_project_written_through_the_context_wakes_the_snapshot_the_socket_holds() {
+    let ctx = core_context("router-snapshot-project", ExecutionMode::Router);
+    let wake = snapshot_wake(&ctx);
+    ctx.projects.add(composed_project("p-1")).unwrap();
+    assert!(woken(&wake).await, "adding the project wakes it too");
+
+    let mut renamed = composed_project("p-1");
+    renamed.name = "renamed".to_owned();
+    ctx.projects.update(renamed).unwrap();
+    assert!(woken(&wake).await);
+}
+
+#[tokio::test]
+async fn a_project_status_change_through_the_context_leaves_the_snapshot_asleep() {
+    let ctx = core_context("router-snapshot-status", ExecutionMode::Router);
+    let wake = snapshot_wake(&ctx);
+    ctx.projects.add(composed_project("p-1")).unwrap();
+    assert!(woken(&wake).await, "adding the project wakes it");
+
+    ctx.projects
+        .update_status(&ProjectId::from("p-1".to_owned()), "archived")
+        .unwrap();
+    assert!(not_woken(&wake).await);
+}
+
+#[tokio::test]
 async fn the_command_cores_answer_what_the_service_answers() {
     let rig = Rig::new("hub_command_cores", Reply::Answer);
     assert_eq!(status_core(&rig.hub), Ok(rig.hub.status().unwrap()));
@@ -2955,6 +3050,8 @@ impl RefreshRig {
                 vec!["read".to_owned()],
                 run_events.clone(),
                 run_events.wake(),
+                Arc::new(ScriptedSnapshotSource::default()),
+                Arc::new(tokio::sync::Notify::new()),
             ),
             sleeper: sleeper.clone(),
             jitter: Box::new(|| 1.0),
@@ -3251,6 +3348,9 @@ fn socket_config(
         dialer: dialer.clone(),
         wake: run_events.wake(),
         run_events,
+        snapshots: Arc::new(ScriptedSnapshotSource::default()),
+        snapshot_wake: Arc::new(tokio::sync::Notify::new()),
+        snapshot_debounce: Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS),
         runtime: tokio::runtime::Handle::current(),
         sleeper: sleeper.clone(),
         jitter: || 1.0,
