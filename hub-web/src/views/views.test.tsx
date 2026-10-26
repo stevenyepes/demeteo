@@ -40,6 +40,12 @@ vi.mock('../lib/fleet', () => ({
   getInstance: () => new Promise<never>(() => {}),
 }));
 
+/** Held in flight too; `Runs.test.tsx` is where the runs list meets the Hub's answers. */
+vi.mock('../lib/runs', () => ({
+  listRuns: () => new Promise<never>(() => {}),
+  getRunDetail: () => new Promise<never>(() => {}),
+}));
+
 const SESSION: Session = { csrfToken: 'csrf-1', credentialId: 'cred-1' };
 
 const VIEWS: { heading: string; element: ReactElement }[] = [
@@ -75,12 +81,6 @@ describe('placeholder views', () => {
     const { container } = render(<Instance instanceId="inst-7" />);
 
     expect(monoTexts(container)).toEqual(['inst-7']);
-  });
-
-  it('Run shows the instance id, then the feature id, in monospace', () => {
-    const { container } = render(<Run instanceId="inst-7" featureId="feat-42" />);
-
-    expect(monoTexts(container)).toEqual(['inst-7', 'feat-42']);
   });
 
   it('NotFound shows the unmatched path and links back to Fleet', () => {

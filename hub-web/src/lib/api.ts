@@ -24,6 +24,14 @@ export class HubApiError extends Error {
   }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function rejectSyntheticInstance(instanceId: string, path: string): void {
+  if (!UUID.test(instanceId)) {
+    throw new HubApiError(`${instanceId} is not an instance id`, path, 404, 'not_found');
+  }
+}
+
 /**
  * Held here and nowhere else — never `localStorage`, `sessionStorage` or a
  * cookie. The Hub derives the token from the session secret and hands it back

@@ -1,8 +1,9 @@
-import { type Guard, getJson, HubApiError } from './api';
+import { type Guard, getJson, rejectSyntheticInstance } from './api';
+import { isWireRunSummary, type RunStatus, type RunSummary, runSummaryOf, type WireRunSummary } from './runs';
+
+export type { RunStatus, RunSummary };
 
 export type HubScope = 'read' | 'spend' | 'gates';
-
-export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type NeedsYou = {
   instanceId: string;
@@ -28,15 +29,6 @@ export type FleetInstance = {
 };
 
 export type ProjectSummary = { id: string; name: string; remoteUrl: string | null };
-
-export type RunSummary = {
-  instanceId: string;
-  featureId: string;
-  status: RunStatus;
-  startedAt: number | null;
-  updatedAt: number;
-  costCents: number | null;
-};
 
 export type InstanceDetail = {
   id: string;
@@ -79,15 +71,6 @@ type WireFleetInstance = {
 
 type WireProject = { id: string; name: string; remote_url: string | null };
 
-type WireRunSummary = {
-  instance_id: string;
-  feature_id: string;
-  status: RunStatus;
-  started_at: number | null;
-  updated_at: number;
-  cost_cents: number | null;
-};
-
 type WireInstanceDetail = {
   id: string;
   present: boolean;
@@ -106,10 +89,6 @@ type WireInstanceDetail = {
 
 const SCOPES: readonly unknown[] = ['read', 'spend', 'gates'] satisfies HubScope[];
 
-const STATUSES: readonly unknown[] = ['running', 'completed', 'failed', 'cancelled'] satisfies RunStatus[];
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export async function getFleet(): Promise<FleetInstance[]> {
   const { instances } = await getJson('/v1/fleet', isFleet);
   return instances.map(fleetInstanceOf);
@@ -117,9 +96,7 @@ export async function getFleet(): Promise<FleetInstance[]> {
 
 export async function getInstance(instanceId: string): Promise<InstanceDetail> {
   const path = `/v1/instances/${encodeURIComponent(instanceId)}`;
-  if (!UUID.test(instanceId)) {
-    throw new HubApiError(`${instanceId} is not an instance id`, path, 404, 'not_found');
-  }
+  rejectSyntheticInstance(instanceId, path);
   return instanceDetailOf(await getJson(path, isWireInstanceDetail));
 }
 
@@ -171,17 +148,6 @@ function projectOf(wire: WireProject): ProjectSummary {
   return { id: wire.id, name: wire.name, remoteUrl: wire.remote_url };
 }
 
-function runSummaryOf(wire: WireRunSummary): RunSummary {
-  return {
-    instanceId: wire.instance_id,
-    featureId: wire.feature_id,
-    status: wire.status,
-    startedAt: wire.started_at,
-    updatedAt: wire.updated_at,
-    costCents: wire.cost_cents,
-  };
-}
-
 function scopesOf(scopes: unknown[]): HubScope[] {
   return scopes.filter((scope): scope is HubScope => SCOPES.includes(scope));
 }
@@ -217,14 +183,6 @@ const isWireProject: Guard<WireProject> = (value): value is WireProject =>
   typeof memberOf(value, 'id') === 'string' &&
   typeof memberOf(value, 'name') === 'string' &&
   isStringOrNull(memberOf(value, 'remote_url'));
-
-const isWireRunSummary: Guard<WireRunSummary> = (value): value is WireRunSummary =>
-  typeof memberOf(value, 'instance_id') === 'string' &&
-  typeof memberOf(value, 'feature_id') === 'string' &&
-  STATUSES.includes(memberOf(value, 'status')) &&
-  isNumberOrNull(memberOf(value, 'started_at')) &&
-  typeof memberOf(value, 'updated_at') === 'number' &&
-  isNumberOrNull(memberOf(value, 'cost_cents'));
 
 const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireInstanceDetail =>
   typeof memberOf(value, 'id') === 'string' &&
