@@ -41,14 +41,14 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket and queued requests are delivered to it, but none is answered yet: request verification is not built on the desktop (§11 *The desktop socket's carried defaults*), and no desktop fetches an attachment yet. **Not built:** unpairing and revoking an instance |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions and the passkey kinds excepted (§6.1 *On the desktop*). **Not built:** unpairing and revoking an instance |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first |
-| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Events from **local runs only** reach the Hub (§5); no snapshot is sent and no request answered (§11) |
-| Desktop side: Settings › Hub tab | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint, and nothing shows whether the socket is connected or why it stopped |
-| Desktop side: passkey pin set, request verification, local ceilings | **pin set written at pairing, nothing verifies against it** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`. Request verification and local ceilings are **not built** |
+| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); no snapshot is sent (§11) |
+| Desktop side: Settings › Hub tab | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint, nothing shows whether the socket is connected or why it stopped, and nothing sets the toggles and ceilings of §7 or shows the activity log. The `hub_policy_get`, `hub_policy_set` and `hub_request_log` commands and their wrappers exist. Until a view calls `hub_policy_set`, `spend` and `gates` read as off and every request that needs one is refused |
+| Desktop side: passkey pin set, request verification, local ceilings | **request verification and local ceilings built; no passkey is verified against the pinned set yet** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). A `gate_decision` and the two passkey kinds are deferred, because nothing on the desktop verifies a WebAuthn assertion yet (§8) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
 | Runner dispatch from the Hub | **not built, and not part of this ticket set** — see §10 |
 
@@ -103,7 +103,7 @@ judged by what that attacker cannot do.
 | read what an instance reported: project and workflow names, step status | read a key, a transcript, a diff or a path — none was sent; nor a cost, which no protocol message reports (§5) |
 | withhold, delay or reorder requests | forge a request: the envelope is signed and the instance verifies it against the key it pinned (§6) |
 | replay a request | replay one that works: ids are single-use and expire (§6) |
-| queue a `start_feature` for an instance that has `spend` on | exceed the instance's local ceilings (§7) |
+| queue a `start_feature` for an instance that has `spend` on | declare a cap above the instance's per-run ceiling, or one that takes the 24-hour committed total above its rolling ceiling (§7). The ceilings bound declared caps, not what a run spends — §7 *The per-run ceiling bounds the declared cap, not what the run spends* |
 | relay a gate decision a human made | **make** one: no token approves; the assertion is verified on the desktop (§8) |
 | — | turn a scope on, or raise a ceiling |
 
@@ -725,8 +725,8 @@ the parsed request, and verifies the signature against the key it pinned at pair
 SHA-256: the message handed to the signer, and to the instance's verifier, is the
 pre-image as it stands. Ed25519 hashes its own input and Transit signs what it is
 handed, so a digest in between would be one more step for the two ends to disagree
-on. `signature` is the 64 signature bytes as unpadded base64url. The desktop
-verifier is not built, so what the Hub ships here is the contract it is built to.
+on. `signature` is the 64 signature bytes as unpadded base64url. The desktop's
+verifier is [`verify.rs`](../crates/demeteo-core/src/domain/hub_request/verify.rs).
 
 **A request is signed once, when it is queued**, and never again. The envelope is
 stored with its signature, and every delivery — a redelivery included (§5) — sends
@@ -749,10 +749,133 @@ dropped without a `result`. Do not add a float to any payload.
 | `request_id` | **single-use**. The Hub mints 128 random bits per request and spells them as unpadded base64url; a redelivery carries the same id. The instance records every id it accepts in its own SQLite (an id is not a secret) for at least as long as it can still be unexpired, and refuses a repeat, including across a restart |
 | `issued_at`, `expires_at` | the Hub's clock when the request was queued, and **600 seconds** after it — a carried default (§11). `expires_at` is checked against **the instance's clock**: an expired request is answered `expired` and has no effect. The Hub applies the same bound to its own clock before it sends (§5) |
 | `instance_id` | the id the pairing response gave the instance (§4), spelled the same way. It must equal this instance's id, so one instance's request cannot be replayed at another |
-| Order of checks | scope → signature → expiry → id unseen → kind-specific checks. The id is **spent when the signature verifies**, before the effect, and is **not refunded** if a later check refuses: a retry is a new request with a new id |
+| Order of checks | signature → scope → `instance_id` → expiry → id unseen → kind-specific checks. The signature is first because every later check is answered, and an answer to a request that does not verify would be the forger's. The id is **spent once signature, instance and expiry pass**, before the effect, and is **not refunded** if a later check refuses: a retry is a new request with a new id |
 
 Refusal is the default. An unknown `kind`, a kind whose scope is off, or a body
 that does not parse is answered `refused` and does nothing.
+
+#### On the desktop
+
+The rules above are decided in
+[`domain/hub_request/`](../crates/demeteo-core/src/domain/hub_request/mod.rs),
+synchronously and without I/O, and carried out by
+[`application/hub_requests.rs`](../crates/demeteo-core/src/application/hub_requests.rs),
+which the socket hands every request frame to. What a request comes to:
+
+- **A `request_id` longer than 64 bytes** (the Hub's are 22 chars) is treated
+  as no header at all, whether or not the body parses: neither answered,
+  logged nor consumed. It is checked before the signature, which is what
+  would vouch for it.
+- **A body that does not parse** is answered from its header alone, unverified
+  and unconsumed: `unknown_kind`, or `malformed_body` for a known kind. It is
+  the one answer given to a body that was not verified. A body this build
+  cannot read has no `signing_bytes` to verify a signature over, and left
+  unanswered it would sit pending on the Hub until it expired. The cost is
+  accepted: a forged body reusing a pending request's id can fix the Hub's
+  outcome for that id as refused, but it runs nothing and spends no id, and
+  only the Hub's own socket delivers frames to the desktop.
+- **A scope is in force** only if pairing approved it and the desktop's toggle
+  for it is on (§7). `read` has no toggle. A scope that is off is answered
+  `scope_off`, after the signature verifies.
+- **A request that does not verify gets no `result`.** It is logged as
+  `dropped`, with the reason `signature`, and its id is not spent. An instance
+  holding no pins drops every request the same way.
+- **A `gate_decision` with `gates` on, and either passkey kind, is deferred**:
+  not consumed, not answered, logged as `deferred`. Nothing on the desktop
+  verifies a WebAuthn assertion yet (§8), and an id spent here would make the
+  redelivery that reaches a verifier read as `replayed`. The Hub delivers it
+  again on the next connection until it expires. A `gate_decision` with `gates`
+  off is refused `scope_off`.
+- **A request the desktop cannot judge is deferred too.** If the pins or the
+  policy fail to load, a `start_feature`'s 24-hour committed total (§7) fails
+  to load, or the id cannot be recorded, nothing is answered, and the
+  redelivery is judged afresh. The total is loaded before the id is recorded,
+  so a start deferred for it does not spend its id.
+- **The id is recorded by one atomic insert** into `hub_consumed_requests`, so
+  two deliveries cannot both read as fresh. Every id that insert checks also
+  prunes the rows whose `expires_at` is more than ten minutes past. A pruned
+  id cannot come back as fresh: one at or past its `expires_at` by this
+  desktop's clock is refused `expired` before it is ever recorded, whatever
+  the Hub's clock said when it was sent. The ten minutes cover this desktop's
+  clock stepping backwards after a prune, which would make a pruned id live
+  again. A prune that fails is logged and changes nothing about the request.
+- **`start_feature`** is judged against the ceilings (§7), then its Project and
+  Workflow are looked up (`unknown_project`, `unknown_workflow`), then the
+  harness and identifier refusals `set_step_assignment` applies are applied to
+  its feature-wide `agent_kind` and `model` and to every step override:
+  `harness_not_registered` for a harness this desktop does not have, then
+  `malformed_body` for a value that starts with `-` or holds whitespace or a
+  control character. The attachments it declares are then held to the limits
+  the bootstrap applies (`MAX_ATTACHMENTS_PER_FEATURE`, `MAX_ATTACHMENT_BYTES`
+  and `MAX_AGENT_ATTACHMENT_BATCH_BYTES` in
+  `crates/demeteo-core/src/application/attachments.rs`) before any is fetched:
+  too many, one declared empty or too large, or a total too large is
+  `attachment_mismatch`. The Hub deletes each attachment as it hands it over
+  and the fetcher buffers up to the declared size, so these cannot wait for
+  the bootstrap. Only then is every attachment fetched once (§6.3). A fetch that fails or does not match is
+  `attachment_mismatch`. Each attachment is then typed from its content, since
+  the reference carries no type: a PNG, JPEG, GIF, WebP, TIFF or PDF signature,
+  else UTF-8 text without a NUL byte as `text/plain`. A `%PDF-` past offset 0
+  makes it a PDF only when the content is not such text. Content of any other type
+  is `attachment_mismatch` too, answered before anything is launched, because
+  the bootstrap would refuse to commit it after an accept. The run is launched by the call the desktop's own
+  launch button makes, as a local run, and the Feature is stored with
+  `launched_by = 'hub'`. **`max_wall_clock_secs` is ignored**: a local run has
+  no wall-clock cap to give it. The request is still accepted, and its log row
+  records that the cap was ignored.
+- **A launch that fails after every check passed is answered
+  `malformed_body`.** `RefusalReason` has no generic failure. The id is already
+  spent, so leaving it unanswered would only get a `replayed` from the
+  redelivery. The error's detail, scrubbed of secrets and with the request's own
+  title and description cut out, stays in the desktop's own log row. A cancel
+  or an assignment that fails in its call is answered the same way.
+- **`cancel_feature`** answers `unknown_feature` for a Feature the desktop does
+  not hold. Otherwise it is the desktop's own cancel, sent to the runner when a
+  `demeteo-runner` owns the run.
+- **`set_step_assignment`** resolves the step to its latest execution
+  (`unknown_step`), then applies the refusals of
+  [decision 54](DECISIONS.md#54--mid-run-assignment-detail) before the
+  desktop's own assignment call.
+- **One start is handled at a time**, so two starts cannot each be judged
+  against a daily total that misses the other. The handler holds that, not the
+  socket session, so a start that arrives on a socket that reconnected or
+  re-paired while another was in flight waits for it too. Which of two waiting
+  starts goes next is not promised. **Cancels and assignments are not held
+  behind a start**: neither reads that total, and each id is spent by one
+  atomic insert, so a `cancel_feature` is answered while a start is still
+  fetching. **A start's fetches share one deadline**, `START_FETCH_DEADLINE`
+  in `crates/demeteo-core/src/application/hub_requests.rs`, however many
+  attachments it names; a start that overruns it is `attachment_mismatch`
+  with nothing launched, as a fetch that failed is.
+- **A result waits for a connection only as long as its socket runs.** One
+  that missed the connection its request came on is sent on the socket's next
+  connection, but every start of the socket — the app starting paired, or
+  `hub_pair` — begins with none queued, so a restart drops it. A redelivery
+  over the same device key is then refused `replayed`, and since that is the
+  only result the Hub receives it is the outcome it keeps (§5 *Queued
+  requests*), for a run that did start. After `hub_disconnect` the next
+  pairing is a new instance (§4 *Revocation*), so the request is never
+  delivered again and stays unanswered on the old one. The queue is not held
+  for the process instead, because after a re-pair it would deliver one Hub's
+  results to another.
+- **A request already being handled outlives `hub_disconnect`.** Its task is
+  not tracked by the socket, so it runs to completion — a start still
+  launches its run — and its result is dropped. It is not aborted: a start
+  stopped between spending its id and launching its run would leave a spent
+  id with no run and no answer.
+
+**Every request leaves one row in the activity log**, `hub_request_log`, a
+redelivery included; only a frame with no readable header, or with an
+over-long unverified id, leaves none. A row holds the request id, the kind (`unknown` for a body
+that did not parse), the scope, the outcome (`accepted`, `refused`, `dropped` or
+`deferred`), the reason, the Feature it named or started, and when it was
+received. It holds no title, description, attachment content or token, and none
+of it reaches the Hub, which is told a `RefusalReason` and nothing more. The
+`hub_request_log` command reads it, newest first, at most 500 rows a read. A row that fails to append is
+warned in the desktop's log and the answer is still sent. The row is the
+desktop's record, not a condition of the answer: once an id is spent,
+withholding the answer would only make the redelivery read `replayed`, and a
+refusal reached before it is spent would be given again unchanged.
 
 ### 6.2 The six kinds
 
@@ -807,7 +930,10 @@ Hub holds it as briefly and as opaquely as it can.
    answers the plaintext. A fetch is served only while the request it is bound to
    is unanswered and before its `expires_at` by the Hub's clock, so an instance
    that answers first has nothing left to fetch. The instance checks the SHA-256
-   and refuses the request with `attachment_mismatch` on a mismatch.
+   and refuses the request with `attachment_mismatch` on a mismatch. It then
+   types the attachment from its content, as the Hub serves every one as
+   `application/octet-stream`, and content of a type it does not accept as an
+   attachment is `attachment_mismatch` as well.
 5. **Delete.** A completed fetch consumes the attachment: the row is deleted
    before the response is sent, and a second fetch answers `404` as if it never
    existed. The delete re-checks that the request is still queued and
@@ -1038,6 +1164,38 @@ permission and cannot change them.
 whatever the request carried, and a cap the Hub supplies is a cap the Hub can
 raise. The ceiling is the part of this design that makes `spend` a bounded risk
 instead of a delegated one.
+
+**What they count.** Both are integer cents, like the `max_budget_cents` they
+are compared with (§6.1). The rolling total is the sum of the **committed caps**:
+the `max_budget_usd`, in cents, of every Feature with `launched_by = 'hub'`
+created in the 24 hours before the desktop's clock. It is not the cost incurred.
+A `start_feature` is accepted only if its cap is at most the per-run ceiling,
+refused `over_run_ceiling` otherwise, and if the total plus the cap is at most
+the rolling ceiling, refused `over_rolling_ceiling` otherwise. Both bounds are
+inclusive. Neither `cancel_feature` nor `set_step_assignment` counts against
+either. The arithmetic is
+[`ceiling.rs`](../crates/demeteo-core/src/domain/hub_request/ceiling.rs).
+
+**Every gap refuses.** A start with no cap, or one arriving while the per-run
+ceiling is unset, is refused `over_run_ceiling`. An unset rolling ceiling and
+a sum that overflows each refuse `over_rolling_ceiling`. A total that did not
+load is not a refusal: the start is deferred, unanswered and unspent (§6.1). No
+unset value reads as "unlimited", so both ceilings default to refusing every
+start, and `spend` and `gates` default to off.
+
+**The per-run ceiling bounds the declared cap, not what the run spends.** The cap
+becomes the Feature's `max_budget_usd`, which is a per-turn budget
+([`budget.rs`](../crates/demeteo-core/src/domain/agent_session/budget.rs)), so a
+run of many turns can spend more than its cap. Only the claude-code adapter
+passes that budget on, as `--max-budget-usd`; the other adapters pass none, so
+a start naming another harness has no budget enforced even per turn. Bounding a local run's actual spend is §11 item 4's remainder.
+
+**The toggles and ceilings are the desktop's own.** They are one row of
+`hub_local_policy`. The request handler is given a reader of it and no writer.
+The only writer is the `hub_policy_set` command, which Settings is to call
+(§2). The policy, the activity log and the consumed ids are not pairing state:
+`hub_disconnect` leaves them, and pairing with another Hub keeps the toggles and
+ceilings as they were.
 
 The mockup shows no place to set a ceiling, and none for passkey management (§8).
 Those surfaces are specified here with nothing to cite.
@@ -1310,8 +1468,10 @@ process.
 | `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, `access.rs` is the admission of a DPoP-bound access token that the socket and the attachment fetch share, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
 | `crates/demeteo-core/src/domain/hub_socket/` | the desktop socket's policy — **built**, and synchronous: `src-tauri/tests/hub_layout.rs` fails on an `async fn` anywhere in it. `projection.rs` is the allowlist a `run_events` row passes to become a protocol `RunEvent`, `mod.rs` the `Hello` and whether events are sent at all, and `verdict.rs` what follows a connection's or a refresh's end, the backoff, and the numbers the session runs on |
-| `crates/demeteo-core/src/ports/hub.rs` | the ports pairing and the socket reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`) and a browser — **built**. Only the keyring port carries a secret |
-| `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps and owns the refresh lock and the socket's lifetime; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters. It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
+| `crates/demeteo-core/src/ports/hub.rs` | the ports pairing, the socket and the requests reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`, `HubRequestRepository`, and the policy's `HubPolicyReader` and `HubPolicyWriter`, kept apart so the handler can be given the first alone), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`), the attachment fetch (`HubAttachmentFetcher`), the request handler the socket hands frames to (`HubRequestHandler`) and a browser — **built**. Only the keyring port carries a secret |
+| `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps and owns the refresh lock and the socket's lifetime; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters, and `attachments.rs` fetches an attachment once and checks its size and SHA-256 (§6.3). It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
+| `crates/demeteo-core/src/domain/hub_request/` | the desktop's request policy (§6.1, §7) — **built**, and synchronous. `mod.rs` is the scopes in force, `precheck` (signature, scope, instance, expiry) and `decide` (replay, then spend), split around the consumption of the id; `ceiling.rs` the two ceilings, `verify.rs` the Ed25519 check against the pinned key, and `log.rs` the activity-log row |
+| `crates/demeteo-core/src/application/hub_requests.rs` | the request handler — **built**. It parses, loads the pins, the policy and the committed total, records the id, and acts through the desktop's own launch, cancel and assignment calls. `composition/mod.rs` binds it to `HubPairing`. The SQL is `adapters/database/repos/hub_requests.rs` |
 | `crates/demeteo-core/src/adapters/hub/socket/` | the desktop socket's I/O — **built**. `mod.rs` is the supervisor (refresh, proof, dial, session, verdict, backoff), `session.rs` one connection from its `Hello` to its end, `wake.rs` the `RunEventsPort` decorator that wakes a session on every append, and `ws_transport.rs` the `HubSocketDialer` over `tokio-tungstenite` and rustls, the only file that names the WebSocket crate. `ws_transport.rs` exists only with `demeteo-core`'s default `hub-socket` feature, which `demeteo-runner` builds without |
 | `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds the `GET /socket` upgrade and its admission (`admitted`, which names the socket's URL to `pairing/access.rs`), `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
 | `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs`, `request_status.rs` and `attachments.rs`, the upload. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
@@ -1343,28 +1503,28 @@ WebAuthn verifier). Each one is a **Gate item** in
 §2 has the state of every part. Of pairing (§4) and the socket (§5), the Hub's
 half, the approval page and the desktop's device key, loopback listener,
 `/authorize` request, token redemption and refresh, fingerprint and socket client
-are built, and four things are not:
+are built, and so are the desktop's request verification and local ceilings
+(§6.1, §7). Three things are not:
 
-- **What the desktop's socket does not send.** It answers no request, because
-  request verification and the local ceilings (§6.1, §7) are not built on the
-  desktop; it sends no snapshot, which the snapshot builder of §5 is needed for;
+- **What the desktop's socket does not send.** It answers no `gate_decision`
+  and neither passkey kind, because nothing on the desktop verifies a WebAuthn
+  assertion against the pinned set yet (§8), so it defers them (§6.1 *On the
+  desktop*); it sends no snapshot, which the snapshot builder of §5 is needed for;
   it sends no `ticket_*` event, because no desktop `run_events` row records a
   ticket's lifecycle, so the Hub's ticket counts read zero; and it relays local
   runs only (§5 *Events and the cursor*). §11 *The desktop socket's carried
   defaults* has what it does instead.
 - **A Settings › Hub tab.** The commands and their wrappers exist, and no view
-  renders them, so the fingerprint is not on screen yet.
+  renders them, so the fingerprint is not on screen yet, and no view sets the
+  toggles and ceilings (§7): every request that needs `spend` or `gates` is
+  refused `scope_off` until one does. Nothing shows the activity log either,
+  which `hub_request_log` reads (§6.1 *On the desktop*).
 - **Unpairing and revoking an instance on the Hub.** No route does either, and
   nothing writes `device_keys.revoked_at`. The desktop's disconnect is local
   (§4 *Revocation*). Until a route exists a pairing ends by reuse detection, by
   its refresh token expiring, or by being replaced (§4).
-- **A desktop that fetches an attachment.** The Hub's half of attachments
-  (§6.3) is built — the upload, a dispatch that names them, the fetch and the
-  sweep — and `hub-web`'s Dispatch view uploads files before it dispatches, but
-  no desktop fetches one yet.
-
-The session API (§6.4) queues requests, so the Hub has requests to send; they
-reach a paired desktop, and none is answered yet. Two routes take an access
+The session API (§6.4) queues requests, and a paired desktop answers them,
+fetching a `start_feature`'s attachments (§6.3) before it answers. Two routes take an access
 token, the socket (§5) and the attachment fetch (§6.3), and both are admitted
 by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
 `access_verdict` in [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs).
@@ -1415,9 +1575,13 @@ what a desktop client implements.
    `cancel_feature` needs `spend`: §6.2 assigned it, `required_scope` in
    [`socket/requests.rs`](../crates/demeteo-hub/src/socket/requests.rs) encodes
    it, and the cancel route of §6.4 is refused without it.
-4. **What the rolling 24-hour total counts** — the budgets committed at start, or
-   cost incurred — and its default. So does the default of the per-run ceiling,
-   and whether `set_step_assignment` counts against either.
+4. *Decided by the request-verification build, kept so the numbering holds.*
+   The rolling 24-hour total counts the caps committed at start, not cost
+   incurred, in integer cents; an unset ceiling and an absent cap each refuse;
+   and `set_step_assignment` counts against neither ceiling. §7 *Local ceilings*
+   has the rule. **Still open:** the per-run ceiling bounds a start's declared
+   cap, which is a per-turn budget, so nothing bounds what a Hub-started run
+   actually spends.
 5. **A cursor gap.** If `run_events` ever gains a GC (none today), how the instance
    tells the Hub its cursor is older than what it holds (§5).
 6. **Renewing the access token on an open socket**, since it lives 15 minutes and
@@ -1583,23 +1747,30 @@ question — the `4001` close and the version gate — are items 6 and 8 above.
 
 ### The desktop socket's carried defaults
 
-The desktop's client (§9 *Code layout*) was built ahead of request
-verification, the snapshot builder and any Settings view, so it carries an
-answer for each gap. None is decided; each is what the desktop does today.
+The desktop's client (§9 *Code layout*) was built ahead of a WebAuthn
+verifier, the snapshot builder and any Settings view, so it carries an answer
+for each gap. None is decided; each is what the desktop does today.
 
-- **A request is left unanswered and the socket stays open.** The session logs
-  the `request_id` and sends no `RequestResult`. The Hub keeps the first outcome
-  it records (§5 *Queued requests*), so a `refused` sent now would still stand
-  once verification exists; unanswered, the request is delivered again on the
-  next connection until it expires.
+- **A deferred request is left unanswered and the socket stays open.** A
+  `gate_decision` with `gates` on and either passkey kind get no
+  `RequestResult` and their ids are not spent (§6.1 *On the desktop*). The Hub
+  keeps the first outcome it records (§5 *Queued requests*), so a `refused`
+  sent now would still stand once a verifier exists; unanswered, the request is
+  delivered again on the next connection until it expires. A session with no
+  handler bound leaves every request unanswered the same way.
+- **The policy, the activity log and the consumed ids outlive the pairing.**
+  `hub_disconnect` clears the pins and the keyring entries and nothing else
+  (§7 *Local ceilings*).
 - **No snapshot is sent.** The Hub accepts events without one (§5), and whether
   a step's `command` and prompt templates may cross is item 11.
 - **No `ticket_*` kind is sent.** No desktop `run_events` row records a ticket's
   lifecycle, so [`projection.rs`](../crates/demeteo-core/src/domain/hub_socket/projection.rs)
   has nothing to map onto one.
 - **`Hello` reports the pinned scopes as granted, and events go only when
-  `read` is pinned.** There are no toggles yet (§7); the pins are what pairing
-  approved.
+  `read` is pinned.** It does not narrow them by the toggles of §7, so the Hub's
+  copy can list a scope whose toggle is off; a request for it is queued and comes
+  back `refused: scope_off`. `read` has no toggle, so the second half holds
+  either way.
 - **A stop is logged, not shown.** A verdict that stops the socket logs its
   reason with `tracing::warn!` and leaves `HubStatus` unchanged, so a desktop
   whose refresh family was revoked still reads as paired until the user pairs

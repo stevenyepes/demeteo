@@ -1,15 +1,18 @@
-//! What desktop pairing with the Demeteo Hub needs from the outside world:
-//! the OS keyring, SQLite, the Hub's `/token` and `/socket`, and a browser.
+//! What desktop pairing with the Demeteo Hub, and the requests it relays,
+//! need from the outside world: the OS keyring, SQLite, the Hub's `/token`,
+//! `/socket` and `/attachments`, and a browser.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
 //! go through [`HubSecretStore`] and nowhere else (AGENTS.md §2).
 
 use async_trait::async_trait;
+use demeteo_hub_protocol::{AttachmentRef, RequestResult};
 
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
+use crate::domain::hub_request::{Consumption, HubLocalPolicy, HubRequestLogEntry};
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 
@@ -40,6 +43,41 @@ pub trait HubPinRepository: Send + Sync {
     fn save(&self, pins: &HubPins) -> Result<(), AppError>;
     /// Deletes the pairing and its passkeys in one transaction.
     fn clear(&self) -> Result<(), AppError>;
+}
+
+/// The `hub_consumed_requests` and `hub_request_log` tables (V65).
+pub trait HubRequestRepository: Send + Sync {
+    /// Claims the id in one `INSERT`; a row already there is
+    /// `AlreadyConsumed`. Never check-then-insert: two deliveries of one id
+    /// racing between a `SELECT` and an `INSERT` would both read as fresh.
+    fn try_consume(
+        &self,
+        request_id: &str,
+        expires_at_secs: u64,
+        now_secs: u64,
+    ) -> Result<Consumption, AppError>;
+    /// Forgets only ids that expired longer ago than the clock skew between
+    /// this desktop and the Hub could explain, so a replay the Hub still
+    /// delivers finds its row.
+    fn prune_consumed(&self, now_secs: u64) -> Result<(), AppError>;
+    fn append_log(&self, entry: &HubRequestLogEntry) -> Result<(), AppError>;
+    /// Newest first.
+    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogEntry>, AppError>;
+}
+
+/// The `hub_local_policy` row (V65), read side only. This is what the request
+/// handler is given; [`HubPolicyWriter`] is a trait of its own so that no
+/// request path can hold a way to widen what the Hub may do (docs/HUB.md §7).
+pub trait HubPolicyReader: Send + Sync {
+    /// A missing row is [`HubLocalPolicy::default`]: everything off, both
+    /// ceilings unset.
+    fn load(&self) -> Result<HubLocalPolicy, AppError>;
+}
+
+/// Written only from the desktop's Settings. Never put one on
+/// [`crate::state::AppContext`]: the request handler is built over it.
+pub trait HubPolicyWriter: Send + Sync {
+    fn save(&self, policy: &HubLocalPolicy) -> Result<(), AppError>;
 }
 
 #[async_trait]
@@ -126,6 +164,53 @@ pub trait HubSocketConnection: Send {
     async fn received(&mut self) -> SocketReceived;
     async fn send_text(&mut self, text: String) -> Result<(), SocketGone>;
     async fn close(self: Box<Self>, code: u16);
+}
+
+/// Why [`HubAttachmentFetcher::fetch`] returned no bytes. No variant
+/// carries a token, a URL or the content.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AttachmentFetchError {
+    /// What arrived is not what the signed request declared: its byte count
+    /// is not `size`, or its lowercase-hex SHA-256 is not `sha256`. Also an
+    /// `id` that is not a UUID, which no Hub attachment has. Answered
+    /// `RefusalReason::AttachmentMismatch`.
+    #[error("the attachment does not match the size and SHA-256 its request declared")]
+    Mismatch,
+    /// The Hub answered with a non-2xx status. A `404` is also what a second
+    /// fetch of one attachment gets: the Hub deletes it on the first.
+    #[error("the Hub refused the attachment fetch with HTTP {status}")]
+    Refused { status: u16 },
+    /// No answer, or no access token or device key to ask with.
+    #[error("the attachment could not be fetched: {0}")]
+    Unavailable(String),
+}
+
+/// The Hub's `GET /attachments/{id}`, which hands an attachment over once
+/// and deletes it (docs/HUB.md §6.3). So nothing calls this twice for one
+/// attachment, and nothing calls it before every check that could refuse the
+/// request has passed: a fetched attachment is gone whatever follows.
+#[async_trait]
+pub trait HubAttachmentFetcher: Send + Sync {
+    /// The content, only once its size and SHA-256 are the ones `attachment`
+    /// declares.
+    async fn fetch(&self, attachment: &AttachmentRef) -> Result<Vec<u8>, AttachmentFetchError>;
+}
+
+/// What the instance socket hands each request frame to. A port rather than
+/// [`crate::application::hub_requests::HubRequests`] itself so the socket
+/// adapter does not depend on `application/`.
+///
+/// It does not break the ownership cycle: the bound handler holds the
+/// [`crate::state::AppContext`], whose `hub` holds the
+/// [`crate::adapters::hub::HubPairing`] whose slot holds the handler. Both are
+/// built once and live as long as the process, so the cycle is a known
+/// process-lifetime hold, not a leak that grows.
+#[async_trait]
+pub trait HubRequestHandler: Send + Sync {
+    /// The `result` to send for `text`, or `None` when nothing may be sent: a
+    /// request whose signature does not verify, one deferred to the handler
+    /// of its kind, or a frame with no `request_id` to answer.
+    async fn handle(&self, text: &str) -> Option<RequestResult>;
 }
 
 pub trait BrowserLauncher: Send + Sync {

@@ -143,6 +143,7 @@ fn runner_feature(harness_baseline: Option<HarnessBaseline>) -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: Some("demeteo/features/f_shadow".to_string()),
+        launched_by: Default::default(),
     }
 }
 
@@ -391,6 +392,7 @@ fn sequence_test_feature() -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     }
 }
 

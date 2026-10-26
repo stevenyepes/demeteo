@@ -5,6 +5,17 @@
 //! and not beside the code.
 
 use async_trait::async_trait;
+use demeteo_core::adapters::database::SqliteAdapter;
+use demeteo_core::adapters::hub::attachments::HubAttachments;
+use demeteo_core::adapters::hub::device_key::DeviceKey;
+use demeteo_core::adapters::hub::testing::{
+    MemorySecretStore, ScriptedAttachments, ScriptedRefreshEndpoint,
+};
+use demeteo_core::adapters::hub::HubPairing;
+use demeteo_core::application::attachments::MAX_ATTACHMENT_BYTES;
+use demeteo_core::domain::hub_pairing::{hub_origin, HubPairingError, HubPins, PairingAnswer};
+use demeteo_core::ports::hub::{AttachmentFetchError, HubAttachmentFetcher, HubTokenEndpoint};
+use demeteo_core::shared::time::now_secs;
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
 use demeteo_hub::api::attachments::{upload, UploadedView};
 use demeteo_hub::api::dispatch::{dispatch, DispatchBody, EnqueuedView};
@@ -40,6 +51,9 @@ use std::collections::HashMap;
 use std::future::ready;
 use std::net::Ipv4Addr;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_BYTES: &str = "DEMETEO_HUB_ATTACHMENT_MAX_BYTES";
 const TTL_SECS: &str = "DEMETEO_HUB_ATTACHMENT_TTL_SECS";
@@ -1075,4 +1089,367 @@ async fn the_fetch_route_answers_a_request_with_no_credentials_with_the_dpop_401
     );
     let body: Value = response.json().await.expect("a JSON body");
     assert_eq!(body, json!({"error": "invalid_token"}));
+}
+
+/// The Hub's fetch route as `get_attachment` composes it — [`admitted`], then
+/// [`fetch`] — served over loopback HTTP. `get_attachment` itself reaches for
+/// Postgres; here the token rows, the device key's instance and the
+/// attachment rows are the memory doubles every test above uses, and the
+/// method, URL and headers are what the desktop sent.
+struct ServedHub {
+    state: AppState,
+    parts: Parts,
+    fleet: MemoryFleet,
+    tokens: MemoryFamily,
+    issued: FreshPair,
+    jkt: String,
+    user: UserId,
+    instance: InstanceId,
+    requests: AtomicUsize,
+}
+
+impl ServedHub {
+    /// Serves a Hub paired, at the wall clock, to the device key whose
+    /// thumbprint is `jkt`, and answers its origin.
+    async fn start(jkt: String) -> (Arc<Self>, String) {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("a free loopback port");
+        let port = listener.local_addr().expect("the bound address").port();
+        let origin = hub_origin(&format!("http://localhost:{port}")).expect("a loopback origin");
+        let rp = RelyingParty {
+            rp_id: "localhost".to_owned(),
+            origin: origin.clone(),
+        };
+        let issued = FreshPair::generate().expect("the system random source");
+        let tokens = MemoryFamily::paired(&issued, &jkt, now_secs());
+        let user = tokens.rows()[0].user_id;
+        let fleet = MemoryFleet::new();
+        let instance = fleet.paired(user, &[Scope::Spend]);
+        let hub = Arc::new(Self {
+            state: lazy_state("postgres://hub@db.invalid/hub", rp).expect("a parsable URL"),
+            parts: Parts::new(),
+            fleet,
+            tokens,
+            issued,
+            jkt,
+            user,
+            instance,
+            requests: AtomicUsize::new(0),
+        });
+        let served = hub.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(served.clone().respond(stream));
+            }
+        });
+        (hub, origin)
+    }
+
+    /// Stages `bytes` and binds them to a dispatch, answering the
+    /// [`AttachmentRef`] the Hub signed into it.
+    async fn dispatched_ref(&self, bytes: &[u8]) -> AttachmentRef {
+        let now = now_secs();
+        let api = self.parts.over(&self.fleet);
+        let id = upload(&api, self.user, &self.instance.0.to_string(), bytes, now)
+            .await
+            .expect("an upload")
+            .attachment_id;
+        dispatched(
+            &self.parts,
+            &self.fleet,
+            self.user,
+            self.instance,
+            std::slice::from_ref(&id),
+            now,
+        )
+        .await
+        .expect("a dispatch binding the attachment");
+        let queued = self.fleet.requests(self.instance);
+        let Some(RequestPayload::StartFeature(start)) =
+            queued.last().map(|request| &request.envelope.payload)
+        else {
+            panic!("no start_feature was queued");
+        };
+        assert_eq!(start.attachments.len(), 1);
+        start.attachments[0].clone()
+    }
+
+    async fn respond(self: Arc<Self>, mut stream: tokio::net::TcpStream) {
+        let Some(head) = request_head(&mut stream).await else {
+            return;
+        };
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next().unwrap_or_default();
+        let headers: Vec<(&str, &str)> = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.trim(), value.trim()))
+            .collect();
+        let named = |wanted: &str| {
+            headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case(wanted))
+                .map(|(_, value)| *value)
+                .collect::<Vec<_>>()
+        };
+        let authorization = named("authorization").first().copied();
+        let proofs = named("dpop");
+        let proof = (proofs.len() == 1).then(|| proofs[0]);
+        let id = request_line
+            .strip_prefix("GET /attachments/")
+            .and_then(|rest| rest.strip_suffix(" HTTP/1.1"));
+        let (status, body) = match id {
+            Some(id) => self.answer(id, authorization, proof).await,
+            None => (404, b"{\"error\":\"not_found\"}".to_vec()),
+        };
+        let head = format!(
+            "HTTP/1.1 {status} Answer\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(head.as_bytes()).await;
+        let _ = stream.write_all(&body).await;
+        let _ = stream.shutdown().await;
+    }
+
+    async fn answer(
+        &self,
+        id: &str,
+        authorization: Option<&str>,
+        proof: Option<&str>,
+    ) -> (u16, Vec<u8>) {
+        let now = now_secs();
+        let (user, instance) = (self.user, self.instance);
+        let find_token =
+            |hash: TokenHash| ready(Ok::<_, StoreError>(self.tokens.find(&hash).cloned()));
+        let instance_of_key = |owner: UserId, key: String| {
+            let held = (owner == user && key == self.jkt).then_some(instance);
+            ready(Ok::<_, StoreError>(held))
+        };
+        let admitted = admitted(
+            &self.state,
+            id,
+            authorization,
+            proof,
+            now,
+            find_token,
+            instance_of_key,
+        )
+        .await;
+        let fetched = match admitted {
+            Ok(admission) => {
+                fetch(
+                    &self.fleet,
+                    &self.parts.keys,
+                    TRANSIT_KEY,
+                    &admission,
+                    id,
+                    now,
+                )
+                .await
+            }
+            Err(refused) => Err(refused),
+        };
+        match fetched {
+            Ok(content) => (200, content),
+            Err(refused) => {
+                let (status, body) = answered(refused).await;
+                (status, body.to_string().into_bytes())
+            }
+        }
+    }
+}
+
+async fn request_head(stream: &mut tokio::net::TcpStream) -> Option<String> {
+    let mut head = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = stream.read(&mut buf).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        head.extend_from_slice(&buf[..read]);
+    }
+    String::from_utf8(head).ok()
+}
+
+/// A [`HubPairing`] as a completed pairing with `hub` left it, holding no
+/// access token: its first fetch refreshes, and the scripted refresh answers
+/// the access token the Hub's token rows hold.
+struct PairedDesktop {
+    pairing: HubPairing,
+    refreshes: Arc<ScriptedRefreshEndpoint>,
+    hub: Arc<ServedHub>,
+}
+
+impl PairedDesktop {
+    async fn new() -> Self {
+        let key = DeviceKey::generate().expect("a P-256 key");
+        let (hub, origin) = ServedHub::start(key.jkt()).await;
+        let db = Arc::new(
+            SqliteAdapter::new(rusqlite::Connection::open_in_memory().expect("a scratch DB"))
+                .expect("a migrated DB"),
+        );
+        let hub_pins = HubPins {
+            hub_origin: origin,
+            instance_id: hub.instance.0.to_string(),
+            request_signing_key: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
+            rp_id: "localhost".to_owned(),
+            scopes: vec!["spend".to_owned()],
+            device_jkt: key.jkt(),
+            paired_at: i64::try_from(now_secs()).expect("a time that fits"),
+            passkeys: Vec::new(),
+        };
+        let refresh = hub.issued.refresh.text();
+        let secrets =
+            MemorySecretStore::paired(&*db, &hub_pins, &key, &refresh).expect("a seeded store");
+        let refreshes = Arc::new(ScriptedRefreshEndpoint::new());
+        refreshes.answer(&hub.issued.access.text(), &refresh, 900);
+        let pairing = HubPairing::new(db, Arc::new(secrets), Arc::new(NoRedemption))
+            .with_refresh_endpoint(refreshes.clone());
+        Self {
+            pairing,
+            refreshes,
+            hub,
+        }
+    }
+
+    fn fetcher(&self) -> HubAttachments {
+        self.pairing
+            .attachment_fetcher()
+            .expect("the pins and the keyring read")
+            .expect("a paired desktop has a fetcher")
+    }
+}
+
+/// A fetch must never redeem a code.
+struct NoRedemption;
+
+#[async_trait]
+impl HubTokenEndpoint for NoRedemption {
+    async fn exchange(
+        &self,
+        _: &str,
+        _: String,
+        _: String,
+    ) -> Result<PairingAnswer, HubPairingError> {
+        Err(HubPairingError::Transport("a fetch redeemed a code".into()))
+    }
+}
+
+#[tokio::test]
+async fn the_desktop_fetches_a_dispatched_attachment_once_and_a_second_fetch_is_refused() {
+    let desktop = PairedDesktop::new().await;
+    let plaintext = distinctive_plaintext();
+    let reference = desktop.hub.dispatched_ref(&plaintext).await;
+    let fetcher = desktop.fetcher();
+
+    let first = fetcher.fetch(&reference).await;
+
+    assert_eq!(first, Ok(plaintext));
+    assert!(!held(
+        &desktop.hub.fleet,
+        desktop.hub.instance,
+        &reference.id
+    ));
+    let second = fetcher.fetch(&reference).await;
+    assert_eq!(second, Err(AttachmentFetchError::Refused { status: 404 }));
+    assert_eq!(desktop.hub.requests.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        desktop.refreshes.calls().len(),
+        1,
+        "one refresh, then the held token"
+    );
+    assert_eq!(desktop.refreshes.unscripted(), 0);
+}
+
+#[tokio::test]
+async fn an_attachment_whose_declared_size_or_sha256_is_wrong_is_a_mismatch() {
+    let desktop = PairedDesktop::new().await;
+    let fetcher = desktop.fetcher();
+    let wrong_size = |mut reference: AttachmentRef| {
+        reference.size += 1;
+        reference
+    };
+    let wrong_sha256 = |mut reference: AttachmentRef| {
+        reference.sha256 = lowercase_hex(&Sha256::digest(b"another file"));
+        reference
+    };
+    let cases: [(&str, &dyn Fn(AttachmentRef) -> AttachmentRef); 2] =
+        [("size", &wrong_size), ("sha256", &wrong_sha256)];
+
+    for (name, declared_wrongly) in cases {
+        let reference = declared_wrongly(desktop.hub.dispatched_ref(b"the file").await);
+        let fetched = fetcher.fetch(&reference).await;
+        assert_eq!(fetched, Err(AttachmentFetchError::Mismatch), "{name}");
+        assert!(
+            !held(&desktop.hub.fleet, desktop.hub.instance, &reference.id),
+            "{name}: the Hub handed it over"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_attachment_id_that_is_not_a_uuid_is_a_mismatch_and_is_never_sent() {
+    let desktop = PairedDesktop::new().await;
+    let reference = AttachmentRef {
+        id: "../token".to_owned(),
+        size: 0,
+        sha256: lowercase_hex(&Sha256::digest(b"")),
+    };
+
+    let fetched = desktop.fetcher().fetch(&reference).await;
+
+    assert_eq!(fetched, Err(AttachmentFetchError::Mismatch));
+    assert_eq!(desktop.hub.requests.load(Ordering::SeqCst), 0);
+    assert!(desktop.refreshes.calls().is_empty());
+}
+
+#[tokio::test]
+async fn an_attachment_declared_over_the_desktop_limit_is_a_mismatch_and_is_never_sent() {
+    let desktop = PairedDesktop::new().await;
+    let reference = AttachmentRef {
+        id: "0b5e4c1a-2f7d-4e8b-9a3c-6d1f0e2b7a94".to_owned(),
+        size: MAX_ATTACHMENT_BYTES + 1,
+        sha256: lowercase_hex(&Sha256::digest(b"")),
+    };
+
+    let fetched = desktop.fetcher().fetch(&reference).await;
+
+    assert_eq!(fetched, Err(AttachmentFetchError::Mismatch));
+    assert_eq!(desktop.hub.requests.load(Ordering::SeqCst), 0);
+    assert!(desktop.refreshes.calls().is_empty());
+}
+
+#[tokio::test]
+async fn the_scripted_fetcher_hands_an_attachment_over_once_and_checks_it_as_the_real_one_does() {
+    let bytes = b"the file";
+    let reference = |id: &str, bytes: &[u8]| AttachmentRef {
+        id: id.to_owned(),
+        size: bytes.len() as u64,
+        sha256: lowercase_hex(&Sha256::digest(bytes)),
+    };
+    let scripted = ScriptedAttachments::new();
+    scripted.stage(&nobodys(1), bytes);
+    scripted.stage(&nobodys(2), bytes);
+
+    assert_eq!(
+        scripted.fetch(&reference(&nobodys(1), bytes)).await,
+        Ok(bytes.to_vec())
+    );
+    let refused = Err(AttachmentFetchError::Refused { status: 404 });
+    assert_eq!(
+        scripted.fetch(&reference(&nobodys(1), bytes)).await,
+        refused
+    );
+    assert_eq!(
+        scripted.fetch(&reference(&nobodys(3), bytes)).await,
+        refused
+    );
+    assert_eq!(
+        scripted.fetch(&reference(&nobodys(2), b"other")).await,
+        Err(AttachmentFetchError::Mismatch)
+    );
+    assert_eq!(scripted.unscripted(), 2);
+    assert_eq!(scripted.fetched(), [1, 1, 3, 2].map(nobodys).to_vec());
 }

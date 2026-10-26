@@ -8,7 +8,10 @@
 // `is_loopback_redirect`, and neither crate can be called from here on
 // every OS.
 
-use super::{disconnect_core, pair_core, pairing, status_core};
+use super::{
+    disconnect_core, pair_core, pairing, policy_get_core, policy_set_core, request_log_core,
+    status_core,
+};
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::hub::device_key::DeviceKey;
 use crate::adapters::hub::loopback::CallbackListener;
@@ -21,7 +24,9 @@ use crate::adapters::hub::testing::{
 };
 use crate::adapters::hub::token_client::ReqwestTokenEndpoint;
 use crate::adapters::hub::HubPairing;
-use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::composition::{
+    build_core_context, build_core_context_with_policy_writer, CoreConfig, ExecutionMode,
+};
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::hub_pairing::answer::{refresh_form_body, token_form_body};
 use crate::domain::hub_pairing::callback::{callback_verdict, CallbackVerdict, RefuseReason};
@@ -37,6 +42,10 @@ use crate::domain::hub_pairing::{
     token_url, AuthorizeRequest, HubPairingError, HubPairingState, HubPins, HubSecret, HubStatus,
     KeyringStatus, PairingAnswer, PinnedPasskey, RefreshAnswer, PAIR_TIMEOUT, SCOPES,
 };
+use crate::domain::hub_request::log::MAX_LOG_PAGE;
+use crate::domain::hub_request::{
+    Consumption, HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome,
+};
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, backoff, hello, hub_event, refresh_refusal, resets_backoff,
     sends_events, Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS,
@@ -47,9 +56,9 @@ use crate::domain::models::{Feature, Project};
 use crate::error::AppError;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::hub::{
-    BrowserLauncher, DialFailure, HubPinRepository, HubRefreshEndpoint, HubSecretStore,
-    HubSocketConnection, HubSocketDialer, HubTokenEndpoint, SocketGone, SocketReceived,
-    SocketUpgrade,
+    BrowserLauncher, DialFailure, HubPinRepository, HubRefreshEndpoint, HubRequestRepository,
+    HubSecretStore, HubSocketConnection, HubSocketDialer, HubTokenEndpoint, SocketGone,
+    SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::state::AppContext;
@@ -1634,6 +1643,7 @@ fn a_running_feature(db: &SqliteAdapter) -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     };
     FeatureRepository::add(db, feature.clone()).unwrap();
     feature
@@ -1743,6 +1753,96 @@ async fn a_router_context_can_pair() {
     let ctx = core_context("router", ExecutionMode::Router);
     assert!(ctx.hub.is_some());
     assert!(pairing(&ctx).is_ok());
+}
+
+/// Bound by the time `build_core_context` returns, which is before the
+/// desktop starts the socket.
+#[tokio::test]
+async fn a_router_context_binds_the_request_handler_its_socket_hands_requests_to() {
+    let ctx = core_context("router-requests", ExecutionMode::Router);
+    let hub = ctx.hub.as_ref().expect("a Router context can pair");
+    assert!(hub.requests_bound());
+}
+
+/// Settings reads and writes the policy, and reads the log, without a
+/// pairing: what was set before pairing is what the first request is judged by.
+#[tokio::test]
+async fn the_policy_and_log_cores_round_trip_through_one_database() {
+    let dir = demeteo_core::test_dir::scratch("demeteo-hub-cmd-policy");
+    let (ctx, writer) = build_core_context_with_policy_writer(
+        CoreConfig {
+            app_data_dir: dir.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotificationAdapter),
+        tokio::runtime::Handle::current(),
+    );
+    assert_eq!(
+        policy_get_core(ctx.hub_policy.as_ref()),
+        Ok(HubLocalPolicy::default())
+    );
+    let policy = HubLocalPolicy {
+        spend_enabled: true,
+        gates_enabled: false,
+        run_ceiling_cents: Some(500),
+        daily_ceiling_cents: None,
+    };
+    policy_set_core(writer.as_ref(), &policy).expect("save the policy");
+    assert_eq!(policy_get_core(ctx.hub_policy.as_ref()), Ok(policy));
+
+    for (request_id, at) in [("r-old", 1), ("r-new", 2)] {
+        ctx.hub_requests
+            .append_log(&HubRequestLogEntry {
+                request_id: request_id.into(),
+                kind: LogKind::CancelFeature,
+                scope: None,
+                outcome: LogOutcome::Deferred,
+                reason: None,
+                feature_id: None,
+                received_at_ms: at,
+            })
+            .expect("append a row");
+    }
+    let log = request_log_core(ctx.hub_requests.as_ref(), 1).expect("read the log");
+    assert_eq!(
+        log.iter()
+            .map(|e| e.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["r-new"]
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Records the `limit` each `list_log` is given; every other call errors.
+#[derive(Default)]
+struct LimitSpy(Mutex<Vec<usize>>);
+
+impl HubRequestRepository for LimitSpy {
+    fn try_consume(&self, _: &str, _: u64, _: u64) -> Result<Consumption, AppError> {
+        Err(AppError::internal("unexpected try_consume"))
+    }
+    fn prune_consumed(&self, _: u64) -> Result<(), AppError> {
+        Err(AppError::internal("unexpected prune_consumed"))
+    }
+    fn append_log(&self, _: &HubRequestLogEntry) -> Result<(), AppError> {
+        Err(AppError::internal("unexpected append_log"))
+    }
+    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogEntry>, AppError> {
+        self.0.lock().expect("lock").push(limit);
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn the_log_core_never_asks_for_more_than_one_page() {
+    let spy = LimitSpy::default();
+    for limit in [usize::MAX, MAX_LOG_PAGE + 1, MAX_LOG_PAGE, 20] {
+        request_log_core(&spy, limit).expect("read the log");
+    }
+    assert_eq!(
+        *spy.0.lock().expect("lock"),
+        [MAX_LOG_PAGE, MAX_LOG_PAGE, MAX_LOG_PAGE, 20]
+    );
 }
 
 /// `RunEventRecorder` appends through `ctx.run_events`, and the socket waits

@@ -9,31 +9,39 @@
 
 use demeteo_core::adapters::database::SqliteAdapter;
 use demeteo_core::adapters::hub::device_key::DeviceKey;
-use demeteo_core::adapters::hub::socket::session::{run_session, SessionContext, SessionEnd};
+use demeteo_core::adapters::hub::socket::session::{
+    run_session, RequestHandlerSlot, SessionContext, SessionEnd,
+};
 use demeteo_core::adapters::hub::socket::wake::WakingRunEvents;
 use demeteo_core::adapters::hub::socket::{supervise, Sleeper, SupervisorDeps};
 use demeteo_core::adapters::hub::testing::{
-    ConnectionLog, Exchange, MemorySecretStore, ScriptedConnection, ScriptedRefreshEndpoint,
-    ScriptedSocketDialer, UnreadableRunEvents,
+    ConnectionLog, Exchange, MemorySecretStore, ScriptedAttachments, ScriptedConnection,
+    ScriptedRefreshEndpoint, ScriptedSocketDialer, UnreadableRunEvents,
 };
 use demeteo_core::adapters::hub::HubPairing;
+use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
+use demeteo_core::application::hub_requests::{HubRequestPorts, HubRequests};
+use demeteo_core::composition::{build_core_context_with_policy_writer, CoreConfig, ExecutionMode};
 use demeteo_core::domain::hub_pairing::keyring_names::hub_keyring_account;
 use demeteo_core::domain::hub_pairing::{
     hub_origin, socket_dial_url, socket_url, token_url, HubPairingError, HubPins, HubSecret,
     PairingAnswer,
 };
+use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome};
 use demeteo_core::domain::hub_socket::{
     SocketEnd, StopReason, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS, PAGE_SIZE,
     PREMATURE_EXPIRY_MARGIN_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 use demeteo_core::error::AppError;
 use demeteo_core::ports::hub::{
-    DialFailure, HubPinRepository, HubSecretStore, HubSocketConnection, HubSocketDialer,
-    HubTokenEndpoint, SocketGone, SocketReceived, SocketUpgrade,
+    DialFailure, HubPinRepository, HubRequestHandler, HubSecretStore, HubSocketConnection,
+    HubSocketDialer, HubTokenEndpoint, SocketGone, SocketReceived, SocketUpgrade,
 };
 use demeteo_core::ports::run_events::RunEventsPort;
 use demeteo_core::shared::time::now_secs;
+use demeteo_core::state::AppContext;
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
+use demeteo_hub::auth::challenge::base64url_encode;
 use demeteo_hub::auth::testing::{answered, lazy_state};
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::dpop::{verify, Expected};
@@ -41,8 +49,8 @@ use demeteo_hub::pairing::grant::{refresh_change, FamilyChange, FreshPair, Token
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::pairing::testing::MemoryFamily;
 use demeteo_hub::protocol::{
-    CursorAck, Hello, RequestPayload, RequestResult, RunEvent, RunEventKind, RunEventPayload,
-    Scope, PROTOCOL_VERSION,
+    CursorAck, Hello, RefusalReason, RequestOutcome, RequestPayload, RequestResult, RunEvent,
+    RunEventKind, RunEventPayload, Scope, PROTOCOL_VERSION,
 };
 use demeteo_hub::routes::AppState;
 use demeteo_hub::socket::connections::Connections;
@@ -50,7 +58,7 @@ use demeteo_hub::socket::handler::{admitted, Admission};
 use demeteo_hub::socket::port::{PeerGone, Received, Transport};
 use demeteo_hub::socket::requests;
 use demeteo_hub::socket::session::{self, Ended, Limits};
-use demeteo_hub::socket::testing::{MemoryHub, MirrorRow};
+use demeteo_hub::socket::testing::{MemoryHub, MirrorRow, RequestView};
 use demeteo_hub::store::requests::RequestStatus;
 use demeteo_hub::store::tokens::TokenHash;
 use demeteo_hub::store::{InstanceId, StoreError, UserId};
@@ -508,6 +516,10 @@ const WRITTEN_AT_MS: i64 = 1_700_000_123_456;
 /// upgrade its pairing yields.
 struct Bridged {
     dialer: BridgeDialer,
+    /// The Hub's key service and the request-signing key in it, whose
+    /// public half the desktop's pins hold.
+    keys: MemoryKeys,
+    signing: SigningKey,
     db: Arc<SqliteAdapter>,
     run_events: Arc<WakingRunEvents>,
     upgrade: SocketUpgrade,
@@ -535,6 +547,12 @@ impl Bridged {
         let next = desktop.rotated();
         let hub = MemoryHub::paired_to(desktop.user, granted);
         desktop.instance = hub.instance_id();
+        let keys = MemoryKeys::with_keys([REQUEST_SIGNING_KEY]);
+        let signing = SigningKey::new(REQUEST_SIGNING_KEY);
+        let request_signing_key = signing
+            .public_key(&keys)
+            .await
+            .expect("the Hub's public key");
 
         let db = Arc::new(
             SqliteAdapter::new(rusqlite::Connection::open_in_memory().expect("a scratch DB"))
@@ -542,8 +560,8 @@ impl Bridged {
         );
         let hub_pins = HubPins {
             hub_origin: desktop.origin.clone(),
-            instance_id: "inst-1".to_owned(),
-            request_signing_key: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
+            instance_id: hub.instance_id().0.to_string(),
+            request_signing_key: base64url_encode(&request_signing_key),
             rp_id: "hub.example".to_owned(),
             scopes: pinned.iter().map(|&scope| scope.to_owned()).collect(),
             device_jkt: desktop.key.jkt(),
@@ -578,6 +596,8 @@ impl Bridged {
                 acks: Arc::new(watch::Sender::new(None)),
                 sessions: Mutex::default(),
             },
+            keys,
+            signing,
             db,
             run_events,
             upgrade,
@@ -677,8 +697,8 @@ impl Bridged {
             serde_json::from_value(fixture["payload"].clone()).expect("a request payload");
         requests::enqueued(
             &self.dialer.hub.store(),
-            &MemoryKeys::with_keys(["demeteo-hub-signing"]),
-            &SigningKey::new("demeteo-hub-signing"),
+            &self.keys,
+            &self.signing,
             &self.dialer.connections,
             payload,
             NOW,
@@ -703,7 +723,80 @@ impl Bridged {
     fn heard(&self) -> Vec<String> {
         self.dialer.heard.lock().unwrap().clone()
     }
+
+    /// The desktop's own request handler over a scratch context judging by
+    /// `policy`, reading the pins this pairing saved, bound as composition
+    /// binds it.
+    fn handler(&self, tag: &str, policy: &HubLocalPolicy) -> (RequestHandlerSlot, Arc<AppContext>) {
+        let (ctx, writer) = build_core_context_with_policy_writer(
+            CoreConfig {
+                app_data_dir: demeteo_core::test_dir::scratch(&format!("demeteo-hub-socket-{tag}")),
+                execution_mode: ExecutionMode::LocalOnly,
+            },
+            Arc::new(NoopNotificationAdapter),
+            tokio::runtime::Handle::current(),
+        );
+        writer.save(policy).expect("save the policy");
+        let ctx = Arc::new(ctx);
+        let handler = HubRequests::new(
+            ctx.clone(),
+            HubRequestPorts {
+                requests: ctx.hub_requests.clone(),
+                policy: ctx.hub_policy.clone(),
+                pins: self.db.clone(),
+                attachments: Arc::new(ScriptedAttachments::new()),
+                now_ms: Arc::new(|| NOW * 1000),
+            },
+        );
+        let slot = RequestHandlerSlot::default();
+        assert!(slot.set(Arc::new(handler)).is_ok());
+        (slot, ctx)
+    }
+
+    /// The only request queued, once the Hub has recorded an outcome for it.
+    async fn answered(&self) -> RequestView {
+        timeout(BOUND, async {
+            loop {
+                if let [request] = &self.dialer.hub.requests()[..] {
+                    if request.outcome.is_some() {
+                        return request.clone();
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the Hub recorded an outcome within {BOUND:?}"))
+    }
 }
+
+/// The desktop's activity log, once it holds a row.
+async fn logged(ctx: &AppContext) -> HubRequestLogEntry {
+    timeout(BOUND, async {
+        loop {
+            if let Some(entry) = ctx.hub_requests.list_log(1).expect("list the log").pop() {
+                return entry;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the desktop logged the request within {BOUND:?}"))
+}
+
+/// Both ceilings well above any start a fixture asks for, so a toggle is
+/// the only thing a test switches.
+fn policy(spend_enabled: bool, gates_enabled: bool) -> HubLocalPolicy {
+    HubLocalPolicy {
+        spend_enabled,
+        gates_enabled,
+        run_ceiling_cents: Some(1_000),
+        daily_ceiling_cents: Some(10_000),
+    }
+}
+
+/// The Hub's name for its request-signing key in [`MemoryKeys`].
+const REQUEST_SIGNING_KEY: &str = "demeteo-hub-signing";
 
 struct Running {
     stop: watch::Sender<bool>,
@@ -1042,6 +1135,123 @@ async fn a_queued_request_goes_unanswered_and_the_connection_carries_on() {
             gate("e-2")
         )]
     );
+    assert!(!bridged.dialer.sessions.lock().unwrap()[0].is_finished());
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// AC5: a start the Hub queued and signed reaches the desktop's handler,
+/// and what the Hub stores is the desktop's answer to it.
+#[tokio::test]
+async fn a_hub_signed_start_with_spend_off_is_answered_scope_off_and_the_hub_records_it() {
+    let bridged = Bridged::pinned(
+        &[],
+        &["read", "gates", "spend"],
+        &[Scope::Read, Scope::Gates, Scope::Spend],
+    )
+    .await;
+    let (requests, desktop) = bridged.handler("start-spend-off", &policy(false, true));
+    bridged
+        .queue_request("signed_request_start_feature.json")
+        .await;
+    let running = bridged
+        .connect_with(bridged.context().with_requests(requests))
+        .await;
+
+    let request = bridged.answered().await;
+
+    let refused = RequestOutcome::Refused {
+        reason: RefusalReason::ScopeOff,
+    };
+    assert_eq!(request.kind, "start_feature");
+    assert_eq!(request.deliveries, 1);
+    assert_eq!(request.status, RequestStatus::Answered);
+    assert_eq!(request.outcome, Some(refused));
+    let entry = logged(&desktop).await;
+    assert_eq!(entry.request_id, request.envelope.request_id);
+    assert_eq!(
+        (entry.kind, entry.outcome, entry.reason.as_deref()),
+        (
+            LogKind::StartFeature,
+            LogOutcome::Refused,
+            Some("scope_off")
+        )
+    );
+    assert!(!bridged.dialer.sessions.lock().unwrap()[0].is_finished());
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// A handler that is handed a request and never returns, as a launch or an
+/// attachment fetch can take minutes to.
+#[derive(Default)]
+struct StuckHandler {
+    handed: Notify,
+}
+
+#[async_trait::async_trait]
+impl HubRequestHandler for StuckHandler {
+    async fn handle(&self, _text: &str) -> Option<RequestResult> {
+        self.handed.notify_one();
+        std::future::pending().await
+    }
+}
+
+/// The session never waits on a request: with its handler stuck, a row
+/// appended afterwards still reaches the Hub and is acked.
+#[tokio::test]
+async fn a_request_still_being_handled_does_not_hold_up_the_session() {
+    let bridged = Bridged::new(&[]).await;
+    let stuck = Arc::new(StuckHandler::default());
+    let requests = RequestHandlerSlot::default();
+    assert!(requests.set(stuck.clone()).is_ok());
+    bridged
+        .queue_request("signed_request_gate_decision.json")
+        .await;
+    let running = bridged
+        .connect_with(bridged.context().with_requests(requests))
+        .await;
+    timeout(BOUND, stuck.handed.notified())
+        .await
+        .expect("the request reached the handler");
+
+    let live = bridged.append(&progress());
+    bridged.acked_through(live).await;
+
+    assert_eq!(event_offsets(&bridged.heard()), [live]);
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// A gate decision is the gate handler's to answer, which is not built: the
+/// desktop's handler logs it deferred and sends nothing, so the Hub still
+/// holds it queued, and the connection carries on.
+#[tokio::test]
+async fn a_deferred_gate_decision_is_logged_and_left_unanswered_on_a_live_connection() {
+    let bridged = Bridged::new(&[]).await;
+    let (requests, desktop) = bridged.handler("gate-deferred", &policy(false, true));
+    bridged
+        .queue_request("signed_request_gate_decision.json")
+        .await;
+    let running = bridged
+        .connect_with(bridged.context().with_requests(requests))
+        .await;
+
+    let entry = logged(&desktop).await;
+    let live = bridged.append(&("f-a", "gate_decided", json!({"step_execution_id": "e-2"})));
+    bridged.acked_through(live).await;
+
+    assert_eq!(
+        (entry.kind, entry.outcome, entry.reason),
+        (LogKind::GateDecision, LogOutcome::Deferred, None)
+    );
+    let [request] = &bridged.dialer.hub.requests()[..] else {
+        panic!("one request: {:?}", bridged.dialer.hub.requests());
+    };
+    assert_eq!(entry.request_id, request.envelope.request_id);
+    assert_eq!(request.status, RequestStatus::Queued);
+    assert_eq!(request.outcome, None);
+    assert!(!bridged
+        .heard()
+        .iter()
+        .any(|text| serde_json::from_str::<RequestResult>(text).is_ok()));
     assert!(!bridged.dialer.sessions.lock().unwrap()[0].is_finished());
     assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
 }

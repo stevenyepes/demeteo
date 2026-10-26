@@ -4,7 +4,7 @@ use crate::domain::attachment::AttachedFile;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
-use crate::domain::models::{EffortLevel, Feature, StepExecution};
+use crate::domain::models::{EffortLevel, Feature, LaunchedBy, StepExecution};
 use crate::ports::attachment_store::AttachmentJsonPort;
 use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 
@@ -32,7 +32,7 @@ fn baseline_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option
 /// to one list and not the other silently reads as its neighbour rather than
 /// failing. Keeping one list is what makes that impossible instead of
 /// careful.
-const FEATURE_COLUMNS: &str = "id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json, origin_json, diff_base_branch, resolved_branch";
+const FEATURE_COLUMNS: &str = "id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json, origin_json, diff_base_branch, resolved_branch, launched_by";
 
 fn feature_from_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
     let commit_artifacts: Option<i64> = row.get(13)?;
@@ -75,6 +75,7 @@ fn feature_from_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
         })?,
         diff_base_branch: row.get(25)?,
         resolved_branch: row.get(26)?,
+        launched_by: LaunchedBy::from_column(row.get::<_, Option<String>>(27)?.as_deref()),
     })
 }
 
@@ -209,15 +210,15 @@ impl FeatureRepository for SqliteAdapter {
         let harness_baseline_json: Option<String> =
             HarnessBaseline::to_column(f.harness_baseline.as_ref());
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd, workflow_version_id, harness_baseline_json, origin_json, diff_base_branch, resolved_branch)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd, workflow_version_id, harness_baseline_json, origin_json, diff_base_branch, resolved_branch, launched_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
                 f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json,
                 attachments_json, f.description, f.effort.map(|e| e.as_str()), f.max_budget_usd,
                 f.workflow_version_id, harness_baseline_json, f.origin.to_column(),
-                f.diff_base_branch, f.resolved_branch
+                f.diff_base_branch, f.resolved_branch, f.launched_by.to_column()
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -390,6 +391,19 @@ impl FeatureRepository for SqliteAdapter {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn hub_committed_cents_since(&self, since_ms: i64) -> Result<u64, String> {
+        let conn = self.conn.lock()?;
+        let cents: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(CAST(ROUND(COALESCE(max_budget_usd, 0) * 100) AS INTEGER)), 0)
+                 FROM features WHERE launched_by = 'hub' AND created_at >= ?1",
+                params![since_ms],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        u64::try_from(cents).map_err(|e| e.to_string())
     }
 
     fn list_with_open_mr(&self) -> Result<Vec<Feature>, String> {

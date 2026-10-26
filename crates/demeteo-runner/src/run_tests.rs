@@ -282,6 +282,7 @@ fn seeded_db(label: &str, resolved_branch: Option<&str>) -> SqliteAdapter {
             },
             diff_base_branch: None,
             resolved_branch: resolved_branch.map(str::to_string),
+            launched_by: Default::default(),
         },
     )
     .expect("seed the feature");

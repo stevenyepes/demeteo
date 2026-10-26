@@ -34,6 +34,7 @@ fn feature(origin: FeatureOrigin, diff_base_branch: Option<&str>) -> Feature {
         origin,
         diff_base_branch: diff_base_branch.map(str::to_string),
         resolved_branch: None,
+        launched_by: Default::default(),
     }
 }
 

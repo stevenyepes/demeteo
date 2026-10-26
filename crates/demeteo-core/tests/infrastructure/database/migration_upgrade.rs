@@ -189,3 +189,40 @@ fn v64_adds_empty_hub_tables_over_an_existing_database() {
         assert_eq!(count(table), 0, "{table}");
     }
 }
+
+/// V65 adds `features.launched_by` beside `origin_json` rather than reusing
+/// it: a run that existed before is a desktop launch (NULL), and the origin it
+/// recorded is left exactly as written.
+#[test]
+fn v65_reads_existing_features_as_desktop_launches_and_keeps_their_origin() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migration::migrations::runner()
+        .set_target(refinery::Target::Version(64))
+        .run(&mut conn)
+        .unwrap();
+    let origin = r#"{"kind":"branch","base":"release/1.2"}"#;
+    conn.execute(
+        "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO features (id, project_id, title, created_at, max_budget_usd, origin_json)
+         VALUES ('f-1', 'p-1', 'before', 0, 2.5, ?1)",
+        [origin],
+    )
+    .unwrap();
+
+    migration::run(&mut conn).unwrap();
+
+    assert!(applied_versions(&conn).contains(&65));
+    let (launched_by, origin_json): (Option<String>, Vec<u8>) = conn
+        .query_row(
+            "SELECT launched_by, CAST(origin_json AS BLOB) FROM features WHERE id = 'f-1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(launched_by, None);
+    assert_eq!(origin_json, origin.as_bytes());
+}

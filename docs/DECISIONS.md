@@ -500,6 +500,13 @@ is refused locally. **Rejected: toggle-only scopes**, because a `spend` toggle
 alone leaves the cap to the request, and a cap supplied by the Hub is a cap the Hub
 can raise.
 
+**The ceilings fail closed and count commitments.** Both are integer cents. The
+24-hour total sums the caps of the Hub-started Features created in that window,
+whatever they went on to cost. A start with no cap is refused, and so is any start
+while either ceiling is unset. The per-run ceiling bounds
+the cap a start declares, which is a per-turn budget, so a run's actual spend stays
+unbounded; that remainder is open. Detail: [HUB.md §7](HUB.md#local-ceilings).
+
 ## 2. Superseded decisions
 
 A decision you silently overwrite stops being a decision *record*. When a

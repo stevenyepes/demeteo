@@ -68,6 +68,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 
@@ -177,6 +178,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 
@@ -297,6 +299,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 
@@ -402,6 +405,7 @@ async fn test_assert_no_active_predecessors_helper() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 

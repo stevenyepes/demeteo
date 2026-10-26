@@ -67,6 +67,7 @@ fn seed(ctx: &crate::state::AppContext) -> String {
             attachments: Vec::new(),
             harness_baseline: None,
             diff_base_branch: None,
+            launched_by: Default::default(),
         })
         .expect("add feature");
     let now = paths::now_ms();

@@ -207,6 +207,7 @@ async fn test_executor_gate_decide() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 
@@ -392,6 +393,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 

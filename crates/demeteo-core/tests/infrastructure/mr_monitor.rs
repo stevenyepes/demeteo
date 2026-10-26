@@ -84,6 +84,7 @@ fn make_open_mr_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> 
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     };
     FeatureRepository::add(adapter, feature.clone()).unwrap();
     feature

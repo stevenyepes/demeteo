@@ -185,8 +185,14 @@ pub(crate) fn slug_from_description(description: &str) -> String {
     if slug.len() <= MAX_SLUG_LEN {
         return slug;
     }
+    // The filter keeps non-ASCII letters, so the byte cap can land inside a
+    // char; slicing there panics, and Hub start text reaches this verbatim.
+    let cut = (0..=MAX_SLUG_LEN)
+        .rev()
+        .find(|&i| slug.is_char_boundary(i))
+        .unwrap_or(0);
     // Truncate at a hyphen boundary to avoid cutting a word in half.
-    let truncated = &slug[..MAX_SLUG_LEN];
+    let truncated = &slug[..cut];
     if let Some(last_hyphen) = truncated.rfind('-') {
         // Only trim if we'd actually remove characters (keep at least some)
         if last_hyphen > 1 {
@@ -243,3 +249,7 @@ pub fn fetch_default_settings() -> ProjectSettings {
         cache_idle_ttl_days: None,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/step_executor/setup.rs"]
+mod tests;

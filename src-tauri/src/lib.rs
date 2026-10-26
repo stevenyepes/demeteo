@@ -33,7 +33,7 @@ pub const RELEASE_CHANNEL: &str = match option_env!("DEMETEO_RELEASE_CHANNEL") {
     None => "stable",
 };
 
-use composition::{build_core_context, CoreConfig, ExecutionMode};
+use composition::{build_core_context_with_policy_writer, CoreConfig, ExecutionMode};
 use forward::ForwardState;
 use ports::notification::NotificationPort;
 use std::sync::Arc;
@@ -301,7 +301,7 @@ pub fn run() {
             // background tasks to spawn onto — pass Tauri's own runtime
             // handle explicitly instead (see build_core_context's doc).
             let runtime = tauri::async_runtime::handle().inner().clone();
-            let ctx = build_core_context(
+            let (ctx, hub_policy_writer) = build_core_context_with_policy_writer(
                 CoreConfig {
                     app_data_dir: app_data_dir.clone(),
                     execution_mode: ExecutionMode::Router,
@@ -320,6 +320,7 @@ pub fn run() {
             }
 
             app.manage(ctx);
+            app.manage(commands::hub::HubPolicySettings(hub_policy_writer));
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
 
@@ -613,6 +614,9 @@ pub fn run() {
             commands::hub::hub_pair,
             commands::hub::hub_status,
             commands::hub::hub_disconnect,
+            commands::hub::hub_policy_get,
+            commands::hub::hub_policy_set,
+            commands::hub::hub_request_log,
             commands::mcp_server::get_mcp_server_status,
             commands::mcp_server::set_mcp_server_enabled,
             commands::mcp_server::install_mcp_skill,

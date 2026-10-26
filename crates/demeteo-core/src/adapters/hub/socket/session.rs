@@ -8,23 +8,28 @@
 //!
 //! It reads the desktop's own `run_events` and nothing else, whichever
 //! transport ran the Feature a row belongs to.
+//!
+//! A request the Hub relays is handed to the bound [`HubRequestHandler`] on
+//! a task of its own, and its `RequestResult` comes back to the loop to be
+//! sent: a start can take as long as a launch and an attachment fetch, and
+//! the loop that reads the Hub's pings cannot wait that out.
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::ready;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use demeteo_hub_protocol::{CursorAck, RequestHeader};
+use demeteo_hub_protocol::{CursorAck, RequestHeader, RequestResult};
 use serde::Serialize;
-use tokio::sync::{watch, Notify};
+use tokio::sync::{mpsc, watch, Mutex, Notify, OwnedMutexGuard};
 use tokio::time::{sleep_until, timeout, Instant};
 
 use crate::domain::hub_socket::{
     hello, hub_event, sends_events, SocketEnd, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS,
     PAGE_SIZE, STOP_CLOSE_DEADLINE_SECS,
 };
-use crate::ports::hub::{HubSocketConnection, SocketGone, SocketReceived};
+use crate::ports::hub::{HubRequestHandler, HubSocketConnection, SocketGone, SocketReceived};
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 
 /// RFC 6455 §7.4.1, for an endpoint that is going away.
@@ -33,6 +38,12 @@ const GOING_AWAY: u16 = 1001;
 /// told to expect the connection back, which [`crate::domain::hub_socket::after`]
 /// makes it.
 const INTERNAL_ERROR: u16 = 1011;
+
+/// Where request frames go. Bound after the socket's dependencies are
+/// built, because the handler is built over the context that holds the
+/// pairing; until then a request goes unanswered and is delivered again on
+/// the next connection.
+pub type RequestHandlerSlot = Arc<OnceLock<Arc<dyn HubRequestHandler>>>;
 
 /// What one session reads and announces.
 pub struct SessionContext {
@@ -50,6 +61,36 @@ pub struct SessionContext {
     /// How long the `1001` close of a stopped session may stay pending; see
     /// [`STOP_CLOSE_DEADLINE_SECS`].
     pub stop_close: Duration,
+    pub requests: RequestHandlerSlot,
+    answers: Answers,
+}
+
+/// Results of requests handled off the session, held by the context rather
+/// than one connection: the request's id is spent once it is handled, so a
+/// result that missed the connection it arrived on is sent on the next one,
+/// where a redelivery would only be refused `replayed`.
+///
+/// That covers reconnects of one socket and nothing longer. Every
+/// `HubPairing::start_socket` builds a fresh context, so a result still queued
+/// is dropped by an app restart and by `hub_pair`. A redelivery over the same
+/// device key is then answered `replayed`, and the Hub keeps that as the
+/// outcome of a request whose run did start. After `hub_disconnect` the next
+/// pairing is a new instance, so nothing is redelivered and the request stays
+/// unanswered on the old one. Not held for the process instead: after a
+/// re-pair it would hand one Hub's results to another.
+struct Answers {
+    tx: mpsc::UnboundedSender<RequestResult>,
+    rx: Arc<Mutex<mpsc::UnboundedReceiver<RequestResult>>>,
+}
+
+impl Answers {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self {
+            tx,
+            rx: Arc::new(Mutex::new(rx)),
+        }
+    }
 }
 
 impl SessionContext {
@@ -68,7 +109,14 @@ impl SessionContext {
             wake,
             liveness: Duration::from_secs(LIVENESS_DEADLINE_SECS),
             stop_close: Duration::from_secs(STOP_CLOSE_DEADLINE_SECS),
+            requests: RequestHandlerSlot::default(),
+            answers: Answers::new(),
         }
+    }
+
+    pub fn with_requests(mut self, requests: RequestHandlerSlot) -> Self {
+        self.requests = requests;
+        self
     }
 
     pub fn with_liveness(mut self, liveness: Duration) -> Self {
@@ -103,6 +151,9 @@ pub async fn run_session(
         liveness: ctx.liveness,
         heard_by: Instant::now() + ctx.liveness,
         acked: false,
+        requests: ctx.requests.clone(),
+        answered: ctx.answers.tx.clone(),
+        answers: ctx.answers.rx.clone().lock_owned().await,
     };
     let exit = match session.run(ctx, stop).await {
         Err(exit) => exit,
@@ -138,6 +189,9 @@ struct Session {
     /// When the Hub counts as silent unless something arrives first.
     heard_by: Instant,
     acked: bool,
+    requests: RequestHandlerSlot,
+    answered: mpsc::UnboundedSender<RequestResult>,
+    answers: OwnedMutexGuard<mpsc::UnboundedReceiver<RequestResult>>,
 }
 
 impl Session {
@@ -188,6 +242,7 @@ impl Session {
                     }
                 }
                 () = sleep_until(self.heard_by) => return Err(Exit::Ended(SocketEnd::Silent)),
+                Some(result) = self.answers.recv() => self.answer(result, stop).await?,
                 () = ctx.wake.notified(), if outbox.caught_up => outbox.caught_up = false,
                 () = ready(()), if sendable => {
                     if let Some((offset, text)) = outbox.pending.pop_front() {
@@ -200,23 +255,25 @@ impl Session {
     }
 
     /// The next frame from the Hub: the offset it acks, if it was a
-    /// `CursorAck`.
+    /// `CursorAck`. A result ready meanwhile is sent.
     async fn heard(&mut self, stop: &mut watch::Receiver<bool>) -> Result<Option<u64>, Exit> {
-        tokio::select! {
-            biased;
-            () = stopped(stop) => Err(Exit::Stop),
-            received = self.conn.received() => self.took(received),
-            () = sleep_until(self.heard_by) => Err(Exit::Ended(SocketEnd::Silent)),
+        loop {
+            tokio::select! {
+                biased;
+                () = stopped(stop) => return Err(Exit::Stop),
+                received = self.conn.received() => return self.took(received),
+                () = sleep_until(self.heard_by) => return Err(Exit::Ended(SocketEnd::Silent)),
+                Some(result) = self.answers.recv() => self.answer(result, stop).await?,
+            }
         }
     }
 
-    /// Any frame proves the Hub is there. One that is not a `CursorAck` is
-    /// not acted on, and a `SignedRequest` goes unanswered, with no
-    /// `RequestResult` and the socket left open: the Hub keeps the first
-    /// outcome it records (docs/HUB.md §5 *Queued requests*), so a `refused`
-    /// sent while request verification is not built (§2) would stand
-    /// after it is. Unanswered, the request is delivered again on the next
-    /// connection.
+    /// Any frame proves the Hub is there. A request goes to the bound
+    /// handler, which decides whether it is answered at all. With none
+    /// bound it goes unanswered, with the socket left open: the Hub keeps
+    /// the first outcome it records (docs/HUB.md §5 *Queued requests*), so
+    /// only a desktop that has judged the request may answer it, and an
+    /// unanswered one is delivered again on the next connection.
     fn took(&mut self, received: SocketReceived) -> Result<Option<u64>, Exit> {
         self.heard_by = Instant::now() + self.liveness;
         match received {
@@ -225,16 +282,55 @@ impl Session {
                     return Ok(Some(ack.offset));
                 }
                 if let Ok(request) = serde_json::from_str::<RequestHeader>(&text) {
-                    tracing::debug!(
-                        request_id = %request.request_id,
-                        "a Hub request left unanswered"
-                    );
+                    match self.requests.get() {
+                        Some(handler) => self.handle(Arc::clone(handler), text),
+                        None => tracing::debug!(
+                            request_id = %request.request_id,
+                            "a Hub request left unanswered: no handler is bound"
+                        ),
+                    }
                 }
                 Ok(None)
             }
             SocketReceived::Alive => Ok(None),
             SocketReceived::Closed(code) => Err(Exit::Ended(SocketEnd::Closed(code))),
         }
+    }
+
+    /// Never awaited here: the result comes back through
+    /// [`Session::answers`]. One request at a time is the handler's to hold,
+    /// not a session's: a session lasts one connection, and a lock here would
+    /// be a fresh one on every re-pair
+    /// ([`crate::application::hub_requests::HubRequests`]).
+    ///
+    /// The task is not tracked, so it outlives `hub_disconnect`: a request
+    /// already in hand runs to completion, a start still launches, and its
+    /// result is dropped with the context. It is not aborted because a start
+    /// stopped between spending its id and launching its run would leave a
+    /// spent id with no run and no answer.
+    fn handle(&self, handler: Arc<dyn HubRequestHandler>, text: String) {
+        let answered = self.answered.clone();
+        tokio::spawn(async move {
+            if let Some(result) = handler.handle(&text).await {
+                let _ = answered.send(result);
+            }
+        });
+    }
+
+    /// A result whose send fails is queued again for the next connection.
+    async fn answer(
+        &mut self,
+        result: RequestResult,
+        stop: &mut watch::Receiver<bool>,
+    ) -> Result<(), Exit> {
+        let Some(text) = encoded(&result) else {
+            return Ok(());
+        };
+        if let Err(exit) = self.send(text, stop).await {
+            let _ = self.answered.send(result);
+            return Err(exit);
+        }
+        Ok(())
     }
 
     /// A send still pending after [`Session::liveness`] is a Hub that reads

@@ -73,6 +73,7 @@ impl StepExecutor for SpyExecutor {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         };
         *self.captured.lock().expect("lock is not poisoned") = Some(launch);
         Ok(feature)

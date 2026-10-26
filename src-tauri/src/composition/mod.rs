@@ -4,7 +4,9 @@
 //! construction site. `lib.rs::run`'s Tauri `.setup()` closure calls it,
 //! supplying `ExecutionMode::Router` and a `TauriNotificationAdapter`,
 //! then adapts nothing further — the returned `AppContext` is managed
-//! as-is.
+//! as-is, and the policy writer beside it as `commands::hub::HubPolicySettings`.
 
-pub use demeteo_core::composition::{build_core_context, CoreConfig, ExecutionMode};
+pub use demeteo_core::composition::{
+    build_core_context, build_core_context_with_policy_writer, CoreConfig, ExecutionMode,
+};
 pub use demeteo_core::state::AppContext;
