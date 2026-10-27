@@ -16,7 +16,7 @@ use crate::domain::hub_socket::{
     after_close, after_refresh, backoff, resets_backoff, Reconnect, RefreshEnd, SocketEnd,
     StopReason,
 };
-use crate::ports::hub::{DialFailure, HubSocketDialer, SocketUpgrade};
+use crate::ports::hub::{DialFailure, HubSnapshotSource, HubSocketDialer, SocketUpgrade};
 use crate::ports::run_events::RunEventsPort;
 use crate::shared::time::now_secs;
 
@@ -25,6 +25,8 @@ use super::device_key::DeviceKey;
 use super::{random_token, HubPairing, Refresher};
 
 pub mod session;
+mod snapshot_send;
+pub mod snapshot_wake;
 pub mod wake;
 #[cfg(feature = "hub-socket")]
 pub mod ws_transport;
@@ -79,6 +81,11 @@ pub struct SocketConfig {
     /// two have to come from the same [`wake::WakingRunEvents`].
     pub run_events: Arc<dyn RunEventsPort>,
     pub wake: Arc<Notify>,
+    /// See [`SessionContext::snapshots`] and [`SessionContext::snapshot_wake`].
+    pub snapshots: Arc<dyn HubSnapshotSource>,
+    pub snapshot_wake: Arc<Notify>,
+    /// See [`SessionContext::snapshot_debounce`].
+    pub snapshot_debounce: Duration,
     /// Where the socket task is spawned; `start_socket` is synchronous, so
     /// it cannot take the caller's runtime for granted.
     pub runtime: Handle,

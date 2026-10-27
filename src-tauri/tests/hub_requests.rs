@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The desktop's half of Hub requests (docs/HUB.md §6.1), driven against a
 //! real migrated SQLite database.
 

@@ -17,13 +17,17 @@
 //!
 //! [`UnreadableRunEvents`] fails every call, so nothing it is asked can pass
 //! as a run log that read back empty.
+//!
+//! [`ScriptedSnapshotSource`] answers from its script and then from the
+//! snapshot a test set, and with an `Err` once it has neither, so no session
+//! sends a snapshot the test did not choose.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
-use demeteo_hub_protocol::AttachmentRef;
+use demeteo_hub_protocol::{AttachmentRef, Snapshot};
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
@@ -32,8 +36,8 @@ use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 use crate::ports::hub::{
     AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubPinRepository, HubRefreshEndpoint,
-    HubSecretStore, HubSocketConnection, HubSocketDialer, SocketGone, SocketReceived,
-    SocketUpgrade,
+    HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer, SocketGone,
+    SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 
@@ -612,5 +616,54 @@ impl RunEventsPort for UnreadableRunEvents {
     fn list_after(&self, _from_offset: i64, _limit: usize) -> Result<Vec<RunEvent>, String> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Err(Self::ERROR.to_owned())
+    }
+}
+
+/// A snapshot source that answers each call with the next scripted outcome,
+/// then with the snapshot [`Self::set`] last chose, and otherwise with
+/// [`Self::UNSCRIPTED`], counted by [`Self::unscripted`].
+#[derive(Default)]
+pub struct ScriptedSnapshotSource {
+    script: Mutex<VecDeque<Result<Snapshot, String>>>,
+    current: Mutex<Option<Snapshot>>,
+    calls: AtomicUsize,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedSnapshotSource {
+    pub const UNSCRIPTED: &'static str = "unscripted snapshot";
+
+    pub fn push(&self, snapshot: Snapshot) {
+        locked(&self.script).push_back(Ok(snapshot));
+    }
+
+    pub fn fail(&self, error: &str) {
+        locked(&self.script).push_back(Err(error.to_owned()));
+    }
+
+    /// What every call past the script answers, until set again.
+    pub fn set(&self, snapshot: Snapshot) {
+        *locked(&self.current) = Some(snapshot);
+    }
+
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+impl HubSnapshotSource for ScriptedSnapshotSource {
+    fn snapshot(&self) -> Result<Snapshot, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(next) = locked(&self.script).pop_front() {
+            return next;
+        }
+        locked(&self.current).clone().ok_or_else(|| {
+            self.unscripted.fetch_add(1, Ordering::SeqCst);
+            Self::UNSCRIPTED.to_owned()
+        })
     }
 }

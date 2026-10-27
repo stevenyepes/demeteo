@@ -27,10 +27,14 @@ use tokio::time::{sleep_until, timeout, Instant};
 
 use crate::domain::hub_socket::{
     hello, hub_event, sends_events, SocketEnd, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS,
-    PAGE_SIZE, STOP_CLOSE_DEADLINE_SECS,
+    PAGE_SIZE, SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
-use crate::ports::hub::{HubRequestHandler, HubSocketConnection, SocketGone, SocketReceived};
+use crate::ports::hub::{
+    HubRequestHandler, HubSnapshotSource, HubSocketConnection, SocketGone, SocketReceived,
+};
 use crate::ports::run_events::{RunEvent, RunEventsPort};
+
+use super::snapshot_send::SnapshotSend;
 
 /// RFC 6455 §7.4.1, for an endpoint that is going away.
 const GOING_AWAY: u16 = 1001;
@@ -55,6 +59,14 @@ pub struct SessionContext {
     /// `run_events`; it has to be that decorator's, or an append wakes
     /// nothing and a live row waits for the next connection.
     pub wake: Arc<Notify>,
+    pub snapshots: Arc<dyn HubSnapshotSource>,
+    /// Fired by [`super::snapshot_wake`]'s decorators on every write to
+    /// what [`Self::snapshots`] reads; the same pairing rule as
+    /// [`Self::wake`].
+    pub snapshot_wake: Arc<Notify>,
+    /// How long after a [`Self::snapshot_wake`] the snapshot is sent; see
+    /// [`SNAPSHOT_DEBOUNCE_SECS`].
+    pub snapshot_debounce: Duration,
     /// How long the Hub may say nothing, of any kind, and how long one send
     /// may stay pending.
     pub liveness: Duration,
@@ -100,6 +112,8 @@ impl SessionContext {
         pinned_scopes: Vec<String>,
         run_events: Arc<dyn RunEventsPort>,
         wake: Arc<Notify>,
+        snapshots: Arc<dyn HubSnapshotSource>,
+        snapshot_wake: Arc<Notify>,
     ) -> Self {
         Self {
             install_id,
@@ -107,6 +121,9 @@ impl SessionContext {
             pinned_scopes,
             run_events,
             wake,
+            snapshots,
+            snapshot_wake,
+            snapshot_debounce: Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS),
             liveness: Duration::from_secs(LIVENESS_DEADLINE_SECS),
             stop_close: Duration::from_secs(STOP_CLOSE_DEADLINE_SECS),
             requests: RequestHandlerSlot::default(),
@@ -121,6 +138,11 @@ impl SessionContext {
 
     pub fn with_liveness(mut self, liveness: Duration) -> Self {
         self.liveness = liveness;
+        self
+    }
+
+    pub fn with_snapshot_debounce(mut self, snapshot_debounce: Duration) -> Self {
+        self.snapshot_debounce = snapshot_debounce;
         self
     }
 
@@ -222,6 +244,12 @@ impl Session {
                 self.heard(stop).await?;
             }
         }
+        // After the first ack, not after `Hello`: the ack proves the Hub took
+        // the `Hello`, so nothing is built for a connection it refuses.
+        let mut snapshots = SnapshotSend::default();
+        if let Some(frame) = snapshots.frame(&ctx.snapshots).await {
+            self.send(frame, stop).await?;
+        }
         let mut outbox = Outbox::after(cursor);
         loop {
             if outbox.pending.is_empty() && !outbox.caught_up {
@@ -244,6 +272,12 @@ impl Session {
                 () = sleep_until(self.heard_by) => return Err(Exit::Ended(SocketEnd::Silent)),
                 Some(result) = self.answers.recv() => self.answer(result, stop).await?,
                 () = ctx.wake.notified(), if outbox.caught_up => outbox.caught_up = false,
+                () = ctx.snapshot_wake.notified() => snapshots.woken(ctx.snapshot_debounce),
+                () = snapshots.due() => {
+                    if let Some(frame) = snapshots.frame(&ctx.snapshots).await {
+                        self.send(frame, stop).await?;
+                    }
+                }
                 () = ready(()), if sendable => {
                     if let Some((offset, text)) = outbox.pending.pop_front() {
                         self.send(text, stop).await?;
@@ -409,7 +443,7 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|&stop| stop).await;
 }
 
-fn encoded(frame: &impl Serialize) -> Option<String> {
+pub(super) fn encoded(frame: &impl Serialize) -> Option<String> {
     serde_json::to_string(frame)
         .map_err(|error| tracing::warn!(%error, "a frame for the Hub did not serialise"))
         .ok()

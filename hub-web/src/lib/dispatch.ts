@@ -1,7 +1,6 @@
 import type { EffortLevel } from '../../../src/lib/effortLevels';
 import type { StepOverride } from '../../../src/types';
-import { type Guard, getJson, HubApiError, postJson } from './api';
-import { UUID } from './fleet';
+import { type Guard, getJson, HubApiError, postJson, UUID } from './api';
 
 /**
  * The body of `POST /v1/instances/{id}/runs`, spelled as the wire spells it.

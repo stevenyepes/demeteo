@@ -44,6 +44,7 @@ const SIGNED_IN: Answers = {
   'GET /v1/session': () => json({ csrf_token: 'csrf-1', credential_id: 'cred-1' }),
   'GET /v1/passkeys': () => json({ passkeys: [] }),
   'GET /v1/fleet': () => json({ instances: [] }),
+  'GET /v1/runs': () => json({ runs: [] }),
   'POST /v1/pairing/start': () =>
     json({
       pairing_id: 'pairing-1',
@@ -204,10 +205,31 @@ describe('App shell, signed in', () => {
     expect(monoTexts(container)).toEqual(['inst-7']);
   });
 
+  // `inst-7` is no UUID, so `getRunDetail` refuses it as not found without asking the Hub.
   it('passes the instance id and the feature id from the hash to the Run view', async () => {
-    const { container } = await renderAt('#/instances/inst-7/runs/feat-42');
+    const asked = stubHub(SIGNED_IN);
+    window.location.hash = '#/instances/inst-7/runs/feat-42';
+    const { container } = render(<App />);
 
-    expect(monoTexts(container)).toEqual(['inst-7', 'feat-42']);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/was not found or not yours/);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Run');
+    expect(monoTexts(container)).toEqual(['feat-42', 'inst-7']);
+    expect(asked).toEqual(['GET /v1/session']);
+  });
+
+  it('asks the Hub for the run the hash names', async () => {
+    const path = `/v1/instances/${INSTANCE_UUID}/runs/feat-42`;
+    const instance = `/v1/instances/${INSTANCE_UUID}`;
+    const asked = stubHub({
+      ...SIGNED_IN,
+      [`GET ${path}`]: () => new Promise<never>(() => {}),
+      [`GET ${instance}`]: () => new Promise<never>(() => {}),
+    });
+    window.location.hash = `#/instances/${INSTANCE_UUID}/runs/feat-42`;
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveAccessibleName('Run');
+    await waitFor(() => expect(asked).toEqual(['GET /v1/session', `GET ${path}`, `GET ${instance}`]));
   });
 });
 
@@ -303,7 +325,7 @@ describe('App shell, signing out', () => {
       expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Sign in'),
     );
     expect(screen.queryByRole('navigation')).toBeNull();
-    expect(asked).toEqual(['GET /v1/session', 'POST /v1/session/end']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'POST /v1/session/end']);
   });
 
   it('lands on the sign-in view when the hash was left on #/sign-up', async () => {
@@ -329,7 +351,7 @@ describe('App shell, signing out', () => {
     await userEvent.click(control);
 
     expect(control).toBeDisabled();
-    expect(asked).toEqual(['GET /v1/session', 'POST /v1/session/end']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'POST /v1/session/end']);
   });
 
   it('stays signed in and shows the failure when the Hub does not end the session', async () => {
@@ -440,7 +462,7 @@ describe('App shell, when the Hub no longer knows the session', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
 
     await expectSignInView();
-    expect(asked).toEqual(['GET /v1/session', 'POST /v1/session/end']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'POST /v1/session/end']);
   });
 
   it('lands on the sign-in view when the 401 arrives with the hash on #/sign-up', async () => {

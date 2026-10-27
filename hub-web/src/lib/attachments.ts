@@ -1,5 +1,4 @@
-import { type Guard, HubApiError, postBytes } from './api';
-import { UUID } from './fleet';
+import { type Guard, HubApiError, postBytes, UUID } from './api';
 
 /** Mirrors `crates/demeteo-hub/src/attachments/mod.rs`, kept equal by hand. */
 export const MAX_ATTACHMENTS_PER_DISPATCH = 10;

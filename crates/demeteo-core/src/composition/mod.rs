@@ -92,10 +92,23 @@ pub fn build_core_context_with_policy_writer(
             .expect("Failed to initialize database adapter"),
     );
     let machines_repo: Arc<dyn ports::db::MachineRepository> = db_adapter.clone();
-    let projects_repo: Arc<dyn ports::db::ProjectRepository> = db_adapter.clone();
+    // Wrapped here, before the first clone: a clone of the bare repo hands
+    // its holder writes the snapshot never hears about (docs/HUB.md §5).
+    let snapshot_wake = Arc::new(tokio::sync::Notify::new());
+    let projects_repo: Arc<dyn ports::db::ProjectRepository> = Arc::new(
+        adapters::hub::socket::snapshot_wake::WakingProjects::with_wake(
+            db_adapter.clone(),
+            snapshot_wake.clone(),
+        ),
+    );
+    let workflows_repo: Arc<dyn ports::db::WorkflowRepository> = Arc::new(
+        adapters::hub::socket::snapshot_wake::WakingWorkflows::with_wake(
+            db_adapter.clone(),
+            snapshot_wake.clone(),
+        ),
+    );
     let features_repo: Arc<dyn ports::db::FeatureRepository> = db_adapter.clone();
     let sequence_resume_repo: Arc<dyn ports::db::SequenceResumeRepository> = db_adapter.clone();
-    let workflows_repo: Arc<dyn ports::db::WorkflowRepository> = db_adapter.clone();
     let gates_repo: Arc<dyn ports::db::GateRepository> = db_adapter.clone();
     let app_settings_repo: Arc<dyn ports::db::AppSettingsRepository> = db_adapter.clone();
     let memory_repo: Arc<dyn ports::memory::ProjectMemoryPort> = db_adapter.clone();
@@ -354,7 +367,17 @@ pub fn build_core_context_with_policy_writer(
         ExecutionMode::Router => hub_pairing(
             hub_pins.clone(),
             app_version.clone(),
-            hub_socket(run_events_repo.clone(), run_events_wake, runtime.clone()),
+            hub_socket(
+                run_events_repo.clone(),
+                run_events_wake,
+                Arc::new(adapters::hub::snapshot_source::RepoSnapshotSource::new(
+                    db_adapter.clone(),
+                    db_adapter.clone(),
+                    db_adapter.clone(),
+                )),
+                snapshot_wake,
+                runtime.clone(),
+            ),
         ),
         ExecutionMode::LocalOnly => None,
     };
@@ -487,12 +510,15 @@ fn hub_pairing(
 }
 
 /// `run_events` and `wake` have to come from one
-/// [`WakingRunEvents`](adapters::hub::socket::wake::WakingRunEvents). With
-/// no dialer the desktop still pairs; it just never dials.
+/// [`WakingRunEvents`](adapters::hub::socket::wake::WakingRunEvents), and
+/// `snapshot_wake` has to be the one `ctx.projects` and `ctx.workflows` wake
+/// through. With no dialer the desktop still pairs; it just never dials.
 #[cfg(feature = "hub-socket")]
 fn hub_socket(
     run_events: Arc<dyn ports::run_events::RunEventsPort>,
     wake: Arc<tokio::sync::Notify>,
+    snapshots: Arc<dyn ports::hub::HubSnapshotSource>,
+    snapshot_wake: Arc<tokio::sync::Notify>,
     runtime: tokio::runtime::Handle,
 ) -> Option<adapters::hub::socket::SocketConfig> {
     match adapters::hub::socket::ws_transport::WsSocketDialer::new() {
@@ -500,6 +526,11 @@ fn hub_socket(
             dialer: Arc::new(dialer),
             run_events,
             wake,
+            snapshots,
+            snapshot_wake,
+            snapshot_debounce: std::time::Duration::from_secs(
+                crate::domain::hub_socket::SNAPSHOT_DEBOUNCE_SECS,
+            ),
             runtime,
             sleeper: Arc::new(adapters::hub::socket::TokioSleeper),
             jitter: adapters::hub::socket::os_jitter,
@@ -515,6 +546,8 @@ fn hub_socket(
 fn hub_socket(
     _run_events: Arc<dyn ports::run_events::RunEventsPort>,
     _wake: Arc<tokio::sync::Notify>,
+    _snapshots: Arc<dyn ports::hub::HubSnapshotSource>,
+    _snapshot_wake: Arc<tokio::sync::Notify>,
     _runtime: tokio::runtime::Handle,
 ) -> Option<adapters::hub::socket::SocketConfig> {
     None

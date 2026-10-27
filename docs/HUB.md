@@ -46,7 +46,7 @@ full.
 | `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first |
-| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); no snapshot is sent (§11) |
+| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); a snapshot after the first `CursorAck` and after each Project or Workflow write (§5 *Snapshots*) |
 | Desktop side: Settings › Hub tab | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint, nothing shows whether the socket is connected or why it stopped, and nothing sets the toggles and ceilings of §7 or shows the activity log. The `hub_policy_get`, `hub_policy_set` and `hub_request_log` commands and their wrappers exist. Until a view calls `hub_policy_set`, `spend` and `gates` read as off and every request that needs one is refused |
 | Desktop side: passkey pin set, request verification, local ceilings | **request verification and local ceilings built; no passkey is verified against the pinned set yet** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). A `gate_decision` and the two passkey kinds are deferred, because nothing on the desktop verifies a WebAuthn assertion yet (§8) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
@@ -614,9 +614,20 @@ stripped** (decision 64). A `Snapshot` is one struct carrying the instance's
 Projects, Workflow versions and run-shape settings together. **The Hub holds one
 row per instance and each snapshot replaces it wholesale**, so there is one
 current copy and nothing to merge. A snapshot is sent after `hello` and whenever
-its content changes; the desktop does not send one yet (§11 *The desktop
-socket's carried defaults*). The Hub answers it with no frame: the instance keeps no
+its content changes. The Hub answers it with no frame: the instance keeps no
 cursor for snapshots, and one that was lost is made good by the next.
+
+The desktop sends its first snapshot after the connection's first `CursorAck`,
+which proves the Hub processed `hello`, and only while `read` is pinned. A
+write to a Project or a Workflow wakes a rebuild, and the rebuilt snapshot is
+sent unless it equals the last one sent on that connection; a new connection
+always sends its first. One that cannot be built, or whose frame is over the
+4 MiB of §11 *The socket's carried defaults*, is logged and not sent, and the
+session goes on. When the rebuild runs, what it sends, and what it leaves stale
+are carried defaults (§11 *The desktop socket's carried defaults*). The builder is
+[`domain/hub_socket/snapshot.rs`](../crates/demeteo-core/src/domain/hub_socket/snapshot.rs);
+what one connection sends of it is
+[`adapters/hub/socket/snapshot_send.rs`](../crates/demeteo-core/src/adapters/hub/socket/snapshot_send.rs).
 
 These are what a Hub-authored `start_feature` names (§6) and what the
 future runner dispatch would build a `RunSpec` from (§10). The Hub never authors a
@@ -633,12 +644,18 @@ before it constructs a snapshot:
 
 | Field | What the builder removes |
 |---|---|
-| Each step's `cwd`, in both Workflow documents | the whole field — it names a directory in the instance's tree |
-| Any other local path in a Workflow document | the same |
-| `remote_url` | userinfo (`https://user:token@host/…` → `https://host/…`); a Git token never leaves an instance (§3) |
+| Every key named `cwd`, at any depth, in both Workflow documents | the whole field — it names a directory in the instance's tree |
+| `remote_url` | the whole userinfo (`https://user:token@host/…` → `https://host/…`); a Git token never leaves an instance (§3) |
 
-A step's `command` and prompt templates are not on that list, and are not safe
-either — §11.
+`remote_url` is not read from git: it is `https://{host}/{repo_path}`, built
+from the Project's first Repository and the provider that Repository names.
+It is sent as nothing at all when either is missing, when `repo_path` is empty,
+or when what is left after the strip still holds an `@`, whitespace or a
+control character. A Workflow document that does not parse omits its whole
+version.
+
+A local path a step names anywhere but `cwd` — in its `command` or a prompt
+template — is not stripped, and those fields are not safe either: §11 item 11.
 
 ### Queued requests
 
@@ -1509,10 +1526,9 @@ are built, and so are the desktop's request verification and local ceilings
 - **What the desktop's socket does not send.** It answers no `gate_decision`
   and neither passkey kind, because nothing on the desktop verifies a WebAuthn
   assertion against the pinned set yet (§8), so it defers them (§6.1 *On the
-  desktop*); it sends no snapshot, which the snapshot builder of §5 is needed for;
-  it sends no `ticket_*` event, because no desktop `run_events` row records a
-  ticket's lifecycle, so the Hub's ticket counts read zero; and it relays local
-  runs only (§5 *Events and the cursor*). §11 *The desktop socket's carried
+  desktop*); it sends no `ticket_*` event, because no desktop `run_events` row
+  records a ticket's lifecycle, so the Hub's ticket counts read zero; and it
+  relays local runs only (§5 *Events and the cursor*). §11 *The desktop socket's carried
   defaults* has what it does instead.
 - **A Settings › Hub tab.** The commands and their wrappers exist, and no view
   renders them, so the fingerprint is not on screen yet, and no view sets the
@@ -1626,9 +1642,10 @@ what a desktop client implements.
     both are user-authored text that may embed a local path or a credential
     (`curl -H "Authorization: Bearer …"`), which no field-level strip can
     detect. Sending them, redacting them, or sending a projection without them
-    — the last re-decides decision 64 — is open. The snapshot builder's settled
-    obligations, `cwd` and `remote_url` userinfo, are in §5; the Hub-client
-    build ticket owns both those and this question.
+    — the last re-decides decision 64 — is open. Until it is decided the
+    desktop sends them, scrubbed (§11 *The desktop socket's carried defaults*).
+    The snapshot builder's settled obligations, `cwd` and `remote_url`
+    userinfo, are in §5.
 12. **Approving a pairing on a session alone.** The consent routes (§4) take a
     signed-in session, guarded by `Origin` and the CSRF header, and no fresh
     assertion. §8 refuses to let a session move *passkey* trust, and part of
@@ -1748,8 +1765,8 @@ question — the `4001` close and the version gate — are items 6 and 8 above.
 ### The desktop socket's carried defaults
 
 The desktop's client (§9 *Code layout*) was built ahead of a WebAuthn
-verifier, the snapshot builder and any Settings view, so it carries an answer
-for each gap. None is decided; each is what the desktop does today.
+verifier and any Settings view, and its snapshots ahead of item 11, so it
+carries an answer for each gap. None is decided; each is what the desktop does today.
 
 - **A deferred request is left unanswered and the socket stays open.** A
   `gate_decision` with `gates` on and either passkey kind get no
@@ -1761,13 +1778,26 @@ for each gap. None is decided; each is what the desktop does today.
 - **The policy, the activity log and the consumed ids outlive the pairing.**
   `hub_disconnect` clears the pins and the keyring entries and nothing else
   (§7 *Local ceilings*).
-- **No snapshot is sent.** The Hub accepts events without one (§5), and whether
-  a step's `command` and prompt templates may cross is item 11.
+- **A step's `command` and prompt templates cross, scrubbed.** Item 11 is open;
+  meanwhile every string left in a Workflow document goes through
+  [`secret_scrub.rs`](../crates/demeteo-core/src/shared/secret_scrub.rs), which
+  masks `user:pass@` URLs and known token shapes. A path in that text crosses.
+- **A rebuild runs 2 seconds after the first write that wakes it**
+  (`SNAPSHOT_DEBOUNCE_SECS`). The window is fixed, not trailing: writes inside
+  it do not move it, so continuous edits cannot hold a snapshot back.
+- **Each Workflow is sent at its latest version only.** Every save appends a
+  version, and sending them all grows towards the 4 MiB frame.
+- **A provider edit does not wake a rebuild.** Adding or deleting a provider
+  changes the `remote_url`s derived from it, which stay stale until the next
+  Project or Workflow write or the next connection.
+- **A Project reports one `remote_url`**, its first Repository's.
+  `ProjectSnapshot` has one field, and reporting every Repository is a
+  protocol change.
 - **No `ticket_*` kind is sent.** No desktop `run_events` row records a ticket's
   lifecycle, so [`projection.rs`](../crates/demeteo-core/src/domain/hub_socket/projection.rs)
   has nothing to map onto one.
-- **`Hello` reports the pinned scopes as granted, and events go only when
-  `read` is pinned.** It does not narrow them by the toggles of §7, so the Hub's
+- **`Hello` reports the pinned scopes as granted, and events and snapshots go
+  only when `read` is pinned.** It does not narrow them by the toggles of §7, so the Hub's
   copy can list a scope whose toggle is off; a request for it is queued and comes
   back `refused: scope_off`. `read` has no toggle, so the second half holds
   either way.

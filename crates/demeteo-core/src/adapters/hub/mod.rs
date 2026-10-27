@@ -57,6 +57,7 @@ pub mod device_key;
 #[cfg(feature = "keyring")]
 pub mod keyring_store;
 pub mod loopback;
+pub mod snapshot_source;
 pub mod socket;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
@@ -182,6 +183,15 @@ impl HubPairing {
         if self.requests.set(handler).is_err() {
             tracing::warn!("the Hub request handler was already bound");
         }
+    }
+
+    /// What composition handed the socket to wait on for a snapshot, as
+    /// [`Self::socket_wake`] is for `run_events`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn snapshot_wake(&self) -> Option<Arc<tokio::sync::Notify>> {
+        self.socket_config
+            .as_ref()
+            .map(|config| config.snapshot_wake.clone())
     }
 
     /// The version shown on the Hub's consent page. Unset, the page shows
@@ -349,8 +359,11 @@ impl HubPairing {
                 paired.scopes,
                 config.run_events.clone(),
                 config.wake.clone(),
+                config.snapshots.clone(),
+                config.snapshot_wake.clone(),
             )
-            .with_requests(self.requests.clone()),
+            .with_requests(self.requests.clone())
+            .with_snapshot_debounce(config.snapshot_debounce),
             sleeper: config.sleeper.clone(),
             jitter: Box::new(config.jitter),
         }))

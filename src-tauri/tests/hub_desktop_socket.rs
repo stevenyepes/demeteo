@@ -9,14 +9,16 @@
 
 use demeteo_core::adapters::database::SqliteAdapter;
 use demeteo_core::adapters::hub::device_key::DeviceKey;
+use demeteo_core::adapters::hub::snapshot_source::RepoSnapshotSource;
 use demeteo_core::adapters::hub::socket::session::{
     run_session, RequestHandlerSlot, SessionContext, SessionEnd,
 };
+use demeteo_core::adapters::hub::socket::snapshot_wake::WakingWorkflows;
 use demeteo_core::adapters::hub::socket::wake::WakingRunEvents;
 use demeteo_core::adapters::hub::socket::{supervise, Sleeper, SupervisorDeps};
 use demeteo_core::adapters::hub::testing::{
     ConnectionLog, Exchange, MemorySecretStore, ScriptedAttachments, ScriptedConnection,
-    ScriptedRefreshEndpoint, ScriptedSocketDialer, UnreadableRunEvents,
+    ScriptedRefreshEndpoint, ScriptedSnapshotSource, ScriptedSocketDialer, UnreadableRunEvents,
 };
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
@@ -29,10 +31,12 @@ use demeteo_core::domain::hub_pairing::{
 };
 use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome};
 use demeteo_core::domain::hub_socket::{
-    SocketEnd, StopReason, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS, PAGE_SIZE,
-    PREMATURE_EXPIRY_MARGIN_SECS, STOP_CLOSE_DEADLINE_SECS,
+    SocketEnd, StopReason, LIVENESS_DEADLINE_SECS, MAX_SNAPSHOT_BYTES, MAX_UNACKED_EVENTS,
+    PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
+use demeteo_core::domain::models::{Workflow, WorkflowVersion};
 use demeteo_core::error::AppError;
+use demeteo_core::ports::db::WorkflowRepository;
 use demeteo_core::ports::hub::{
     DialFailure, HubPinRepository, HubRequestHandler, HubSecretStore, HubSocketConnection,
     HubSocketDialer, HubTokenEndpoint, SocketGone, SocketReceived, SocketUpgrade,
@@ -49,8 +53,8 @@ use demeteo_hub::pairing::grant::{refresh_change, FamilyChange, FreshPair, Token
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::pairing::testing::MemoryFamily;
 use demeteo_hub::protocol::{
-    CursorAck, Hello, RefusalReason, RequestOutcome, RequestPayload, RequestResult, RunEvent,
-    RunEventKind, RunEventPayload, Scope, PROTOCOL_VERSION,
+    CursorAck, Hello, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload,
+    RequestResult, RunEvent, RunEventKind, RunEventPayload, Scope, Snapshot, PROTOCOL_VERSION,
 };
 use demeteo_hub::routes::AppState;
 use demeteo_hub::socket::connections::Connections;
@@ -67,7 +71,7 @@ use std::future::ready;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -626,6 +630,8 @@ impl Bridged {
             pins.scopes,
             self.run_events.clone(),
             self.run_events.wake(),
+            Arc::new(ScriptedSnapshotSource::default()),
+            Arc::new(Notify::new()),
         )
     }
 
@@ -1271,12 +1277,23 @@ fn cursor_ack(offset: u64) -> SocketReceived {
 /// A session context pinned `read`, reading `run_events`, paired with no
 /// Hub.
 fn scripted_context(run_events: Arc<dyn RunEventsPort>, wake: Arc<Notify>) -> SessionContext {
+    snapshot_context(run_events, wake, Arc::default())
+}
+
+/// [`scripted_context`], its snapshots built by `snapshots`.
+fn snapshot_context(
+    run_events: Arc<dyn RunEventsPort>,
+    wake: Arc<Notify>,
+    snapshots: Arc<ScriptedSnapshotSource>,
+) -> SessionContext {
     SessionContext::new(
         "install-1".to_owned(),
         APP_VERSION.to_owned(),
         vec!["read".to_owned()],
         run_events,
         wake,
+        snapshots,
+        Arc::new(Notify::new()),
     )
 }
 
@@ -1470,6 +1487,390 @@ async fn an_unreadable_run_log_closes_the_session_1011() {
     serde_json::from_str::<Hello>(only).expect("a hello");
 }
 
+#[test]
+fn a_context_debounces_snapshots_by_the_default_until_told_otherwise() {
+    let ctx = scripted_context(
+        Arc::new(UnreadableRunEvents::default()),
+        Arc::new(Notify::new()),
+    );
+    assert_eq!(
+        ctx.snapshot_debounce,
+        Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS)
+    );
+    let ctx = ctx.with_snapshot_debounce(SHORT_LIVENESS);
+    assert_eq!(ctx.snapshot_debounce, SHORT_LIVENESS);
+}
+
+/// A snapshot holding one Project, named `name`.
+fn one_project(name: &str) -> Snapshot {
+    Snapshot {
+        v: PROTOCOL_VERSION,
+        projects: vec![ProjectSnapshot {
+            id: "p-1".to_owned(),
+            name: name.to_owned(),
+            remote_url: None,
+        }],
+        workflows: Vec::new(),
+        run_shape: Vec::new(),
+    }
+}
+
+/// Every `Snapshot` among `frames`.
+fn snapshots_in(frames: &[String]) -> Vec<Snapshot> {
+    frames
+        .iter()
+        .filter_map(|text| serde_json::from_str::<Snapshot>(text).ok())
+        .collect()
+}
+
+/// AC4: nothing is built while the Hub has yet to ack, and one snapshot is
+/// sent once it has.
+#[tokio::test]
+async fn a_snapshot_follows_the_first_cursor_ack() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone());
+    let snapshot_wake = ctx.snapshot_wake.clone();
+    let (conn, release) = ScriptedConnection::new([]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+
+    timeout(BOUND, log.sent_times(1))
+        .await
+        .expect("a hello sent");
+    snapshot_wake.notify_one();
+    tokio::time::sleep(SETTLE).await;
+    let frames = log.sent();
+    let [hello] = &frames[..] else {
+        panic!("one frame before the ack, a hello: {frames:?}");
+    };
+    serde_json::from_str::<Hello>(hello).expect("a hello");
+    assert_eq!(snapshots.calls(), 0, "nothing built before the ack");
+
+    release.send(cursor_ack(0)).expect("the session reads");
+    timeout(BOUND, log.sent_times(2))
+        .await
+        .expect("a snapshot sent");
+    tokio::time::sleep(SETTLE).await;
+
+    let frames = log.sent();
+    assert_eq!(frames.len(), 2, "{frames:?}");
+    assert_eq!(snapshots_in(&frames[1..]), [one_project("alpha")]);
+    assert_eq!(snapshots.calls(), 1);
+    stop.send_replace(true);
+    let end = timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+    assert_eq!(end, (SessionEnd::Stopped, true));
+    assert_eq!(log.unscripted(), 0);
+    assert_eq!(snapshots.unscripted(), 0);
+}
+
+/// AC4: without `read` nothing is built, acked or woken, even by an edit
+/// made while connected.
+#[tokio::test]
+async fn pins_without_read_send_no_snapshot() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let (_, workflows) = workflow_db();
+    let mut ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
+        .with_liveness(SHORT_LIVENESS)
+        .with_snapshot_debounce(SHORT_LIVENESS / 5);
+    ctx.pinned_scopes = vec!["gates".to_owned()];
+    ctx.snapshot_wake = workflows.wake();
+    ctx.snapshot_wake.notify_one();
+    let conn = ScriptedConnection::new([cursor_ack(0)]).then_silent();
+    let log = conn.log();
+    let session = tokio::spawn(async move { scripted_session(conn, &ctx).await });
+    timeout(BOUND, log.sent_times(1))
+        .await
+        .expect("a hello sent");
+
+    workflows
+        .save_version(workflow_version(2))
+        .expect("version saved");
+    let end = session.await.expect("the session did not panic");
+
+    assert_eq!(end, (SessionEnd::Ended(SocketEnd::Silent), true));
+    let frames = log.sent();
+    let [only] = &frames[..] else {
+        panic!("one frame, a hello: {frames:?}");
+    };
+    let hello: Hello = serde_json::from_str(only).expect("a hello");
+    assert_eq!(hello.scopes, [Scope::Gates]);
+    assert_eq!(snapshots.calls(), 0);
+    assert_eq!(log.unscripted(), 0);
+}
+
+/// AC4: the Hub's own session takes the frame as a snapshot, after the
+/// `Hello`, and stores it without refusing the connection.
+#[tokio::test]
+async fn a_snapshot_reaches_the_hub_and_is_stored() {
+    let bridged = Bridged::new(&[]).await;
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let mut ctx = bridged.context();
+    ctx.snapshots = snapshots.clone();
+    let running = bridged.connect_with(ctx).await;
+    bridged.acked_through(0).await;
+    // The Hub answers a snapshot with nothing; it reads in order, so the ack
+    // of a row sent after it is the proof it was stored.
+    let live = bridged.append(&progress());
+    bridged.acked_through(live).await;
+
+    let stored = bridged.dialer.hub.snapshot().expect("a stored snapshot");
+    let stored: Snapshot = serde_json::from_str(&stored.body).expect("a snapshot body");
+    assert_eq!(stored, one_project("alpha"));
+    assert!(!bridged.dialer.sessions.lock().unwrap()[0].is_finished());
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+    assert_eq!(bridged.hub_sessions_ended().await, [Ended::PeerGone]);
+    assert_eq!(snapshots.unscripted(), 0);
+}
+
+/// A snapshot that cannot be built is not the run log: the session carries
+/// on, backlog and live rows alike (docs/HUB.md §5 *Snapshots*).
+#[tokio::test]
+async fn a_failing_snapshot_source_leaves_the_session_relaying_events() {
+    let (run_events, offsets) = progress_log(2);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.fail("the database is locked");
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone());
+    let (conn, _release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+
+    assert_eq!(sent_once_settled(&log, offsets.len()).await, offsets);
+    let (feature, kind, payload) = progress();
+    let live = run_events
+        .append(feature, kind, Some(&payload.to_string()), WRITTEN_AT_MS)
+        .expect("an appended row");
+    let live = u64::try_from(live).expect("a positive id");
+    let mut expected = offsets;
+    expected.push(live);
+    assert_eq!(sent_once_settled(&log, expected.len()).await, expected);
+
+    assert_eq!(snapshots.calls(), 1);
+    assert!(snapshots_in(&log.sent()).is_empty());
+    assert_eq!(log.closed_with(), None);
+    stop.send_replace(true);
+    let end = timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+    assert_eq!(end, (SessionEnd::Stopped, true));
+    assert_eq!(log.unscripted(), 0);
+}
+
+/// One the Hub would refuse is not sent, and the connection carries on.
+#[tokio::test]
+async fn a_snapshot_over_the_hubs_frame_limit_is_not_sent() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project(&"a".repeat(MAX_SNAPSHOT_BYTES)));
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
+        .with_liveness(SHORT_LIVENESS);
+    let conn = ScriptedConnection::new([cursor_ack(0)]).then_silent();
+    let log = conn.log();
+
+    let end = scripted_session(conn, &ctx).await;
+
+    assert_eq!(end, (SessionEnd::Ended(SocketEnd::Silent), true));
+    let frames = log.sent();
+    let [only] = &frames[..] else {
+        panic!("one frame, a hello: {frames:?}");
+    };
+    serde_json::from_str::<Hello>(only).expect("a hello");
+    assert_eq!(snapshots.calls(), 1);
+    assert_eq!(log.closed_with(), None);
+}
+
+/// Short enough to wait out, and long enough that a burst of edits spaced
+/// [`EDIT_GAP`] apart all land inside one window.
+const DEBOUNCE: Duration = Duration::from_millis(300);
+const EDIT_GAP: Duration = Duration::from_millis(50);
+
+fn workflow_version(version: u32) -> WorkflowVersion {
+    WorkflowVersion {
+        id: format!("wf-1-v{version}").as_str().into(),
+        workflow_id: "wf-1".into(),
+        version,
+        steps_json: "[]".to_owned(),
+        definition_json: None,
+        note: None,
+        created_at: 0,
+    }
+}
+
+/// A scratch DB holding workflow `wf-1` at version 1, and its workflows
+/// behind the production decorator that wakes the snapshot.
+fn workflow_db() -> (Arc<SqliteAdapter>, Arc<WakingWorkflows>) {
+    let db = Arc::new(
+        SqliteAdapter::new(rusqlite::Connection::open_in_memory().expect("a scratch DB"))
+            .expect("a migrated DB"),
+    );
+    let workflows = Arc::new(WakingWorkflows::new(db.clone()));
+    workflows
+        .create(Workflow {
+            id: "wf-1".into(),
+            name: "Ship".to_owned(),
+            description: String::new(),
+            is_starter: false,
+            created_at: 0,
+            updated_at: 0,
+            schedule: None,
+        })
+        .expect("workflow saved");
+    workflows
+        .save_version(workflow_version(1))
+        .expect("version saved");
+    (db, workflows)
+}
+
+/// The versions of `wf-1` in each snapshot among `frames`.
+fn versions_in(frames: &[String]) -> Vec<Vec<u32>> {
+    snapshots_in(frames)
+        .iter()
+        .map(|snapshot| {
+            snapshot
+                .workflows
+                .iter()
+                .filter(|workflow| workflow.workflow_id == "wf-1")
+                .map(|workflow| workflow.version)
+                .collect()
+        })
+        .collect()
+}
+
+/// A session pinned `read` whose snapshots are built by the production
+/// source over the DB `workflows` writes to, and woken by its writes.
+struct Edited {
+    workflows: Arc<WakingWorkflows>,
+    log: Arc<ConnectionLog>,
+    stop: watch::Sender<bool>,
+    task: JoinHandle<(SessionEnd, bool)>,
+    _release: mpsc::UnboundedSender<SocketReceived>,
+}
+
+impl Edited {
+    /// Connected, acked, and past its first snapshot, which holds version 1.
+    async fn new() -> Self {
+        let (db, workflows) = workflow_db();
+        let (run_events, _) = progress_log(0);
+        let mut ctx = scripted_context(run_events.clone(), run_events.wake())
+            .with_snapshot_debounce(DEBOUNCE);
+        ctx.snapshots = Arc::new(RepoSnapshotSource::new(db.clone(), db.clone(), db));
+        ctx.snapshot_wake = workflows.wake();
+        let (conn, release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
+        let log = conn.log();
+        let (stop, mut stopped) = watch::channel(false);
+        let task =
+            tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+        timeout(BOUND, log.sent_times(2))
+            .await
+            .expect("a first snapshot sent");
+        assert_eq!(versions_in(&log.sent()), [[1]]);
+        Self {
+            workflows,
+            log,
+            stop,
+            task,
+            _release: release,
+        }
+    }
+
+    async fn stopped(self) {
+        self.stop.send_replace(true);
+        let end = timeout(BOUND, self.task)
+            .await
+            .expect("the session stops")
+            .expect("the session did not panic");
+        assert_eq!(end, (SessionEnd::Stopped, true));
+        assert_eq!(self.log.closed_with(), Some(1001));
+        assert_eq!(self.log.unscripted(), 0);
+    }
+}
+
+/// AC3: the edit reaches the Hub once the window from it has passed, and
+/// not before.
+#[tokio::test]
+async fn editing_a_workflow_sends_a_new_snapshot_within_the_debounce_window() {
+    let edited = Edited::new().await;
+    let edited_at = Instant::now();
+
+    edited
+        .workflows
+        .save_version(workflow_version(2))
+        .expect("version saved");
+    timeout(BOUND, edited.log.sent_times(3))
+        .await
+        .expect("a second snapshot sent");
+
+    let waited = edited_at.elapsed();
+    assert!(waited >= DEBOUNCE, "sent after {waited:?}");
+    assert!(waited <= DEBOUNCE + SETTLE, "sent after {waited:?}");
+    assert_eq!(versions_in(&edited.log.sent()), [[1], [2]]);
+    edited.stopped().await;
+}
+
+/// AC4: the window is fixed from the first edit, so edits inside it are
+/// sent together, as the latest of them.
+#[tokio::test]
+async fn a_burst_of_workflow_edits_sends_one_snapshot() {
+    let edited = Edited::new().await;
+
+    for version in 2..=4 {
+        edited
+            .workflows
+            .save_version(workflow_version(version))
+            .expect("version saved");
+        tokio::time::sleep(EDIT_GAP).await;
+    }
+    timeout(BOUND, edited.log.sent_times(3))
+        .await
+        .expect("a second snapshot sent");
+    tokio::time::sleep(DEBOUNCE + SETTLE).await;
+
+    assert_eq!(versions_in(&edited.log.sent()), [[1], [4]]);
+    edited.stopped().await;
+}
+
+/// A wake whose rebuild equals what this connection last sent is not sent.
+#[tokio::test]
+async fn a_wake_that_changes_nothing_sends_no_second_snapshot() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
+        .with_snapshot_debounce(DEBOUNCE);
+    let snapshot_wake = ctx.snapshot_wake.clone();
+    let (conn, _release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+    timeout(BOUND, log.sent_times(2))
+        .await
+        .expect("a first snapshot sent");
+
+    snapshot_wake.notify_one();
+    tokio::time::sleep(DEBOUNCE + SETTLE).await;
+
+    assert_eq!(snapshots.calls(), 2, "rebuilt once for the wake");
+    assert_eq!(snapshots_in(&log.sent()), [one_project("alpha")]);
+    assert_eq!(log.sent().len(), 2);
+    stop.send_replace(true);
+    let end = timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+    assert_eq!(end, (SessionEnd::Stopped, true));
+    assert_eq!(snapshots.unscripted(), 0);
+}
+
 /// `pair` awaits a stopped session under the refresh lock, so a Hub that
 /// never takes the `1001` holds a re-pair only for the stop-close deadline,
 /// not the liveness one this context keeps at its default.
@@ -1613,6 +2014,8 @@ impl Supervised {
                 vec!["read".to_owned()],
                 run_events.clone(),
                 run_events.wake(),
+                Arc::new(ScriptedSnapshotSource::default()),
+                Arc::new(Notify::new()),
             ),
             sleeper: self.sleeper.clone(),
             jitter: Box::new(|| 1.0),

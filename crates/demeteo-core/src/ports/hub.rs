@@ -7,7 +7,7 @@
 //! go through [`HubSecretStore`] and nowhere else (AGENTS.md §2).
 
 use async_trait::async_trait;
-use demeteo_hub_protocol::{AttachmentRef, RequestResult};
+use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
@@ -215,4 +215,11 @@ pub trait HubRequestHandler: Send + Sync {
 
 pub trait BrowserLauncher: Send + Sync {
     fn open(&self, url: &str) -> Result<(), String>;
+}
+
+/// What this instance reports to the Hub, built from local storage and
+/// nothing else. Synchronous because every read behind it is, so a caller on
+/// the async runtime runs it inside `spawn_blocking`.
+pub trait HubSnapshotSource: Send + Sync {
+    fn snapshot(&self) -> Result<Snapshot, String>;
 }
