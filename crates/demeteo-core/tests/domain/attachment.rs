@@ -355,3 +355,86 @@ fn a_tiff_by_path_with_no_filename_is_its_own_basename() {
     );
     assert_eq!(path_form_stored_name("image/png", "a.png", None), "a.png");
 }
+
+// ── sniff_attachment_mime ────────────────────────────────────────────────────
+
+#[test]
+fn every_sniffed_type_is_one_the_store_commits() {
+    let mut png = PNG_MAGIC.to_vec();
+    png.extend_from_slice(b"rest");
+    let cases: [(&[u8], &str); 8] = [
+        (&png, "image/png"),
+        (&[0xFF, 0xD8, 0xFF, 0xE0], "image/jpeg"),
+        (b"GIF89a\x01\x00", "image/gif"),
+        (&riff_webp(), "image/webp"),
+        (b"II*\0\x08\0\0\0", "image/tiff"),
+        (b"%PDF-1.7\n", "application/pdf"),
+        ("héllo\n".as_bytes(), "text/plain"),
+        (b"{\"json\": true}", "text/plain"),
+    ];
+    for (bytes, expected) in cases {
+        let mime = sniff_attachment_mime(bytes);
+        assert_eq!(mime, Some(expected));
+        let ext = ext_for_mime(expected).unwrap_or("bin");
+        assert!(
+            crate::application::attachments::is_supported_attachment(expected, ext),
+            "{expected}"
+        );
+    }
+}
+
+#[test]
+fn content_with_no_supported_type_sniffs_to_none() {
+    assert_eq!(sniff_attachment_mime(b""), None);
+    assert_eq!(sniff_attachment_mime(&[0x00, 0x01, 0xFF, 0x00]), None);
+    assert_eq!(sniff_attachment_mime(b"ab\0cd"), None);
+    assert_eq!(sniff_attachment_mime(&[0x66, 0xFF, 0xFE]), None);
+}
+
+#[test]
+fn text_that_only_mentions_the_pdf_marker_sniffs_as_text() {
+    assert_eq!(
+        sniff_attachment_mime(b"notes: the header reads %PDF-1.7 here"),
+        Some("text/plain")
+    );
+}
+
+#[test]
+fn a_pdf_is_sniffed_from_a_leading_marker_or_a_binary_preamble() {
+    assert_eq!(
+        sniff_attachment_mime(b"%PDF-1.4 ..."),
+        Some("application/pdf")
+    );
+    let mut non_utf8 = vec![0xFF, 0xFE, 0x01, 0x02];
+    non_utf8.extend_from_slice(b"%PDF-1.7\n");
+    assert_eq!(sniff_attachment_mime(&non_utf8), Some("application/pdf"));
+    let mut nul = vec![b'x'; 1000];
+    nul[0] = 0;
+    nul.extend_from_slice(b"%PDF-1.7\n");
+    assert_eq!(sniff_attachment_mime(&nul), Some("application/pdf"));
+}
+
+// ── sniffed_source_filename ──────────────────────────────────────────────────
+
+#[test]
+fn a_sniffed_tiff_is_named_so_the_store_and_its_lookup_agree_on_tiff() {
+    let bytes = b"II*\0\x08\0\0\0";
+    let name = sniffed_source_filename("image/tiff", bytes).expect("a tiff needs a name");
+    assert_eq!(name, format!("{}.tiff", compute_sha256_hex(bytes)));
+    assert_eq!(ext_for_mime("image/tiff"), None);
+    assert_eq!(resolved_ext(&att("image/tiff", &name)), "tiff");
+}
+
+#[test]
+fn a_sniffed_type_with_a_canonical_extension_is_staged_unnamed() {
+    for mime in [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+        "text/plain",
+    ] {
+        assert_eq!(sniffed_source_filename(mime, b"x"), None, "{mime}");
+    }
+}

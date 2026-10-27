@@ -129,6 +129,48 @@ pub struct Feature {
     /// which keep deriving. See migration V41.
     #[serde(default)]
     pub resolved_branch: Option<String>,
+
+    /// Who started this run (`features.launched_by`). Defaults to
+    /// [`LaunchedBy::Desktop`] so a `Feature` or `RunSpec` serialized before
+    /// the field existed still reads.
+    #[serde(default)]
+    pub launched_by: LaunchedBy,
+}
+
+/// Who started a run: the desktop itself, or a request the Hub relayed.
+///
+/// The Hub's daily spend ceiling sums the cost of Hub-started runs only, so
+/// this is a fact about the launch, kept apart from [`FeatureOrigin`], which
+/// is about where the branch was cut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchedBy {
+    #[default]
+    Desktop,
+    Hub,
+}
+
+impl LaunchedBy {
+    /// Decode `features.launched_by`. NULL is every row written before the
+    /// column existed, all of which the desktop launched; an unrecognised
+    /// value reads the same way, so it can never count against the Hub's
+    /// ceiling.
+    pub fn from_column(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("hub") => Self::Hub,
+            _ => Self::Desktop,
+        }
+    }
+
+    /// Encode for `features.launched_by`. The inverse of
+    /// [`LaunchedBy::from_column`], so the default stores as SQL NULL and
+    /// the column carries one spelling of it rather than two.
+    pub fn to_column(self) -> Option<&'static str> {
+        match self {
+            Self::Desktop => None,
+            Self::Hub => Some("hub"),
+        }
+    }
 }
 
 impl Feature {
@@ -237,3 +279,7 @@ pub struct GateDecision {
     #[serde(default)]
     pub auto_approved: bool,
 }
+
+#[cfg(test)]
+#[path = "../../../tests/domain/models/feature.rs"]
+mod tests;

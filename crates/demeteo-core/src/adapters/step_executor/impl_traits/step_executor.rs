@@ -34,6 +34,7 @@ impl StepExecutor for DagStepExecutor {
             staged_attachments,
             origin,
             diff_base_branch,
+            launched_by,
         } = launch;
         refuse_blank_launch_text(&title, &description)?;
 
@@ -107,6 +108,7 @@ impl StepExecutor for DagStepExecutor {
             origin,
             diff_base_branch,
             resolved_branch: None,
+            launched_by,
         };
         self.features.add(feature.clone())?;
 

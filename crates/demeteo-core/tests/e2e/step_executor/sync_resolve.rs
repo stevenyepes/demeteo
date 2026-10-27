@@ -103,6 +103,7 @@ fn seed(db: &Arc<SqliteAdapter>, label: &str, feature_status: &str) -> String {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: Some("master".to_string()),
             resolved_branch: Some(format!("demeteo/features/{feature_id}")),
+            launched_by: Default::default(),
         })
         .expect("add feature");
 

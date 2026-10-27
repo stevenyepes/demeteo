@@ -12,6 +12,9 @@
 //! that silence or holds the frames back to release them itself. Each counts
 //! what it answered past its script, for a test to assert is `0`.
 //!
+//! [`ScriptedAttachments`] hands each staged attachment over once, as the
+//! Hub does, and refuses every other fetch.
+//!
 //! [`UnreadableRunEvents`] fails every call, so nothing it is asked can pass
 //! as a run log that read back empty.
 //!
@@ -24,7 +27,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
-use demeteo_hub_protocol::Snapshot;
+use demeteo_hub_protocol::{AttachmentRef, Snapshot};
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
@@ -32,8 +35,9 @@ use crate::domain::hub_pairing::{HubPins, HubSecret, KeyringStatus, RefreshAnswe
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 use crate::ports::hub::{
-    DialFailure, HubPinRepository, HubRefreshEndpoint, HubSecretStore, HubSnapshotSource,
-    HubSocketConnection, HubSocketDialer, SocketGone, SocketReceived, SocketUpgrade,
+    AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubPinRepository, HubRefreshEndpoint,
+    HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer, SocketGone,
+    SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 
@@ -258,6 +262,50 @@ impl HubRefreshEndpoint for ScriptedRefreshEndpoint {
             self.unscripted.fetch_add(1, Ordering::SeqCst);
             Err(RefreshEnd::Unanswered)
         })
+    }
+}
+
+/// The Hub's `GET /attachments/{id}`: the bytes staged for an id, the first
+/// time it is fetched, checked against the [`AttachmentRef`] as
+/// [`super::attachments::HubAttachments`] checks them, so bytes staged under a
+/// wrong size or SHA-256 are [`AttachmentFetchError::Mismatch`]. A second
+/// fetch of an id, or one never staged, is refused `404`, as the Hub refuses
+/// it, and counted by [`Self::unscripted`].
+#[derive(Default)]
+pub struct ScriptedAttachments {
+    staged: Mutex<BTreeMap<String, Vec<u8>>>,
+    fetched: Mutex<Vec<String>>,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedAttachments {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn stage(&self, id: &str, bytes: &[u8]) {
+        locked(&self.staged).insert(id.to_owned(), bytes.to_vec());
+    }
+
+    /// Every id asked for, in order, refused ones included.
+    pub fn fetched(&self) -> Vec<String> {
+        locked(&self.fetched).clone()
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl HubAttachmentFetcher for ScriptedAttachments {
+    async fn fetch(&self, attachment: &AttachmentRef) -> Result<Vec<u8>, AttachmentFetchError> {
+        locked(&self.fetched).push(attachment.id.clone());
+        let Some(bytes) = locked(&self.staged).remove(&attachment.id) else {
+            self.unscripted.fetch_add(1, Ordering::SeqCst);
+            return Err(AttachmentFetchError::Refused { status: 404 });
+        };
+        super::attachments::checked(attachment, bytes)
     }
 }
 

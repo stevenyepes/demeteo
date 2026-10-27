@@ -3,11 +3,30 @@
 use std::sync::Arc;
 
 use super::harness::{build_test_executor_with_notif, CapturingNotif};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId};
+use crate::domain::models::LaunchedBy;
 use crate::paths;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::{FeatureLaunch, StepExecutor};
+
+/// A project with no repository, so the bootstrap tail fails at the repo check.
+fn seed_project(projects: &dyn ProjectRepository, id: &str) {
+    projects
+        .add(crate::domain::models::Project {
+            id: ProjectId::from(id),
+            name: "boot-test".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: paths::now_ms(),
+        })
+        .unwrap();
+}
 
 /// `feature_start` inserts the eager row as `bootstrapping` and returns
 /// immediately, then runs the bootstrap on a spawned tail that streams
@@ -21,21 +40,7 @@ async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
     let notif = Arc::new(CapturingNotif::default());
     let (executor, db, temp_dir) = build_test_executor_with_notif("boot_fail", notif.clone()).await;
 
-    let now = paths::now_ms();
-    let projects: &dyn ProjectRepository = &*db;
-    projects
-        .add(crate::domain::models::Project {
-            id: ProjectId::from("p-boot"),
-            name: "boot-test".to_string(),
-            compute_type: "local".to_string(),
-            remote_host: None,
-            status: "idle".to_string(),
-            nodes: 0,
-            spend: 0.0,
-            tokens: 0,
-            created_at: now,
-        })
-        .unwrap();
+    seed_project(&*db, "p-boot");
     // Deliberately no repository for the project → the bootstrap tail's
     // `resolve_execution_context` fails at the repo check.
 
@@ -99,5 +104,31 @@ async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
     );
 
     drop(events);
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// A Hub-relayed launch is recorded as one on the eager row, and saying who
+/// launched it leaves where the branch is cut from exactly as asked.
+#[tokio::test]
+async fn feature_start_records_who_launched_it_without_touching_the_origin() {
+    let notif = Arc::new(CapturingNotif::default());
+    let (executor, db, temp_dir) = build_test_executor_with_notif("launched_by", notif).await;
+    seed_project(&*db, "p-hub");
+
+    let feature = executor
+        .feature_start(FeatureLaunch {
+            project_id: "p-hub".to_string(),
+            workflow_id: "wf-x".to_string(),
+            title: "Hub Feature".to_string(),
+            description: "a description".to_string(),
+            launched_by: LaunchedBy::Hub,
+            ..Default::default()
+        })
+        .await
+        .expect("feature_start returns the eager row");
+
+    assert_eq!(feature.launched_by, LaunchedBy::Hub);
+    assert_eq!(feature.origin, FeatureOrigin::DefaultBranch);
+
     let _ = std::fs::remove_dir_all(temp_dir);
 }

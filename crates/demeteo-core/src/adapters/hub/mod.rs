@@ -40,16 +40,19 @@ use crate::domain::hub_pairing::{
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 use crate::ports::hub::{
-    BrowserLauncher, HubPinRepository, HubRefreshEndpoint, HubSecretStore, HubTokenEndpoint,
+    BrowserLauncher, HubAttachmentFetcher, HubPinRepository, HubRefreshEndpoint, HubRequestHandler,
+    HubSecretStore, HubTokenEndpoint,
 };
 use crate::shared::time::now_secs;
 use crate::state::AppVersion;
 
+use self::attachments::{HubAttachments, PairedAttachments};
 use self::device_key::DeviceKey;
 use self::loopback::CallbackListener;
-use self::socket::session::SessionContext;
+use self::socket::session::{RequestHandlerSlot, SessionContext};
 use self::socket::{SocketConfig, SocketTask, SupervisorDeps};
 
+pub mod attachments;
 pub mod device_key;
 #[cfg(feature = "keyring")]
 pub mod keyring_store;
@@ -70,6 +73,7 @@ pub struct HubPairing {
     refresher: Refresher,
     socket_config: Option<SocketConfig>,
     socket: std::sync::Mutex<Option<SocketTask>>,
+    requests: RequestHandlerSlot,
 }
 
 /// The pairing's refresh state, shared with the socket it starts: the
@@ -139,6 +143,7 @@ impl HubPairing {
             },
             socket_config: None,
             socket: std::sync::Mutex::new(None),
+            requests: RequestHandlerSlot::default(),
         }
     }
 
@@ -161,6 +166,23 @@ impl HubPairing {
         self.socket_config
             .as_ref()
             .map(|config| config.wake.clone())
+    }
+
+    /// Whether [`Self::bind_requests`] has run, so a test can prove
+    /// composition binds the handler.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn requests_bound(&self) -> bool {
+        self.requests.get().is_some()
+    }
+
+    /// What every socket this pairing starts hands request frames to. A
+    /// slot rather than a [`SocketConfig`] field because the handler is
+    /// built over the context that holds this pairing; bound once; a second
+    /// binding is ignored.
+    pub fn bind_requests(&self, handler: Arc<dyn HubRequestHandler>) {
+        if self.requests.set(handler).is_err() {
+            tracing::warn!("the Hub request handler was already bound");
+        }
     }
 
     /// What composition handed the socket to wait on for a snapshot, as
@@ -340,10 +362,27 @@ impl HubPairing {
                 config.snapshots.clone(),
                 config.snapshot_wake.clone(),
             )
+            .with_requests(self.requests.clone())
             .with_snapshot_debounce(config.snapshot_debounce),
             sleeper: config.sleeper.clone(),
             jitter: Box::new(config.jitter),
         }))
+    }
+
+    /// A fetcher of the attachments a request names, over the pinned origin,
+    /// the stored device key and this pairing's access token; `None` when
+    /// this desktop is not paired or holds no device key. Made per request
+    /// rather than held, so a re-pairing is never fetched for with the old
+    /// origin or key.
+    pub fn attachment_fetcher(&self) -> Result<Option<HubAttachments>, HubPairingError> {
+        self.refresher.attachment_fetcher()
+    }
+
+    /// [`Self::attachment_fetcher`] as one long-lived fetcher, for a handler
+    /// built once: it makes that per-request fetcher on every fetch, and
+    /// holds the pairing's token state, never the pairing.
+    pub fn attachments(&self) -> Arc<dyn HubAttachmentFetcher> {
+        Arc::new(PairedAttachments::new(self.refresher.clone()))
     }
 
     /// Takes the running socket, if any, and raises its stop signal.
@@ -454,6 +493,17 @@ impl HubPairing {
 }
 
 impl Refresher {
+    fn attachment_fetcher(&self) -> Result<Option<HubAttachments>, HubPairingError> {
+        let Some(paired) = self.pins.load().map_err(storage)? else {
+            return Ok(None);
+        };
+        let install_id = self.pins.install_id().map_err(storage)?;
+        let Some(key) = self.stored_device_key(&install_id)? else {
+            return Ok(None);
+        };
+        HubAttachments::new(paired.hub_origin, key, Arc::new(self.clone())).map(Some)
+    }
+
     async fn refresh_access(&self) -> Result<SecretString, RefreshEnd> {
         let endpoint = self
             .endpoint

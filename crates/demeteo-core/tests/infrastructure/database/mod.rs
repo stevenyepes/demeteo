@@ -638,6 +638,7 @@ fn rollup_feature(id: &str, project_id: &str, status: &str) -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     }
 }
 

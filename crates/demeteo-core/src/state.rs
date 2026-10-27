@@ -277,6 +277,12 @@ pub struct AppContext {
     /// `ExecutionMode::Router`, and in a build without the `keyring` feature:
     /// its secrets have nowhere else they may go (AGENTS.md §2).
     pub hub: Option<Arc<crate::adapters::hub::HubPairing>>,
+    /// Consumed Hub request ids and the Hub activity log.
+    pub hub_requests: Arc<dyn crate::ports::hub::HubRequestRepository>,
+    /// The Hub local policy, read side only. Its writer is deliberately not a
+    /// field: the Hub request handler is built over this struct; see
+    /// [`crate::composition::build_core_context_with_policy_writer`].
+    pub hub_policy: Arc<dyn crate::ports::hub::HubPolicyReader>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

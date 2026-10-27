@@ -242,6 +242,57 @@ pub fn content_matches_mime(mime: &str, bytes: &[u8]) -> bool {
     }
 }
 
+/// The type `bytes` carry, for an attachment that arrives with nothing else to
+/// name it — a Hub dispatch's `AttachmentRef` has no mime, and the Hub serves
+/// every attachment as `application/octet-stream`.
+///
+/// Binary signatures are tried before text. `application/pdf` is the one
+/// exception, because its marker is ASCII and may sit anywhere in the first
+/// KiB: bytes sniff as a PDF only when they start with `%PDF-`, or carry it
+/// within that window and are not text-shaped (a NUL, or not UTF-8). A note
+/// that merely quotes a PDF header is `text/plain`. [`content_matches_mime`]
+/// keeps the wider rule, since there it vouches for a type already declared.
+///
+/// Text is only ever `text/plain` — markdown and JSON are not distinguishable
+/// from their bytes. `None` (empty input included) is a type the attachment
+/// store would refuse to commit.
+pub fn sniff_attachment_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.is_empty() {
+        return None;
+    }
+    [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/tiff",
+        "application/pdf",
+        "text/plain",
+    ]
+    .into_iter()
+    .find(|mime| match *mime {
+        "application/pdf" => {
+            content_matches_mime(mime, bytes)
+                && (bytes.starts_with(b"%PDF-") || !content_matches_mime("text/plain", bytes))
+        }
+        _ => content_matches_mime(mime, bytes),
+    })
+}
+
+/// The filename a sniffed attachment is staged under, for a type the store can
+/// only name from a filename.
+///
+/// A type in `ext_for_mime` needs none and gets `None`, so its display name
+/// stays the bare sha256. `image/tiff` gets `<sha256>.tiff`: without a filename
+/// `resolved_ext` falls back to `bin`, and adding `tiff` to `ext_for_mime`
+/// instead would orphan every stored `.tif` (see [`path_form_stored_name`]).
+pub fn sniffed_source_filename(mime: &str, bytes: &[u8]) -> Option<String> {
+    match mime {
+        "image/tiff" => Some(format!("{}.tiff", compute_sha256_hex(bytes))),
+        _ => None,
+    }
+}
+
 /// Compute SHA-256 over `bytes` and return it as 64 lowercase hex
 /// characters. Pure-Rust NIST FIPS 180-4 implementation — no
 /// dependency required.

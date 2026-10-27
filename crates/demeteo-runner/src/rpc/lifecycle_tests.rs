@@ -218,6 +218,7 @@ mod set_step_assignment {
                 origin: FeatureOrigin::DefaultBranch,
                 diff_base_branch: None,
                 resolved_branch: None,
+                launched_by: Default::default(),
             },
         )
         .expect("seed the feature");
@@ -422,6 +423,7 @@ mod release_feature_cache {
                 origin: FeatureOrigin::DefaultBranch,
                 diff_base_branch: None,
                 resolved_branch: None,
+                launched_by: Default::default(),
             },
         )
         .expect("seed the feature");

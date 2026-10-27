@@ -211,6 +211,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
 
+    // Who launched a run (V65). Nullable, and NULL reads as the desktop — see
+    // the migration's header.
+    add_column_if_missing(conn, "features", "launched_by", "TEXT")?;
+
     Ok(())
 }
 

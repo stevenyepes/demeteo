@@ -68,6 +68,19 @@ pub fn build_core_context(
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
 ) -> AppContext {
+    build_core_context_with_policy_writer(cfg, notif, runtime).0
+}
+
+/// [`build_core_context`], plus the one [`ports::hub::HubPolicyWriter`] over
+/// the same database. It is returned beside the context rather than inside
+/// it because the Hub request handler is built over the context, and nothing
+/// the handler can reach may write the policy it is judged by (docs/HUB.md
+/// §7). Only the desktop's Settings command should hold it.
+pub fn build_core_context_with_policy_writer(
+    cfg: CoreConfig,
+    notif: Arc<dyn NotificationPort>,
+    runtime: tokio::runtime::Handle,
+) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
     let CoreConfig {
         app_data_dir,
         execution_mode,
@@ -344,10 +357,15 @@ pub fn build_core_context(
         exec_inner.clone(),
     ));
 
+    let hub_requests_repo: Arc<dyn ports::hub::HubRequestRepository> = db_adapter.clone();
+    let hub_policy_reader: Arc<dyn ports::hub::HubPolicyReader> = db_adapter.clone();
+    let hub_policy_writer: Arc<dyn ports::hub::HubPolicyWriter> = db_adapter.clone();
+    let hub_pins: Arc<dyn ports::hub::HubPinRepository> = db_adapter.clone();
+
     let app_version = AppVersion::default();
     let hub = match execution_mode {
         ExecutionMode::Router => hub_pairing(
-            db_adapter.clone(),
+            hub_pins.clone(),
             app_version.clone(),
             hub_socket(
                 run_events_repo.clone(),
@@ -411,6 +429,8 @@ pub fn build_core_context(
         mcp_consent,
         app_version,
         hub,
+        hub_requests: hub_requests_repo,
+        hub_policy: hub_policy_reader,
     };
 
     // The MCP listener is the first background task that needs the *whole*
@@ -429,7 +449,22 @@ pub fn build_core_context(
     cache_reclaim.bind(ctx.clone());
     application::cache_sweep::start_cache_sweep(ctx.clone(), &runtime);
 
-    ctx
+    // Before `start_socket`, which `src-tauri/src/lib.rs` calls once this
+    // returns, so the first connection already answers what it is sent.
+    if let Some(hub) = &ctx.hub {
+        hub.bind_requests(Arc::new(application::hub_requests::HubRequests::new(
+            Arc::new(ctx.clone()),
+            application::hub_requests::HubRequestPorts {
+                requests: ctx.hub_requests.clone(),
+                policy: ctx.hub_policy.clone(),
+                pins: hub_pins,
+                attachments: hub.attachments(),
+                now_ms: Arc::new(crate::shared::time::now_ms),
+            },
+        )));
+    }
+
+    (ctx, hub_policy_writer)
 }
 
 /// Shares `app_version` with the context, so the version the desktop sets

@@ -5,6 +5,7 @@ pub mod feature;
 pub mod feature_steps;
 pub mod gate;
 pub mod hub;
+pub mod hub_requests;
 pub mod machine;
 pub mod memory;
 pub mod memory_signals;

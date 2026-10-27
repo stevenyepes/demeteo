@@ -297,6 +297,7 @@ impl StepExecutor for StubExecutor {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
     }
     async fn feature_pause(&self, _feature_id: &str) -> Result<(), String> {

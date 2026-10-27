@@ -34,6 +34,7 @@ fn feature(title: &str, status: &str) -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     }
 }
 

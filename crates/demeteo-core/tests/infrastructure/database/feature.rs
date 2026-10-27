@@ -62,6 +62,7 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         },
     )
     .unwrap();
@@ -118,6 +119,7 @@ fn feature_description_round_trips_through_get_and_get_active() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         },
     )
     .unwrap();
@@ -181,6 +183,7 @@ fn feature_max_budget_usd_round_trips_through_get_and_get_active() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         },
     )
     .unwrap();
@@ -321,6 +324,7 @@ fn feature_effort_and_step_override_effort_round_trip() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         },
     )
     .unwrap();
