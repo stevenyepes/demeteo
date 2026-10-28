@@ -216,6 +216,7 @@ mod decision {
 
     fn policy(spend: bool, gates: bool, run: Option<u64>, daily: Option<u64>) -> HubLocalPolicy {
         HubLocalPolicy {
+            read_enabled: true,
             spend_enabled: spend,
             gates_enabled: gates,
             run_ceiling_cents: run,
@@ -793,7 +794,7 @@ mod repository {
     use demeteo_core::domain::hub_pairing::{HubPins, PinnedPasskey};
     use demeteo_core::domain::hub_request::passkeys::{TrustWrite, TrustedPasskey};
     use demeteo_core::domain::hub_request::{
-        Consumption, HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome,
+        Consumption, HubLocalPolicy, HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome,
     };
     use demeteo_core::ports::hub::{
         HubPasskeyTrust, HubPinRepository, HubPolicyReader, HubPolicyWriter, HubRequestRepository,
@@ -898,6 +899,7 @@ mod repository {
         assert_eq!(missing.daily_ceiling_cents, None);
 
         let set = HubLocalPolicy {
+            read_enabled: true,
             spend_enabled: true,
             gates_enabled: false,
             run_ceiling_cents: Some(500),
@@ -961,10 +963,47 @@ mod repository {
             store.append_log(entry).expect("append");
         }
 
-        let listed = store.list_log(10).expect("list");
+        let entries_of = |rows: Vec<HubRequestLogRow>| -> Vec<HubRequestLogEntry> {
+            rows.into_iter().map(|row| row.entry).collect()
+        };
+        let listed = entries_of(store.list_log(10).expect("list"));
         let newest_first: Vec<_> = entries.iter().rev().cloned().collect();
         assert_eq!(listed, newest_first);
-        assert_eq!(store.list_log(2).expect("list"), newest_first[..2]);
+        assert_eq!(
+            entries_of(store.list_log(2).expect("list")),
+            newest_first[..2]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A deferred id is logged again when it is later handled, so the
+    /// `request_id` cannot key the Settings list; the row's own id does.
+    #[test]
+    fn two_rows_of_one_request_id_are_both_listed_with_distinct_ids() {
+        let dir = scratch("log-repeat");
+        let store = open(&dir);
+        let deferred = HubRequestLogEntry {
+            request_id: "r-1".into(),
+            kind: LogKind::GateDecision,
+            scope: Some(Scope::Gates),
+            outcome: LogOutcome::Deferred,
+            reason: None,
+            feature_id: None,
+            received_at_ms: 1_000,
+        };
+        let accepted = HubRequestLogEntry {
+            outcome: LogOutcome::Accepted,
+            received_at_ms: 2_000,
+            ..deferred.clone()
+        };
+        store.append_log(&deferred).expect("append");
+        store.append_log(&accepted).expect("append");
+
+        let listed = store.list_log(10).expect("list");
+        assert_eq!(listed.len(), 2);
+        assert_ne!(listed[0].id, listed[1].id);
+        assert_eq!(listed[0].entry, accepted);
+        assert_eq!(listed[1].entry, deferred);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1703,7 +1742,8 @@ mod handler {
                 .list_log(1)
                 .expect("list the log")
                 .pop()
-                .expect("a log row");
+                .expect("a log row")
+                .entry;
             (entry.kind, entry.outcome, entry.reason)
         }
 
@@ -1786,6 +1826,7 @@ mod handler {
         save_policy(
             &dir,
             &HubLocalPolicy {
+                read_enabled: true,
                 spend_enabled: true,
                 gates_enabled: false,
                 run_ceiling_cents: Some(1_000),
@@ -2793,6 +2834,7 @@ mod handler {
 
         fn policy(spend: bool, gates: bool, run: u64, daily: u64) -> HubLocalPolicy {
             HubLocalPolicy {
+                read_enabled: true,
                 spend_enabled: spend,
                 gates_enabled: gates,
                 run_ceiling_cents: Some(run),
@@ -2814,6 +2856,9 @@ mod handler {
                 .hub_requests
                 .list_log(100)
                 .expect("list the log")
+                .into_iter()
+                .map(|row| row.entry)
+                .collect()
         }
 
         /// Hands `text` over and returns its answer and the one row it added.
@@ -3071,6 +3116,32 @@ mod handler {
                 result.expect("an answer").outcome,
                 refused(RefusalReason::ScopeOff)
             );
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// What Settings' activity log is handed for a start refused with
+        /// `spend` off, spelled as it crosses IPC.
+        #[tokio::test]
+        async fn a_start_refused_with_spend_off_reads_back_through_the_log_command() {
+            let hub = Hub::new();
+            let dir = paired("log-command-spend-off", &hub).await;
+            save_policy(&dir, &HubLocalPolicy::default());
+            let desktop = Desktop::open(&dir);
+            let text = hub.signed(super::start("r-log-off", Vec::new())).await;
+
+            desktop.handle(&text).await.expect("an answer");
+            let log =
+                demeteo_lib::commands::hub::request_log_core(desktop.ctx.hub_requests.as_ref(), 10)
+                    .expect("read the log");
+
+            let [entry] = &log[..] else {
+                panic!("one row: {log:?}");
+            };
+            let entry = serde_json::to_value(entry).expect("serialisable");
+            assert_eq!(entry["request_id"], "r-log-off");
+            assert_eq!(entry["outcome"], "refused");
+            assert_eq!(entry["scope"], "spend");
+            assert_eq!(entry["reason"], "scope_off");
             let _ = std::fs::remove_dir_all(dir);
         }
 
@@ -3504,6 +3575,7 @@ mod handler {
             let hub = Hub::new();
             let dir = paired("policy-immutable", &hub).await;
             let seeded = HubLocalPolicy {
+                read_enabled: true,
                 spend_enabled: true,
                 gates_enabled: true,
                 run_ceiling_cents: Some(1_234),
@@ -3630,6 +3702,7 @@ mod handler {
             save_policy(
                 &dir,
                 &HubLocalPolicy {
+                    read_enabled: true,
                     spend_enabled: false,
                     gates_enabled: true,
                     run_ceiling_cents: None,
@@ -3721,7 +3794,8 @@ mod handler {
                 .list_log(1)
                 .expect("list the log")
                 .pop()
-                .expect("a log row");
+                .expect("a log row")
+                .entry;
             assert_eq!(
                 (
                     entry.kind,
@@ -4309,7 +4383,8 @@ mod handler {
                 .list_log(1)
                 .expect("list the log")
                 .pop()
-                .expect("a log row");
+                .expect("a log row")
+                .entry;
             assert_eq!(
                 (
                     entry.kind,

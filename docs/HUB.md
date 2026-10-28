@@ -47,7 +47,7 @@ full.
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first |
 | Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); a snapshot after the first `CursorAck` and after each Project or Workflow write (§5 *Snapshots*) |
-| Desktop side: Settings › Hub tab | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint, nothing shows whether the socket is connected or why it stopped, and nothing sets the toggles and ceilings of §7 or shows the activity log. The `hub_policy_get`, `hub_policy_set` and `hub_request_log` commands and their wrappers exist. Until a view calls `hub_policy_set`, `spend` and `gates` read as off and every request that needs one is refused |
+| Desktop side: Settings › Hub tab | **built** — `src/components/settings/HubTab.tsx`. Outside `ExecutionMode::Router` it shows only the local toggles, ceilings, passkeys and activity log. It pairs and disconnects; shows the fingerprint, this machine as the Hub sees it (`hub_machine`), and the socket's state, sync, Hello → first-ack latency and why it stopped (`hub_connection`); sets the toggles and ceilings of §7 through `hub_policy_set`; lists the trusted passkeys as pinned or endorsed (`hub_trusted_passkeys`); and shows the activity log (`hub_request_log`). It polls the connection and the log every 5 s while open. `spend` and `gates` still default to off, so every request that needs one is refused until the user turns it on |
 | Desktop side: passkey pin set, request verification, local ceilings | **built** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`, and each passkey's signature counter by `V66__hub_passkey_sign_count.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). The WebAuthn assertion a `gate_decision` or a `passkey_revocation` carries is verified on the desktop against the pinned set before the request has any effect: a gate is then decided by the desktop's own `gate_decide`, and a key is removed in one transaction with the signer's counter (§8). Every `passkey_endorsement` is consumed and refused `unknown_kind` without its assertion being read (§11 item 20). A gate of a run a `demeteo-runner` owns is not decided this way yet: it is refused `runner_owned` (§10) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
 | Runner dispatch from the Hub | **not built, and not part of this ticket set** — see §10 |
@@ -620,7 +620,8 @@ its content changes. The Hub answers it with no frame: the instance keeps no
 cursor for snapshots, and one that was lost is made good by the next.
 
 The desktop sends its first snapshot after the connection's first `CursorAck`,
-which proves the Hub processed `hello`, and only while `read` is pinned. A
+which proves the Hub processed `hello`, and only while `read` is pinned and
+its toggle is on (§7). A
 write to a Project or a Workflow wakes a rebuild, and the rebuilt snapshot is
 sent unless it equals the last one sent on that connection; a new connection
 always sends its first. One that cannot be built, or whose frame is over the
@@ -794,8 +795,9 @@ which the socket hands every request frame to. What a request comes to:
   outcome for that id as refused, but it runs nothing and spends no id, and
   only the Hub's own socket delivers frames to the desktop.
 - **A scope is in force** only if pairing approved it and the desktop's toggle
-  for it is on (§7). `read` has no toggle. A scope that is off is answered
-  `scope_off`, after the signature verifies.
+  for it is on (§7). `read`'s toggle defaults on, and needs no request to
+  refuse: off, the socket sends no events or snapshots (§7). A scope that is
+  off is answered `scope_off`, after the signature verifies.
 - **A request that does not verify gets no `result`.** It is logged as
   `dropped`, with the reason `signature`, and its id is not spent. An instance
   holding no pins drops every request the same way.
@@ -1146,7 +1148,7 @@ reports it; until then nothing is inferred.
 
 | Scope | Allows | Requests |
 |---|---|---|
-| `read` | the instance sends events and snapshots | — |
+| `read` | the instance sends events and snapshots; its toggle defaults on | — |
 | `spend` | the Hub may start, cancel and re-point runs that spend money | `start_feature`, `cancel_feature`, `set_step_assignment` |
 | `gates` | the Hub may relay a gate decision | `gate_decision` |
 
@@ -1159,7 +1161,9 @@ approved (§4); the toggle on the desktop is the later word. A request for a sco
 that is off is refused locally. **No Hub action can turn a scope on** — not a
 request, not a re-pairing prompt the Hub raises, not a setting the Hub reports.
 `hello` states the scopes that are on now, so the Hub can tell a refusal is
-coming; it does not ask permission.
+coming; it does not ask permission. **Turning `read` off** stops the socket
+relaying events and snapshots: a running socket restarts at once and sends
+only its `hello`. It is the one toggle that acts without a request to refuse.
 
 **`granted_scopes` on the Hub is what `hello` last said.** Pairing writes what
 the user approved, and the first `hello` replaces it with what the desktop says
@@ -1226,13 +1230,15 @@ a start naming another harness has no budget enforced even per turn. Bounding a 
 
 **The toggles and ceilings are the desktop's own.** They are one row of
 `hub_local_policy`. The request handler is given a reader of it and no writer.
-The only writer is the `hub_policy_set` command, which Settings is to call
-(§2). The policy, the activity log and the consumed ids are not pairing state:
-`hub_disconnect` leaves them, and pairing with another Hub keeps the toggles and
-ceilings as they were.
+The only writer is the `hub_policy_set` command, which Settings › Hub calls
+(§2); it saves through `application::hub_settings::save_hub_policy`, which
+restarts a running socket when `read` flips. The policy, the activity log and
+the consumed ids are not pairing state: `hub_disconnect` leaves them, and pairing with
+another Hub keeps the toggles and ceilings as they were.
 
 The mockup shows no place to set a ceiling, and none for passkey management (§8).
-Those surfaces are specified here with nothing to cite.
+Settings › Hub has both: the ceilings beside the toggles, and the trusted
+passkeys as a read-only list.
 
 ---
 
@@ -1631,7 +1637,7 @@ half, the approval page and the desktop's device key, loopback listener,
 `/authorize` request, token redemption and refresh, fingerprint and socket client
 are built, and so are the desktop's request verification and local ceilings
 (§6.1, §7) and its verification of gate decisions and passkey changes against
-the pinned set (§8). Four things are not:
+the pinned set (§8), and the Settings › Hub tab (§2). Three things are not:
 
 - **What the desktop's socket does not send.** It sends no `ticket_*` event,
   because no desktop `run_events` row records a ticket's lifecycle, so the
@@ -1654,11 +1660,6 @@ the pinned set (§8). Four things are not:
     (§11 item 20). No Hub route queues either for an instance, and the Hub's
     own records bind `"*"` (§11 item 9). Until one does, only tests reach the
     revocation path.
-- **A Settings › Hub tab.** The commands and their wrappers exist, and no view
-  renders them, so the fingerprint is not on screen yet, and no view sets the
-  toggles and ceilings (§7): every request that needs `spend` or `gates` is
-  refused `scope_off` until one does. Nothing shows the activity log either,
-  which `hub_request_log` reads (§6.1 *On the desktop*).
 - **Unpairing and revoking an instance on the Hub.** No route does either, and
   nothing writes `device_keys.revoked_at`. The desktop's disconnect is local
   (§4 *Revocation*). Until a route exists a pairing ends by reuse detection, by
@@ -1982,12 +1983,13 @@ is decided; each is what the desktop does today.
   lifecycle, so [`projection.rs`](../crates/demeteo-core/src/domain/hub_socket/projection.rs)
   has nothing to map onto one.
 - **`Hello` reports the pinned scopes as granted, and events and snapshots go
-  only when `read` is pinned.** It does not narrow them by the toggles of §7, so the Hub's
+  only when `read` is pinned and its toggle is on.** It does not narrow them by the toggles of §7, so the Hub's
   copy can list a scope whose toggle is off; a request for it is queued and comes
-  back `refused: scope_off`. `read` has no toggle, so the second half holds
-  either way.
-- **A stop is logged, not shown.** A verdict that stops the socket logs its
-  reason with `tracing::warn!` and leaves `HubStatus` unchanged, so a desktop
+  back `refused: scope_off`. With `read` off, the Hub's copy still lists
+  `read` while the socket sends nothing past its `hello`.
+- **A stop is shown, and does not unpair.** A verdict that stops the socket logs its
+  reason with `tracing::warn!`, and Settings › Hub shows it from
+  `hub_connection`'s `stop_reason`. `HubStatus` is unchanged, so a desktop
   whose refresh family was revoked still reads as paired until the user pairs
   again. After `invalid_grant` the refresh token stays in the keyring. A stop
   holds until `hub_pair` or the next app start.

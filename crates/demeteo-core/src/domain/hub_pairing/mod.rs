@@ -195,6 +195,29 @@ pub fn consent_label(raw: &str, max_chars: usize, fallback: &str) -> String {
     }
 }
 
+/// This machine as the Hub's consent page names it — the four labels of
+/// [`AuthorizeRequest`] that describe the desktop rather than the request.
+/// Recomputed on every call rather than stored at pairing, so a renamed host
+/// reads here under its new name while the Hub still shows the old one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HubMachine {
+    pub instance_name: String,
+    pub os: String,
+    pub arch: String,
+    pub app_version: String,
+}
+
+/// The single spelling of [`HubMachine`], which pairing sends and settings
+/// shows, so the two cannot drift. An unreadable host name arrives as `""`.
+pub fn consent_machine(host_name: &str, os: &str, arch: &str, app_version: &str) -> HubMachine {
+    HubMachine {
+        instance_name: consent_label(host_name, MAX_INSTANCE_NAME_CHARS, "Demeteo desktop"),
+        os: consent_label(os, MAX_PLATFORM_LABEL_CHARS, "unknown"),
+        arch: consent_label(arch, MAX_PLATFORM_LABEL_CHARS, "unknown"),
+        app_version: consent_label(app_version, MAX_PLATFORM_LABEL_CHARS, "unknown"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyringStatus {
     pub backend: &'static str,

@@ -11,6 +11,7 @@ use demeteo_hub_protocol::{
     GateDecision as GatePayload, PasskeyEndorsement, PasskeyRevocation, RefusalReason,
     SignedRequest, WebAuthnAssertion,
 };
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::assertion::{
@@ -29,6 +30,36 @@ pub struct TrustedPasskey {
     pub credential_id: String,
     pub public_key: String,
     pub sign_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PasskeyOrigin {
+    Pinned,
+    Endorsed,
+}
+
+/// Derived rather than stored: `save` stamps every pairing passkey with the
+/// pairing's own `paired_at`, so any other `pinned_at` is a later endorsement.
+/// Both are whole seconds, so an endorsement inside the pairing's second would
+/// read as pinned; an explicit column is the fix if endorsements ship
+/// (docs/HUB.md §11 item 20 refuses them today).
+pub fn passkey_origin(pinned_at: i64, paired_at: i64) -> PasskeyOrigin {
+    if pinned_at == paired_at {
+        PasskeyOrigin::Pinned
+    } else {
+        PasskeyOrigin::Endorsed
+    }
+}
+
+/// A trusted passkey as Settings lists it. No public key: nothing a reader
+/// shows needs it, so it never crosses IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HubTrustedPasskey {
+    pub credential_id: String,
+    pub sign_count: u32,
+    pub pinned_at: i64,
+    pub origin: PasskeyOrigin,
 }
 
 fn sha256(pre_image: Vec<u8>) -> [u8; 32] {

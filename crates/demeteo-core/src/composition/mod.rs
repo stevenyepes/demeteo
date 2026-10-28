@@ -362,11 +362,13 @@ pub fn build_core_context_with_policy_writer(
     let hub_policy_writer: Arc<dyn ports::hub::HubPolicyWriter> = db_adapter.clone();
     let hub_pins: Arc<dyn ports::hub::HubPinRepository> = db_adapter.clone();
     let hub_passkeys: Arc<dyn ports::hub::HubPasskeyTrust> = db_adapter.clone();
+    let hub_passkey_reader: Arc<dyn ports::hub::HubPasskeyReader> = db_adapter.clone();
 
     let app_version = AppVersion::default();
     let hub = match execution_mode {
         ExecutionMode::Router => hub_pairing(
             hub_pins.clone(),
+            hub_policy_reader.clone(),
             app_version.clone(),
             hub_socket(
                 run_events_repo.clone(),
@@ -432,6 +434,7 @@ pub fn build_core_context_with_policy_writer(
         hub,
         hub_requests: hub_requests_repo,
         hub_policy: hub_policy_reader,
+        hub_passkeys: hub_passkey_reader,
     };
 
     // The MCP listener is the first background task that needs the *whole*
@@ -478,6 +481,7 @@ pub fn build_core_context_with_policy_writer(
 #[cfg(feature = "keyring")]
 fn hub_pairing(
     pins: Arc<dyn ports::hub::HubPinRepository>,
+    policy: Arc<dyn ports::hub::HubPolicyReader>,
     app_version: AppVersion,
     socket: Option<adapters::hub::socket::SocketConfig>,
 ) -> Option<Arc<adapters::hub::HubPairing>> {
@@ -492,6 +496,7 @@ fn hub_pairing(
         pins,
         Arc::new(adapters::hub::keyring_store::KeyringSecretStore),
         token.clone(),
+        policy,
     )
     .with_refresh_endpoint(token)
     .with_app_version(app_version);
@@ -505,6 +510,7 @@ fn hub_pairing(
 #[cfg(not(feature = "keyring"))]
 fn hub_pairing(
     _pins: Arc<dyn ports::hub::HubPinRepository>,
+    _policy: Arc<dyn ports::hub::HubPolicyReader>,
     _app_version: AppVersion,
     _socket: Option<adapters::hub::socket::SocketConfig>,
 ) -> Option<Arc<adapters::hub::HubPairing>> {

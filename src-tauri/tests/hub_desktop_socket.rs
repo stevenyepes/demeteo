@@ -31,8 +31,9 @@ use demeteo_core::domain::hub_pairing::{
 };
 use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome};
 use demeteo_core::domain::hub_socket::{
-    SocketEnd, StopReason, LIVENESS_DEADLINE_SECS, MAX_SNAPSHOT_BYTES, MAX_UNACKED_EVENTS,
-    PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
+    sends_events, SocketEnd, StopReason, LIVENESS_DEADLINE_SECS, MAX_SNAPSHOT_BYTES,
+    MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
+    STOP_CLOSE_DEADLINE_SECS,
 };
 use demeteo_core::domain::models::{Workflow, WorkflowVersion};
 use demeteo_core::error::AppError;
@@ -269,6 +270,15 @@ async fn the_hub_refuses_a_desktop_socket_proof_for_the_url_it_dials() {
 /// The pins of one pairing, under one install id.
 struct Pinned(Mutex<Option<HubPins>>);
 
+/// Nothing here starts a socket, so nothing should read the policy.
+impl demeteo_core::ports::hub::HubPolicyReader for Pinned {
+    fn load(&self) -> Result<HubLocalPolicy, AppError> {
+        Err(AppError::Internal {
+            message: "the local policy was not scripted".into(),
+        })
+    }
+}
+
 impl HubPinRepository for Pinned {
     fn install_id(&self) -> Result<String, AppError> {
         Ok("install-1".to_owned())
@@ -334,8 +344,14 @@ async fn the_hub_accepts_the_desktops_refresh_request() {
     let endpoint = Arc::new(ScriptedRefreshEndpoint::new());
     let next = FreshPair::generate().expect("the system random source");
     endpoint.answer(&next.access.text(), &next.refresh.text(), 900);
-    let hub = HubPairing::new(Arc::new(pins), Arc::new(secrets), Arc::new(NoRedemption))
-        .with_refresh_endpoint(endpoint.clone());
+    let pins = Arc::new(pins);
+    let hub = HubPairing::new(
+        pins.clone(),
+        Arc::new(secrets),
+        Arc::new(NoRedemption),
+        pins,
+    )
+    .with_refresh_endpoint(endpoint.clone());
 
     let access = hub.refresh_access().await.expect("a refresh");
     let now = now_secs();
@@ -581,8 +597,13 @@ impl Bridged {
         .expect("a seeded store");
         let endpoint = Arc::new(ScriptedRefreshEndpoint::new());
         endpoint.answer(&next.access.text(), &next.refresh.text(), 900);
-        let pairing = HubPairing::new(db.clone(), Arc::new(secrets), Arc::new(NoRedemption))
-            .with_refresh_endpoint(endpoint);
+        let pairing = HubPairing::new(
+            db.clone(),
+            Arc::new(secrets),
+            Arc::new(NoRedemption),
+            db.clone(),
+        )
+        .with_refresh_endpoint(endpoint);
         let access_token = pairing.refresh_access().await.expect("a refresh");
         let upgrade = SocketUpgrade {
             url: socket_dial_url(&desktop.origin).expect("a dialable origin"),
@@ -627,12 +648,13 @@ impl Bridged {
         SessionContext::new(
             self.db.install_id().expect("an install id"),
             APP_VERSION.to_owned(),
-            pins.scopes,
+            pins.scopes.clone(),
             self.run_events.clone(),
             self.run_events.wake(),
             Arc::new(ScriptedSnapshotSource::default()),
             Arc::new(Notify::new()),
         )
+        .with_relaying(sends_events(&pins.scopes, true))
     }
 
     /// Dials once and runs the desktop's session on its own task.
@@ -781,8 +803,8 @@ impl Bridged {
 async fn logged(ctx: &AppContext) -> HubRequestLogEntry {
     timeout(BOUND, async {
         loop {
-            if let Some(entry) = ctx.hub_requests.list_log(1).expect("list the log").pop() {
-                return entry;
+            if let Some(row) = ctx.hub_requests.list_log(1).expect("list the log").pop() {
+                return row.entry;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -795,6 +817,7 @@ async fn logged(ctx: &AppContext) -> HubRequestLogEntry {
 /// the only thing a test switches.
 fn policy(spend_enabled: bool, gates_enabled: bool) -> HubLocalPolicy {
     HubLocalPolicy {
+        read_enabled: true,
         spend_enabled,
         gates_enabled,
         run_ceiling_cents: Some(1_000),
@@ -1299,6 +1322,7 @@ fn snapshot_context(
         snapshots,
         Arc::new(Notify::new()),
     )
+    .with_relaying(true)
 }
 
 /// A context over a run log that fails if the session reads it.
@@ -1585,6 +1609,7 @@ async fn pins_without_read_send_no_snapshot() {
         .with_liveness(SHORT_LIVENESS)
         .with_snapshot_debounce(SHORT_LIVENESS / 5);
     ctx.pinned_scopes = vec!["gates".to_owned()];
+    ctx.relaying = false;
     ctx.snapshot_wake = workflows.wake();
     ctx.snapshot_wake.notify_one();
     let conn = ScriptedConnection::new([cursor_ack(0)]).then_silent();
@@ -1961,8 +1986,13 @@ impl Supervised {
                 .expect("a seeded store"),
         );
         let endpoint = Arc::new(ScriptedRefreshEndpoint::new());
-        let pairing = HubPairing::new(db.clone(), secrets.clone(), Arc::new(NoRedemption))
-            .with_refresh_endpoint(endpoint.clone());
+        let pairing = HubPairing::new(
+            db.clone(),
+            secrets.clone(),
+            Arc::new(NoRedemption),
+            db.clone(),
+        )
+        .with_refresh_endpoint(endpoint.clone());
         Self {
             db,
             origin,
@@ -2020,7 +2050,8 @@ impl Supervised {
                 run_events.wake(),
                 Arc::new(ScriptedSnapshotSource::default()),
                 Arc::new(Notify::new()),
-            ),
+            )
+            .with_relaying(true),
             sleeper: self.sleeper.clone(),
             jitter: Box::new(|| 1.0),
         };

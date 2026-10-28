@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::domain::hub_pairing::{hub_error_code, token_error, token_refusal, HubPairingError};
 
 /// The longest wait between two dials, whatever the attempt count.
@@ -69,7 +71,8 @@ pub enum Reconnect {
 
 /// Why the supervisor stopped. Each one holds until a user action or the next
 /// app start, since redialling would meet the same answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// Closed `4002`. Never reconnect after being displaced: the redial would
     /// displace its successor, which would reconnect in its turn, and two

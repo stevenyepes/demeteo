@@ -1,7 +1,7 @@
 # Demeteo Hub Mockup
 
 Design for a browser control plane over many Demeteo instances — desktops on
-macOS, Linux and Windows, and `demeteo-runner` hosts. **Decided, not built.** The
+macOS, Linux and Windows, and `demeteo-runner` hosts. **Decided, and partly built** — [`HUB.md`](../HUB.md) §2 has the state of each part. The
 decisions are recorded in [`DECISIONS.md`](../DECISIONS.md#1-the-locked-decisions)
 (56–63) and specified in [`HUB.md`](../HUB.md); where this mockup disagrees with
 them, they win. The runner half of the design is superseded — see below.
@@ -20,7 +20,7 @@ the board layout.
 | [Runs](Runs.dc.html) | Runs across the fleet, with a gate reviewed and decided from the Hub. |
 | [Run](Run.dc.html) | One run's pipeline graph and step inspector. |
 | [AddInstance](AddInstance.dc.html) | Pairing a desktop (browser approval). The runner (printed code) half is superseded. |
-| [DesktopConnect](DesktopConnect.dc.html) | The new Settings › Hub tab inside the desktop app. |
+| [DesktopConnect](DesktopConnect.dc.html) | The Settings › Hub tab inside the desktop app — **built**, as [`HubTab.tsx`](../../src/components/settings/HubTab.tsx). |
 | [Architecture](Architecture.dc.html) | Trust model: instances dial out, the Hub holds no instance secrets. Shows a runner as a paired instance, which is superseded. |
 | [Pairing](Pairing.dc.html) | Sequence: OAuth pairing, then event reporting and dispatch. |
 
@@ -42,5 +42,9 @@ The artboards are not edited. Where they disagree with a decision, the decision 
 | A runner as a paired instance (`Architecture`, `Pairing`) | Decisions 63 and 64 |
 | A passkey required only for merge-to-default and over-budget gates (`DesktopConnect`, `Instance`) | [Decision 65](../DECISIONS.md#65--hub-gate-decisions-detail): every Hub gate decision carries an assertion |
 
-The mockup has no place to set the per-run and rolling 24-hour ceilings, and none
-for endorsing or revoking a passkey. [`HUB.md`](../HUB.md) §7 and §8 specify both.
+The built tab drops `DesktopConnect`'s `logs` toggle and makes `read` a real
+toggle that defaults on ([`HUB.md`](../HUB.md) §7). The mockup has no place to
+set the per-run and rolling 24-hour ceilings, and none for endorsing or revoking
+a passkey; [`HUB.md`](../HUB.md) §7 and §8 specify both. The ceilings and a
+read-only list of the trusted passkeys live in the Settings › Hub tab, beside
+the scope toggles.

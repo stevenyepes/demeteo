@@ -33,15 +33,17 @@ use crate::domain::hub_pairing::answer::{refresh_form_body, token_form_body};
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
 use crate::domain::hub_pairing::pkce::s256_challenge;
 use crate::domain::hub_pairing::{
-    authorize_url, check_pairing_origin, consent_label, hub_origin, hub_status, token_url,
-    AuthorizeRequest, HubPairingError, HubSecret, HubStatus, SecretString, MAX_INSTANCE_NAME_CHARS,
-    MAX_PLATFORM_LABEL_CHARS, SCOPES,
+    authorize_url, check_pairing_origin, consent_machine, hub_origin, hub_status, token_url,
+    AuthorizeRequest, HubMachine, HubPairingError, HubSecret, HubStatus, SecretString, SCOPES,
 };
-use crate::domain::hub_socket::RefreshEnd;
+use crate::domain::hub_socket::connection::{
+    after_local_restart, view, ConnectionFacts, HubConnection,
+};
+use crate::domain::hub_socket::{sends_events, RefreshEnd};
 use crate::error::AppError;
 use crate::ports::hub::{
-    BrowserLauncher, HubAttachmentFetcher, HubPinRepository, HubRefreshEndpoint, HubRequestHandler,
-    HubSecretStore, HubTokenEndpoint,
+    BrowserLauncher, HubAttachmentFetcher, HubPinRepository, HubPolicyReader, HubRefreshEndpoint,
+    HubRequestHandler, HubSecretStore, HubTokenEndpoint,
 };
 use crate::shared::time::now_secs;
 use crate::state::AppVersion;
@@ -50,6 +52,7 @@ use self::attachments::{HubAttachments, PairedAttachments};
 use self::device_key::DeviceKey;
 use self::loopback::CallbackListener;
 use self::socket::session::{RequestHandlerSlot, SessionContext};
+use self::socket::status::ConnectionCell;
 use self::socket::{SocketConfig, SocketTask, SupervisorDeps};
 
 pub mod attachments;
@@ -65,6 +68,9 @@ pub mod token_client;
 
 pub struct HubPairing {
     token: Arc<dyn HubTokenEndpoint>,
+    /// Read each time a socket starts, for whether it relays (see
+    /// [`sends_events`]).
+    policy: Arc<dyn HubPolicyReader>,
     app_version: AppVersion,
     /// Held for a whole `pair`. A tokio mutex because the guard lives across
     /// the browser wait, and `try_lock` because a second pairing is refused,
@@ -74,6 +80,7 @@ pub struct HubPairing {
     socket_config: Option<SocketConfig>,
     socket: std::sync::Mutex<Option<SocketTask>>,
     requests: RequestHandlerSlot,
+    connection: ConnectionCell,
 }
 
 /// The pairing's refresh state, shared with the socket it starts: the
@@ -129,9 +136,11 @@ impl HubPairing {
         pins: Arc<dyn HubPinRepository>,
         secrets: Arc<dyn HubSecretStore>,
         token: Arc<dyn HubTokenEndpoint>,
+        policy: Arc<dyn HubPolicyReader>,
     ) -> Self {
         Self {
             token,
+            policy,
             app_version: AppVersion::default(),
             in_flight: tokio::sync::Mutex::new(()),
             refresher: Refresher {
@@ -144,6 +153,7 @@ impl HubPairing {
             socket_config: None,
             socket: std::sync::Mutex::new(None),
             requests: RequestHandlerSlot::default(),
+            connection: ConnectionCell::default(),
         }
     }
 
@@ -201,6 +211,16 @@ impl HubPairing {
         self
     }
 
+    /// What the Hub's consent page was, or would be, shown for this machine.
+    pub fn machine(&self) -> HubMachine {
+        consent_machine(
+            &host_name().unwrap_or_default(),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            self.app_version.get(),
+        )
+    }
+
     pub async fn pair(
         &self,
         hub_url: &str,
@@ -227,20 +247,17 @@ impl HubPairing {
         let (listener, redirect) = CallbackListener::bind()?;
         let state = random_token()?;
         let verifier = random_token()?;
+        let machine = self.machine();
         let request = AuthorizeRequest {
             code_challenge: s256_challenge(&verifier),
             redirect_uri: redirect.clone(),
             dpop_jkt: jkt.clone(),
             scope: SCOPES.to_owned(),
             state: state.clone(),
-            instance_name: consent_label(
-                &host_name().unwrap_or_default(),
-                MAX_INSTANCE_NAME_CHARS,
-                "Demeteo desktop",
-            ),
-            os: consent_label(std::env::consts::OS, MAX_PLATFORM_LABEL_CHARS, "unknown"),
-            arch: consent_label(std::env::consts::ARCH, MAX_PLATFORM_LABEL_CHARS, "unknown"),
-            app_version: consent_label(self.app_version.get(), MAX_PLATFORM_LABEL_CHARS, "unknown"),
+            instance_name: machine.instance_name,
+            os: machine.os,
+            arch: machine.arch,
+            app_version: machine.app_version,
         };
         launcher
             .open(&authorize_url(&origin, &request)?)
@@ -313,10 +330,12 @@ impl HubPairing {
     /// Starts the socket when this desktop is paired, holds a refresh token
     /// and a device key, and has a [`SocketConfig`]; otherwise it dials
     /// nothing and spawns nothing. A socket already running is left alone,
-    /// so a second start spawns no second task; only [`Self::pair`]
-    /// replaces it, by stopping it first. One that stopped on a verdict is
-    /// started again, since a new pairing is what most of those verdicts
-    /// ask for.
+    /// so a second start spawns no second task; only [`Self::pair`] and
+    /// [`Self::restart_socket`] replace it, by stopping it first. One that
+    /// stopped on a verdict is started again, since a new pairing is what
+    /// most of those verdicts ask for. A local policy that cannot be read
+    /// starts nothing: a socket started without it could relay what `read`
+    /// was turned off to stop.
     pub fn start_socket(&self) {
         let Some(config) = &self.socket_config else {
             return;
@@ -330,6 +349,34 @@ impl HubPairing {
             Ok(None) => {}
             Err(e) => tracing::warn!(error = %e, "the Hub socket was not started"),
         }
+    }
+
+    /// Replaces a running socket with one that reads the local policy anew,
+    /// the way [`Self::pair`] replaces it with one on new pins: stopped,
+    /// awaited, and started again under the refresh lock, so a
+    /// [`Self::disconnect`] either stops the new socket or has cleared the
+    /// pins it would start on. A socket that is not running, stopped on a
+    /// verdict included, is left alone: a policy change is not the new
+    /// pairing such a verdict asks for.
+    ///
+    /// Once it returns the connection never reads as stopped on this
+    /// restart's account: it reads as not running until the new socket
+    /// records its first state, and stays so if none starts, with the
+    /// cursor already reported kept (see [`after_local_restart`]).
+    pub async fn restart_socket(&self) {
+        let running = self
+            .socket
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take_if(|task| task.is_running());
+        let Some(previous) = running else {
+            return;
+        };
+        previous.stop();
+        let _refresh_lock = self.refresher.lock.lock().await;
+        previous.ended().await;
+        self.connection.update(after_local_restart);
+        self.start_socket();
     }
 
     fn socket_deps(
@@ -348,6 +395,8 @@ impl HubPairing {
         let Some(key) = self.refresher.stored_device_key(&install_id)? else {
             return Ok(None);
         };
+        let read_enabled = self.policy.load().map_err(storage)?.read_enabled;
+        let relaying = sends_events(&paired.scopes, read_enabled);
         Ok(Some(SupervisorDeps {
             tokens: Arc::new(self.refresher.clone()),
             origin: paired.hub_origin,
@@ -362,7 +411,9 @@ impl HubPairing {
                 config.snapshots.clone(),
                 config.snapshot_wake.clone(),
             )
+            .with_relaying(relaying)
             .with_requests(self.requests.clone())
+            .with_connection(self.connection.clone())
             .with_snapshot_debounce(config.snapshot_debounce),
             sleeper: config.sleeper.clone(),
             jitter: Box::new(config.jitter),
@@ -394,6 +445,12 @@ impl HubPairing {
             .take()?;
         task.stop();
         Some(task)
+    }
+
+    /// How the socket stands, as the last socket this pairing started left
+    /// it; from memory only.
+    pub fn connection(&self) -> HubConnection {
+        view(&self.connection.get())
     }
 
     /// From local storage only; no network call.
@@ -441,7 +498,8 @@ impl HubPairing {
     ///    finishes, its rotation stored, before anything is deleted; none
     ///    starts until the pins are gone. A socket `pair` started while this
     ///    waited is stopped too: `pair` starts it under the same lock.
-    /// 3. The socket task is awaited, so nothing it owns outlives the call.
+    /// 3. The socket task is awaited, so nothing it owns outlives the call,
+    ///    and the connection it recorded reads as not running.
     /// 4. Under the lock still, the access token is dropped, both keyring
     ///    entries are deleted and the pins cleared.
     /// 5. The status is read back.
@@ -455,6 +513,8 @@ impl HubPairing {
         for task in [running, started].into_iter().flatten() {
             task.ended().await;
         }
+        self.connection
+            .update(|facts| *facts = ConnectionFacts::default());
 
         let Refresher {
             pins,
@@ -590,7 +650,7 @@ fn stored_form(key: &DeviceKey) -> Result<String, HubPairingError> {
 }
 
 /// The name the Hub's consent page shows for this machine. Only the lookup is
-/// behind `cfg`; what is acceptable to send is [`consent_label`]'s.
+/// behind `cfg`; what is acceptable to send is [`consent_machine`]'s.
 #[cfg(unix)]
 fn host_name() -> Option<String> {
     let mut buf = [0u8; 256];

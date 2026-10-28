@@ -30,19 +30,40 @@ pub mod passkeys;
 pub mod verify;
 
 pub use ceiling::spend_verdict;
-pub use log::{HubRequestLogEntry, LogKind, LogOutcome};
+pub use log::{HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome};
 pub use verify::verify_signature;
 
 /// The desktop's own word on what the Hub may do here. Written only from
 /// Settings; no request kind carries a field that could change it (docs/HUB.md
-/// §7). The default is everything off and both ceilings unset, which refuses
-/// every spend.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// §7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubLocalPolicy {
+    #[serde(default = "read_enabled_by_default")]
+    pub read_enabled: bool,
     pub spend_enabled: bool,
     pub gates_enabled: bool,
     pub run_ceiling_cents: Option<u64>,
     pub daily_ceiling_cents: Option<u64>,
+}
+
+fn read_enabled_by_default() -> bool {
+    true
+}
+
+/// `read` on, `spend` and `gates` off, both ceilings unset, which refuses
+/// every spend. `read` is on because pairing already approved it and, until
+/// V67 gave it a toggle, it was always in force: a desktop with no saved
+/// policy, or one saved before the toggle existed, keeps relaying as before.
+impl Default for HubLocalPolicy {
+    fn default() -> Self {
+        Self {
+            read_enabled: read_enabled_by_default(),
+            spend_enabled: false,
+            gates_enabled: false,
+            run_ceiling_cents: None,
+            daily_ceiling_cents: None,
+        }
+    }
 }
 
 /// Mirrors `required_scope` in `crates/demeteo-hub/src/socket/requests.rs`,
@@ -64,17 +85,25 @@ pub fn required_scope(payload: &RequestPayload) -> Option<Scope> {
 
 /// The scopes in force: those the user approved at pairing, narrowed by the
 /// local toggles. Pairing records consent and the toggle is the later word,
-/// so a toggle cannot widen past what was pinned. `read` has no toggle.
+/// so a toggle cannot widen past what was pinned. Every scope has a toggle,
+/// `read` included.
 pub fn effective_scopes(pinned: &[Scope], policy: &HubLocalPolicy) -> Vec<Scope> {
     pinned
         .iter()
         .copied()
         .filter(|scope| match scope {
-            Scope::Read => true,
+            Scope::Read => policy.read_enabled,
             Scope::Spend => policy.spend_enabled,
             Scope::Gates => policy.gates_enabled,
         })
         .collect()
+}
+
+/// Whether saving `new` over `old` changes what a running socket relays,
+/// which it reads only when it starts. `None` is a previous policy that could
+/// not be read: it may have said anything, so it counts as a change.
+pub fn read_changed(old: Option<&HubLocalPolicy>, new: &HubLocalPolicy) -> bool {
+    old.is_none_or(|old| old.read_enabled != new.read_enabled)
 }
 
 /// The result of checking the Hub's signature over `signing_bytes()`.

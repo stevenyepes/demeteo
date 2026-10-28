@@ -7,10 +7,12 @@
 //! an instance announces, and [`snapshot`] what an instance reports of its
 //! Projects. What follows a connection's end is decided here
 //! too: [`after`], [`after_close`], [`resets_backoff`], [`refresh_refusal`],
-//! [`after_refresh`] and [`backoff`].
+//! [`after_refresh`] and [`backoff`]. What the Settings tab is told of the
+//! socket is [`connection::view`].
 
 use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
+pub mod connection;
 mod projection;
 mod snapshot;
 mod verdict;
@@ -45,10 +47,14 @@ pub fn hello(
     }
 }
 
-/// Whether the run log is relayed at all. Without `read` the Hub may not
-/// see a Feature's progress, so the session sends its `Hello` and no events.
-pub fn sends_events(pinned_scopes: &[String]) -> bool {
-    pinned_scopes.iter().any(|s| scope(s) == Some(Scope::Read))
+/// Whether the run log and the snapshot are relayed at all: only while
+/// `read` is both pinned and left on in the local policy. Without it the
+/// Hub may not see a Feature's progress, so the session sends its `Hello`
+/// and nothing else of its own. [`hello`] still announces `read` while it
+/// is pinned: the toggle is this desktop's withholding, not a narrower
+/// pairing.
+pub fn sends_events(pinned_scopes: &[String], read_enabled: bool) -> bool {
+    read_enabled && pinned_scopes.iter().any(|s| scope(s) == Some(Scope::Read))
 }
 
 fn scope(name: &str) -> Option<Scope> {

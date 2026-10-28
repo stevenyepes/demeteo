@@ -195,3 +195,13 @@ pub struct HubRequestLogEntry {
     pub feature_id: Option<String>,
     pub received_at_ms: i64,
 }
+
+/// A logged [`HubRequestLogEntry`] as read back, with the row's own key.
+/// `request_id` is not one: a redelivery and a deferred request handled later
+/// are each logged again under the same id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HubRequestLogRow {
+    pub id: i64,
+    #[serde(flatten)]
+    pub entry: HubRequestLogEntry,
+}

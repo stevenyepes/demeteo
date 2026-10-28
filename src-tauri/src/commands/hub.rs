@@ -1,7 +1,7 @@
 //! Desktop pairing with the Demeteo Hub, and the Settings side of the Hub
 //! local policy and activity log. Every decision is
-//! `adapters::hub::HubPairing`'s or the repositories'; these only unwrap
-//! state and map errors to the IPC string.
+//! `adapters::hub::HubPairing`'s, `application::hub_settings`' or the
+//! repositories'; these only unwrap state and map errors to the IPC string.
 
 use std::sync::Arc;
 
@@ -9,10 +9,15 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::adapters::hub::HubPairing;
-use crate::domain::hub_pairing::{HubStatus, PAIR_TIMEOUT};
+use crate::application::hub_settings::save_hub_policy;
+use crate::domain::hub_pairing::{HubMachine, HubStatus, PAIR_TIMEOUT};
 use crate::domain::hub_request::log::MAX_LOG_PAGE;
-use crate::domain::hub_request::{HubLocalPolicy, HubRequestLogEntry};
-use crate::ports::hub::{BrowserLauncher, HubPolicyReader, HubPolicyWriter, HubRequestRepository};
+use crate::domain::hub_request::passkeys::HubTrustedPasskey;
+use crate::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
+use crate::domain::hub_socket::connection::HubConnection;
+use crate::ports::hub::{
+    BrowserLauncher, HubPasskeyReader, HubPolicyReader, HubPolicyWriter, HubRequestRepository,
+};
 use crate::state::AppContext;
 
 /// Tauri state of its own, never a field of [`AppContext`]: the Hub request
@@ -55,6 +60,14 @@ pub fn status_core(hub: &HubPairing) -> Result<HubStatus, String> {
     hub.status().map_err(|e| e.to_string())
 }
 
+pub fn connection_core(hub: &HubPairing) -> Result<HubConnection, String> {
+    Ok(hub.connection())
+}
+
+pub fn machine_core(hub: &HubPairing) -> Result<HubMachine, String> {
+    Ok(hub.machine())
+}
+
 pub async fn disconnect_core(hub: &HubPairing) -> Result<HubStatus, String> {
     hub.disconnect().await.map_err(|e| e.to_string())
 }
@@ -63,20 +76,30 @@ pub fn policy_get_core(reader: &dyn HubPolicyReader) -> Result<HubLocalPolicy, S
     reader.load().map_err(|e| e.to_string())
 }
 
-pub fn policy_set_core(
+pub async fn policy_set_core(
+    reader: &dyn HubPolicyReader,
     writer: &dyn HubPolicyWriter,
+    hub: Option<&HubPairing>,
     policy: &HubLocalPolicy,
 ) -> Result<(), String> {
-    writer.save(policy).map_err(|e| e.to_string())
+    save_hub_policy(reader, writer, hub, policy)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub fn request_log_core(
     requests: &dyn HubRequestRepository,
     limit: usize,
-) -> Result<Vec<HubRequestLogEntry>, String> {
+) -> Result<Vec<HubRequestLogRow>, String> {
     requests
         .list_log(limit.min(MAX_LOG_PAGE))
         .map_err(|e| e.to_string())
+}
+
+pub fn trusted_passkeys_core(
+    reader: &dyn HubPasskeyReader,
+) -> Result<Vec<HubTrustedPasskey>, String> {
+    reader.listed().map_err(|e| e.to_string())
 }
 
 /// Waits up to [`PAIR_TIMEOUT`] for the browser's answer; `async`, so on
@@ -96,6 +119,16 @@ pub fn hub_status(ctx: State<'_, AppContext>) -> Result<HubStatus, String> {
 }
 
 #[tauri::command]
+pub fn hub_connection(ctx: State<'_, AppContext>) -> Result<HubConnection, String> {
+    connection_core(pairing(&ctx)?)
+}
+
+#[tauri::command]
+pub fn hub_machine(ctx: State<'_, AppContext>) -> Result<HubMachine, String> {
+    machine_core(pairing(&ctx)?)
+}
+
+#[tauri::command]
 pub async fn hub_disconnect(ctx: State<'_, AppContext>) -> Result<HubStatus, String> {
     disconnect_core(pairing(&ctx)?).await
 }
@@ -106,11 +139,23 @@ pub fn hub_policy_get(ctx: State<'_, AppContext>) -> Result<HubLocalPolicy, Stri
 }
 
 #[tauri::command]
-pub fn hub_policy_set(
+pub async fn hub_policy_set(
+    ctx: State<'_, AppContext>,
     settings: State<'_, HubPolicySettings>,
     policy: HubLocalPolicy,
 ) -> Result<(), String> {
-    policy_set_core(settings.0.as_ref(), &policy)
+    policy_set_core(
+        ctx.hub_policy.as_ref(),
+        settings.0.as_ref(),
+        ctx.hub.as_deref(),
+        &policy,
+    )
+    .await
+}
+
+#[tauri::command]
+pub fn hub_trusted_passkeys(ctx: State<'_, AppContext>) -> Result<Vec<HubTrustedPasskey>, String> {
+    trusted_passkeys_core(ctx.hub_passkeys.as_ref())
 }
 
 /// Newest first.
@@ -118,7 +163,7 @@ pub fn hub_policy_set(
 pub fn hub_request_log(
     ctx: State<'_, AppContext>,
     limit: usize,
-) -> Result<Vec<HubRequestLogEntry>, String> {
+) -> Result<Vec<HubRequestLogRow>, String> {
     request_log_core(ctx.hub_requests.as_ref(), limit)
 }
 

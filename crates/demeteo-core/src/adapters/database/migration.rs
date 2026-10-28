@@ -224,6 +224,15 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
 
+    // The local `read` toggle (V67), on by default — see the migration's
+    // header.
+    add_column_if_missing(
+        conn,
+        "hub_local_policy",
+        "read_enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+
     Ok(())
 }
 
