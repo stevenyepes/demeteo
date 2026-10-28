@@ -417,8 +417,10 @@ Hub is built only in part: storage, the `KeyService` port, `/healthz`, static se
 passkey auth, the Hub's half of pairing, the Hub's side of the instance socket and the
 session JSON API that queues requests for an instance, plus the Compose bundle in
 `deploy/hub`. The desktop pairs with the Hub and holds its socket, relaying the
-run events of local runs and a snapshot of its Projects and Workflows; it answers
-no request yet ([HUB.md §2](HUB.md#2-status-of-the-parts) has the state per part):
+run events of local runs and a snapshot of its Projects and Workflows; it verifies
+and answers the requests the Hub relays, and decides a gate only on a WebAuthn
+assertion that verifies against the passkeys the desktop pinned
+([HUB.md §2](HUB.md#2-status-of-the-parts) has the state per part):
 
 | Path | What it is |
 |---|---|

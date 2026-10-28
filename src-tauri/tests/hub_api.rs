@@ -1876,7 +1876,6 @@ fn decision(view: &GateChallengeView, assertion: WebAuthnAssertion) -> GateDecis
         ceremony_id: view.ceremony_id.clone(),
         request_id: view.request_id.clone(),
         assertion,
-        feedback: Some("ship it".to_owned()),
     }
 }
 
@@ -1922,7 +1921,7 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
             feature_id: "f-a".to_owned(),
             step_execution_id: "e1".to_owned(),
             decision: Decision::Approve,
-            feedback: Some("ship it".to_owned()),
+            feedback: None,
             assertion,
         })
     );

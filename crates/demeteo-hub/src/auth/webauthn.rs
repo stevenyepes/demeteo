@@ -31,9 +31,11 @@
 //!   `allowCredentials`.** Conditional mediation is an autofill suggestion
 //!   under a text field; the Hub's sign-in is a button and a modal prompt. Both
 //!   members are dropped from the options.
-//! - **It refuses a signature counter that did not advance.** `docs/HUB.md` §8
-//!   does not rely on the counter, because synced passkeys commonly report
-//!   zero, and the Hub refuses no sign-in over it. The library is therefore
+//! - **It refuses a signature counter that did not advance.** The Hub refuses
+//!   no sign-in over the counter, because synced passkeys commonly report
+//!   zero. An instance does refuse a count that does not advance, for its own
+//!   pinned set and against the count it keeps per key (`docs/HUB.md` §8);
+//!   a sign-in here reaches no instance. The library is therefore
 //!   handed the stored credential with its counter at zero, where its check
 //!   passes whatever is reported, and what it would have refused is returned
 //!   as [`SignedIn::counter_regressed`] for the caller to record. That is

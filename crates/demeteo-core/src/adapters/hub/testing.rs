@@ -21,6 +21,11 @@
 //! [`ScriptedSnapshotSource`] answers from its script and then from the
 //! snapshot a test set, and with an `Err` once it has neither, so no session
 //! sends a snapshot the test did not choose.
+//!
+//! [`ScriptedGatePresenter`] accepts the one gate decision it was scripted
+//! with, once, and refuses everything else with an `Err` — other arguments, a
+//! repeat, and every `gate_pending_for_run` — counting each for a test to
+//! assert is `0`.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -33,6 +38,7 @@ use tokio::sync::{mpsc, watch, Notify};
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
 use crate::domain::hub_pairing::{HubPins, HubSecret, KeyringStatus, RefreshAnswer};
 use crate::domain::hub_socket::RefreshEnd;
+use crate::domain::models::GateDecision;
 use crate::error::AppError;
 use crate::ports::hub::{
     AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubPinRepository, HubRefreshEndpoint,
@@ -40,6 +46,7 @@ use crate::ports::hub::{
     SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
+use crate::ports::step_executor::GatePresenter;
 
 use super::device_key::DeviceKey;
 
@@ -665,5 +672,84 @@ impl HubSnapshotSource for ScriptedSnapshotSource {
             self.unscripted.fetch_add(1, Ordering::SeqCst);
             Self::UNSCRIPTED.to_owned()
         })
+    }
+}
+
+/// A `gate_decide` call: the step execution id, the decision and the feedback.
+pub type GateCall = (String, String, Option<String>);
+
+/// A gate presenter that accepts the `gate_decide` it was scripted with, the
+/// first time it is made, and answers every other call with an `Err` counted
+/// by [`Self::unexpected`]. A refused call leaves the script in place, so the
+/// scripted call can still follow one.
+pub struct ScriptedGatePresenter {
+    script: Mutex<Option<GateCall>>,
+    calls: Mutex<Vec<GateCall>>,
+    unexpected: AtomicUsize,
+}
+
+impl ScriptedGatePresenter {
+    pub const UNSCRIPTED: &'static str = "unscripted gate presenter call";
+
+    pub fn expecting(step_execution_id: &str, decision: &str, feedback: Option<&str>) -> Self {
+        Self::scripted(Some((
+            step_execution_id.to_owned(),
+            decision.to_owned(),
+            feedback.map(str::to_owned),
+        )))
+    }
+
+    pub fn refusing_all() -> Self {
+        Self::scripted(None)
+    }
+
+    fn scripted(script: Option<GateCall>) -> Self {
+        Self {
+            script: Mutex::new(script),
+            calls: Mutex::new(Vec::new()),
+            unexpected: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn calls(&self) -> Vec<GateCall> {
+        locked(&self.calls).clone()
+    }
+
+    pub fn unexpected(&self) -> usize {
+        self.unexpected.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl GatePresenter for ScriptedGatePresenter {
+    async fn gate_pending_for_run(&self, feature_id: &str) -> Result<Option<GateDecision>, String> {
+        self.unexpected.fetch_add(1, Ordering::SeqCst);
+        Err(format!(
+            "{}: gate_pending_for_run({feature_id})",
+            Self::UNSCRIPTED
+        ))
+    }
+
+    async fn gate_decide(
+        &self,
+        step_execution_id: &str,
+        decision: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), AppError> {
+        let call = (
+            step_execution_id.to_owned(),
+            decision.to_owned(),
+            feedback.map(str::to_owned),
+        );
+        let scripted = locked(&self.script).take_if(|script| *script == call);
+        if scripted.is_none() {
+            self.unexpected.fetch_add(1, Ordering::SeqCst);
+            return Err(AppError::validation(format!(
+                "{}: gate_decide{call:?}",
+                Self::UNSCRIPTED
+            )));
+        }
+        locked(&self.calls).push(call);
+        Ok(())
     }
 }

@@ -30,16 +30,15 @@ const START_AGAIN: readonly (string | null)[] = ['ceremony_expired', 'challenge_
 /**
  * Every decision goes through `decideGate`'s passkey ceremony: there is no
  * gate kind that skips it. Redirect is shown so its absence is explained, not
- * hidden — the Hub accepts only approve and cancel.
+ * hidden — the Hub accepts only approve and cancel. Feedback has no field: an
+ * instance discards it (`docs/HUB.md` §8), so the Hub refuses a decision that
+ * names it.
  */
 export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pending, onDecided }: GatePanelProps) {
   const headingId = useId();
   const reasonId = useId();
-  const feedbackId = useId();
-  const feedbackNoteId = useId();
   const redirectNoteId = useId();
   const pendingNoteId = useId();
-  const [feedback, setFeedback] = useState('');
   const [send, setSend] = useState<Send>({ state: 'idle' });
 
   /**
@@ -65,7 +64,7 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
     latestSend.current += 1;
     const attempt = latestSend.current;
     setSend({ state: 'sending' });
-    decideGate({ instanceId, featureId, stepExecutionId, decision, feedback }).then(
+    decideGate({ instanceId, featureId, stepExecutionId, decision }).then(
       (ticket) => {
         inFlight.current = false;
         // Reported even after unmount: the decision is queued whether or not this panel is still open.
@@ -101,22 +100,7 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
         aria-describedby={blocked ? reasonId : pending ? pendingNoteId : undefined}
         className="mt-3 flex flex-col gap-3 disabled:opacity-40"
       >
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={feedbackId} className="text-xs font-medium text-slate-300">
-            Feedback (optional)
-          </label>
-          <textarea
-            id={feedbackId}
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-            aria-describedby={feedbackNoteId}
-            rows={3}
-            className="input-field focus:border-cyan-400! focus:shadow-none!"
-          />
-          <p id={feedbackNoteId} className="text-xs text-slate-400">
-            Feedback travels unsigned: it is not covered by the passkey signature.
-          </p>
-        </div>
+        <p className="text-xs text-slate-400">Feedback can only be given on the desktop.</p>
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"

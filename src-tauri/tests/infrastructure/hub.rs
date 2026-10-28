@@ -654,7 +654,7 @@ fn v64_creates_exactly_the_public_hub_columns() {
         ),
         (
             "hub_pinned_passkeys",
-            &["credential_id", "public_key", "pinned_at"],
+            &["credential_id", "public_key", "pinned_at", "sign_count"],
         ),
     ];
     let conn = db.conn.lock().unwrap();

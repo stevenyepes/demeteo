@@ -63,7 +63,8 @@ export type HubScope = "read" | "spend" | "gates";
 export type HubRequestOutcome = "accepted" | "refused" | "dropped" | "deferred";
 
 /** Mirrors the Rust `HubRequestLogEntry`: what was asked and answered, never
- *  what the request carried. */
+ *  what the request carried, save the credential ids an applied passkey
+ *  endorsement or revocation names in `reason`. */
 export interface HubRequestLogEntry {
   request_id: string;
   kind: HubRequestKind;

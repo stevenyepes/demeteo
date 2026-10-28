@@ -48,6 +48,11 @@ pub struct GateChallengeBody {
 
 /// A signed decision on a held challenge. It names no gate: what is decided
 /// is what the challenge held.
+///
+/// It takes no `feedback`, and `deny_unknown_fields` refuses a body that
+/// names one before the challenge is taken. An instance discards the
+/// protocol's unbound feedback (`docs/HUB.md` §8), so a field accepted here
+/// would tell its sender the text arrived when nothing reads it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateDecisionBody {
@@ -55,9 +60,6 @@ pub struct GateDecisionBody {
     /// Unpadded base64url; the challenge's own, or the decision is refused.
     pub request_id: String,
     pub assertion: WebAuthnAssertion,
-    /// Passed through as the protocol's unbound note.
-    #[serde(default)]
-    pub feedback: Option<String>,
 }
 
 /// A held gate challenge. `request_id` and `gate_challenge` are unpadded
@@ -167,7 +169,7 @@ pub async fn gate_decision(
         feature_id: held.feature_id,
         step_execution_id: held.step_execution_id,
         decision: held.decision,
-        feedback: body.feedback,
+        feedback: None,
         assertion: body.assertion,
     });
     queue_as(api, user, &row, held.minted, payload, now).await
@@ -219,15 +221,13 @@ fn held_gate(
 
 /// Whether `body` may be queued as the decision on `held` at `now`: its
 /// request id is the held one, its assertion is shaped like one over the
-/// held digest, its note could be stored, and the request it would travel
-/// as has not expired.
+/// held digest, and the request it would travel as has not expired.
 fn decision_verdict(held: &HeldGate, body: &GateDecisionBody, now: u64) -> Result<(), ApiError> {
     if !held_matches(&held.minted.id, &body.request_id) {
         return Err(ApiError::CHALLENGE_MISMATCH);
     }
     check_assertion_shape(&body.assertion, &held.challenge)
         .map_err(|Malformed| ApiError::ASSERTION_MALFORMED)?;
-    strings_verdict(std::iter::empty(), body.feedback.as_deref().into_iter())?;
     match delivery_verdict(held.minted.expires_at, now) {
         Delivery::Deliver => Ok(()),
         Delivery::Expire => Err(ApiError::CEREMONY_EXPIRED),
@@ -474,7 +474,24 @@ mod tests {
             ceremony_id: "c".to_owned(),
             request_id: base64url_encode(request_id),
             assertion,
-            feedback: None,
+        }
+    }
+
+    #[test]
+    fn a_decision_body_naming_feedback_does_not_parse() {
+        let decided = serde_json::json!({
+            "ceremony_id": "c",
+            "request_id": base64url_encode(&REQUEST_ID),
+            "assertion": SoftAuthenticator::new().assert(&rp(), &DIGEST),
+        });
+        assert!(serde_json::from_value::<GateDecisionBody>(decided.clone()).is_ok());
+        for feedback in [serde_json::json!("ship it"), serde_json::json!(null)] {
+            let mut noted = decided.clone();
+            noted["feedback"] = feedback.clone();
+            assert!(
+                serde_json::from_value::<GateDecisionBody>(noted).is_err(),
+                "{feedback}"
+            );
         }
     }
 
@@ -507,14 +524,12 @@ mod tests {
     }
 
     #[test]
-    fn a_decision_is_judged_by_request_id_then_shape_then_note_then_expiry() {
+    fn a_decision_is_judged_by_request_id_then_shape_then_expiry() {
         let valid = SoftAuthenticator::new().assert(&rp(), &DIGEST);
         let mut other = REQUEST_ID;
         other[0] ^= 0x01;
         let mut malformed = valid.clone();
         malformed.signature.push('=');
-        let mut noted = body(&REQUEST_ID, valid.clone());
-        noted.feedback = Some("a\0b".to_owned());
 
         let late = EXPIRES;
         assert_eq!(
@@ -524,10 +539,6 @@ mod tests {
         assert_eq!(
             decision_verdict(&held(), &body(&REQUEST_ID, malformed), late),
             Err(ApiError::ASSERTION_MALFORMED)
-        );
-        assert_eq!(
-            decision_verdict(&held(), &noted, late),
-            Err(ApiError::INVALID_REQUEST)
         );
         assert_eq!(
             decision_verdict(&held(), &body(&REQUEST_ID, valid.clone()), late),

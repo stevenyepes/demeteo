@@ -750,6 +750,7 @@ impl Bridged {
                 requests: ctx.hub_requests.clone(),
                 policy: ctx.hub_policy.clone(),
                 pins: self.db.clone(),
+                passkeys: self.db.clone(),
                 attachments: Arc::new(ScriptedAttachments::new()),
                 now_ms: Arc::new(|| NOW * 1000),
             },
@@ -1226,13 +1227,13 @@ async fn a_request_still_being_handled_does_not_hold_up_the_session() {
     assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
 }
 
-/// A gate decision is the gate handler's to answer, which is not built: the
-/// desktop's handler logs it deferred and sends nothing, so the Hub still
-/// holds it queued, and the connection carries on.
+/// A gate decision the desktop refuses is answered like any other request:
+/// the Hub records the outcome, and the connection carries on. The fixture
+/// names a step this scratch desktop does not have.
 #[tokio::test]
-async fn a_deferred_gate_decision_is_logged_and_left_unanswered_on_a_live_connection() {
+async fn a_refused_gate_decision_is_answered_and_the_hub_records_it_on_a_live_connection() {
     let bridged = Bridged::new(&[]).await;
-    let (requests, desktop) = bridged.handler("gate-deferred", &policy(false, true));
+    let (requests, desktop) = bridged.handler("gate-refused", &policy(false, true));
     bridged
         .queue_request("signed_request_gate_decision.json")
         .await;
@@ -1240,24 +1241,27 @@ async fn a_deferred_gate_decision_is_logged_and_left_unanswered_on_a_live_connec
         .connect_with(bridged.context().with_requests(requests))
         .await;
 
-    let entry = logged(&desktop).await;
+    let request = bridged.answered().await;
     let live = bridged.append(&("f-a", "gate_decided", json!({"step_execution_id": "e-2"})));
     bridged.acked_through(live).await;
 
-    assert_eq!(
-        (entry.kind, entry.outcome, entry.reason),
-        (LogKind::GateDecision, LogOutcome::Deferred, None)
-    );
-    let [request] = &bridged.dialer.hub.requests()[..] else {
-        panic!("one request: {:?}", bridged.dialer.hub.requests());
+    let refused = RequestOutcome::Refused {
+        reason: RefusalReason::UnknownStep,
     };
+    assert_eq!(request.kind, "gate_decision");
+    assert_eq!(request.deliveries, 1);
+    assert_eq!(request.status, RequestStatus::Answered);
+    assert_eq!(request.outcome, Some(refused));
+    let entry = logged(&desktop).await;
     assert_eq!(entry.request_id, request.envelope.request_id);
-    assert_eq!(request.status, RequestStatus::Queued);
-    assert_eq!(request.outcome, None);
-    assert!(!bridged
-        .heard()
-        .iter()
-        .any(|text| serde_json::from_str::<RequestResult>(text).is_ok()));
+    assert_eq!(
+        (entry.kind, entry.outcome, entry.reason.as_deref()),
+        (
+            LogKind::GateDecision,
+            LogOutcome::Refused,
+            Some("unknown_step")
+        )
+    );
     assert!(!bridged.dialer.sessions.lock().unwrap()[0].is_finished());
     assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
 }

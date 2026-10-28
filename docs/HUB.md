@@ -41,14 +41,14 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions and the passkey kinds excepted (§6.1 *On the desktop*). **Not built:** unpairing and revoking an instance |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On the desktop*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first |
 | Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); a snapshot after the first `CursorAck` and after each Project or Workflow write (§5 *Snapshots*) |
 | Desktop side: Settings › Hub tab | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint, nothing shows whether the socket is connected or why it stopped, and nothing sets the toggles and ceilings of §7 or shows the activity log. The `hub_policy_get`, `hub_policy_set` and `hub_request_log` commands and their wrappers exist. Until a view calls `hub_policy_set`, `spend` and `gates` read as off and every request that needs one is refused |
-| Desktop side: passkey pin set, request verification, local ceilings | **request verification and local ceilings built; no passkey is verified against the pinned set yet** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). A `gate_decision` and the two passkey kinds are deferred, because nothing on the desktop verifies a WebAuthn assertion yet (§8) |
+| Desktop side: passkey pin set, request verification, local ceilings | **built** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`, and each passkey's signature counter by `V66__hub_passkey_sign_count.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). The WebAuthn assertion a `gate_decision` or a `passkey_revocation` carries is verified on the desktop against the pinned set before the request has any effect: a gate is then decided by the desktop's own `gate_decide`, and a key is removed in one transaction with the signer's counter (§8). Every `passkey_endorsement` is consumed and refused `unknown_kind` without its assertion being read (§11 item 20). A gate of a run a `demeteo-runner` owns is not decided this way yet: it is refused `runner_owned` (§10) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
 | Runner dispatch from the Hub | **not built, and not part of this ticket set** — see §10 |
 
@@ -104,7 +104,9 @@ judged by what that attacker cannot do.
 | withhold, delay or reorder requests | forge a request: the envelope is signed and the instance verifies it against the key it pinned (§6) |
 | replay a request | replay one that works: ids are single-use and expire (§6) |
 | queue a `start_feature` for an instance that has `spend` on | declare a cap above the instance's per-run ceiling, or one that takes the 24-hour committed total above its rolling ceiling (§7). The ceilings bound declared caps, not what a run spends — §7 *The per-run ceiling bounds the declared cap, not what the run spends* |
-| relay a gate decision a human made | **make** one: no token approves; the assertion is verified on the desktop (§8) |
+| relay a gate decision a human made | **make** one with no ceremony: no token approves, and the assertion is verified on the desktop (§8). That holds per ceremony: a substituted ceremony can spend one (the next row) |
+| substitute what a passkey ceremony signs. It serves the hub-web bundle that runs every ceremony (§2), so a ceremony the user takes for a sign-in or one gate approval can be fed another challenge, and the authenticator shows only the RP. That ceremony can decide one gate the user did not mean, or revoke one of the user's other pinned keys (§11 item 20) | add a key to an instance's pinned set, with a ceremony or without: the desktop refuses every `passkey_endorsement` as `unknown_kind` without reading its assertion (§11 item 20); nor revoke the last key (§8) |
+| rewrite the free-text `feedback` a relayed gate decision carries, which no assertion binds. The desktop discards it, so a rewrite changes nothing on the instance (§8) | change the decision, its gate or its request: the challenge binds all three (§8) |
 | — | turn a scope on, or raise a ceiling |
 
 > **A stolen device key and refresh token** let an attacker speak as the instance:
@@ -797,17 +799,27 @@ which the socket hands every request frame to. What a request comes to:
 - **A request that does not verify gets no `result`.** It is logged as
   `dropped`, with the reason `signature`, and its id is not spent. An instance
   holding no pins drops every request the same way.
-- **A `gate_decision` with `gates` on, and either passkey kind, is deferred**:
-  not consumed, not answered, logged as `deferred`. Nothing on the desktop
-  verifies a WebAuthn assertion yet (§8), and an id spent here would make the
-  redelivery that reaches a verifier read as `replayed`. The Hub delivers it
-  again on the next connection until it expires. A `gate_decision` with `gates`
-  off is refused `scope_off`.
-- **A request the desktop cannot judge is deferred too.** If the pins or the
-  policy fail to load, a `start_feature`'s 24-hour committed total (§7) fails
-  to load, or the id cannot be recorded, nothing is answered, and the
-  redelivery is judged afresh. The total is loaded before the id is recorded,
-  so a start deferred for it does not spend its id.
+- **A `gate_decision` with `gates` on, and a `passkey_revocation`, is
+  consumed and answered** once its WebAuthn assertion has been judged against
+  the pinned set, in the order of §8 *What the desktop verifies*. A
+  `gate_decision` with `gates` off is refused `scope_off` before its
+  assertion is read. The passkey kinds need no scope. These two are handled
+  one at a time, from loading the pinned set to the counter or set write
+  their assertion commits, so each is judged against the set the one before
+  left; that hold is released before a gate is decided, which can start the
+  next step.
+- **A `passkey_endorsement` is consumed and refused `unknown_kind`**, its
+  assertion unread and nothing loaded for it, so a pinned set that fails to
+  load does not defer it (§11 item 20).
+- **A request the desktop cannot judge is deferred**: not consumed, not
+  answered, logged as `deferred`. If the pins or the policy fail to load, a
+  `start_feature`'s 24-hour committed total (§7) fails to load, the pinned
+  passkeys a `gate_decision` or a `passkey_revocation` is judged against, or a
+  `gate_decision`'s step, gate and run owner, fail to load, or the id cannot
+  be recorded, nothing is answered, and the redelivery is judged afresh. Each
+  of these is loaded before the id is recorded, so a request deferred for one
+  does not spend its id. The Hub delivers it again on the next connection
+  until it expires.
 - **The id is recorded by one atomic insert** into `hub_consumed_requests`, so
   two deliveries cannot both read as fresh. Every id that insert checks also
   prunes the rows whose `expires_at` is more than ten minutes past. A pruned
@@ -845,7 +857,9 @@ which the socket hands every request frame to. What a request comes to:
   spent, so leaving it unanswered would only get a `replayed` from the
   redelivery. The error's detail, scrubbed of secrets and with the request's own
   title and description cut out, stays in the desktop's own log row. A cancel
-  or an assignment that fails in its call is answered the same way.
+  or an assignment that fails in its call is answered the same way, and so is
+  a passkey counter or trusted-set write that fails after its assertion
+  verified.
 - **`cancel_feature`** answers `unknown_feature` for a Feature the desktop does
   not hold. Otherwise it is the desktop's own cancel, sent to the runner when a
   `demeteo-runner` owns the run.
@@ -902,7 +916,7 @@ refusal reached before it is spent would be given again unchanged.
 | `cancel_feature` | `spend` | cancel a running Feature. A `spend` request because it is run control, not an approval |
 | `set_step_assignment` | `spend` | re-point one step's agent, model or effort mid-run. Exactly [decision 54](DECISIONS.md#54--mid-run-assignment-detail): tier 1 only, refused in `running` and `verifying`, refused for a kind that spawns no agent, refused for a harness the build has not registered |
 | `gate_decision` | `gates` | decide a pending Gate. Carries a WebAuthn assertion; §8 |
-| `passkey_endorsement` | none — authority is an assertion | add a passkey to the pinned set; §8 |
+| `passkey_endorsement` | none — authority is an assertion | add a passkey to the pinned set; §8. Refused `unknown_kind` by the desktop, assertion unread (§11 item 20) |
 | `passkey_revocation` | none — authority is an assertion | remove a passkey from the pinned set; §8 |
 
 `cancel_feature`'s scope was this document's assignment, not an interview answer;
@@ -1093,15 +1107,18 @@ and `expires_at` have to exist before the human signs.
    request id, `expires_at`, the pre-image as `gate_challenge`, and WebAuthn
    options whose challenge is its SHA-256, allowing the tenant's trusted
    passkeys.
-2. **Decision.** The body carries the ceremony id, the request id, the
-   assertion and an optional `feedback`. The Hub takes the held challenge,
-   refuses a different request id, checks the assertion's shape, refuses a
-   request already past `expires_at`, and queues a `gate_decision` whose
-   `instance_id`, `request_id`, `expires_at`, `feature_id`,
-   `step_execution_id` and `decision` are **the held challenge's, never the
-   body's**. `feedback` is passed through; the challenge does not bind it
-   (§11 item 1). A challenge taken and refused is spent, so a retry starts
-   from step 1.
+2. **Decision.** The body carries the ceremony id, the request id and the
+   assertion only. A body that names `feedback` is refused `invalid_request`
+   before the held challenge is taken, so that challenge is not spent. The Hub
+   takes the held challenge, refuses a different request id, checks the
+   assertion's shape, refuses a request already past `expires_at`, and queues
+   a `gate_decision` whose `instance_id`, `request_id`, `expires_at`,
+   `feature_id`, `step_execution_id` and `decision` are **the held
+   challenge's, never the body's**, and which carries no `feedback`. The
+   protocol keeps that field, but the challenge does not bind it (§11 item 1)
+   and the desktop discards it (§8), so the Hub collects none rather than let
+   its sender believe it arrived. A challenge taken and refused is spent, so a
+   retry starts from step 1.
 
 **The Hub's assertion check is structural only.** Every field is unpadded
 base64url, the authenticator data is long enough to hold its counter, and the
@@ -1302,19 +1319,70 @@ hashing dependency: change the bytes and recompute it here.
 Before a `gate_decision` has any effect, in this order, after the envelope checks
 of §6.1:
 
-1. the Gate is **pending** on that `feature_id` and `step_execution_id`;
-2. the assertion's `credential id` is in the **pinned set**;
-3. `clientDataJSON.type` is `webauthn.get`, its `challenge` equals the challenge
-   the instance **recomputes from the envelope**, and its `origin` is
-   `https://` followed by the pinned RP ID;
-4. `authenticatorData` carries the SHA-256 of the pinned RP ID, with the
-   user-present and user-verified flags both set;
-5. the signature verifies under the pinned public key over
-   `authenticatorData ‖ SHA-256(clientDataJSON)`.
+1. the step execution exists and belongs to the request's `feature_id`, else
+   `unknown_step`;
+2. its run is not a run a `demeteo-runner` owns, else `runner_owned`. The
+   desktop only mirrors such a run and holds no gate row for it, so this comes
+   before the pending check, which would answer `gate_not_pending` for a gate
+   that is pending on the runner, and before the assertion, so no counter is
+   spent (§10);
+3. its Gate is **pending**: a gate row exists for the step and the step has not
+   completed, failed or been cancelled — the rule the desktop's own
+   `gate_decide` applies — else `gate_not_pending`;
+4. the assertion verifies, by the checks below, over the challenge the instance
+   **recomputes from the envelope** and its own pinned `instance_id`. A
+   credential outside the pinned set is `credential_not_pinned`, and every
+   other failure `assertion_invalid`;
+5. the passkey's stored counter moves to the one the assertion reported, by a
+   compare-and-set. A key revoked or used meanwhile is `credential_not_pinned`;
+6. the desktop's own `gate_decide` is called with `approve` or `cancel` and no
+   feedback, because the assertion does not bind the request's `feedback` and
+   the gate keeps feedback as the human's own words, for project memory and the
+   next agent step's prompt. One it refuses is `gate_not_pending`.
+
+An assertion verifies only if each of these holds, checked in this order:
+
+1. each field is strict unpadded base64url within a bound checked before it is
+   decoded: a credential id of at most 1023 bytes, `authenticatorData` of 37 to
+   1024, `clientDataJSON` of at most 4096 and a signature of at most 128;
+2. the credential id is in the **pinned set**;
+3. its pinned public key is a canonical ES256 or Ed25519 `COSE_Key`;
+4. the signature verifies under that key over
+   `authenticatorData ‖ SHA-256(clientDataJSON)`. It is checked before
+   `clientDataJSON` is parsed, so nothing the key did not sign reaches the
+   parser;
+5. `clientDataJSON.type` is `webauthn.get`;
+6. its `challenge` decodes to the 32 bytes of the recomputed challenge;
+7. its `origin` equals the **pinned `hub_origin`**, byte for byte. It is not
+   `https://` followed by the RP ID: the two differ when the RP ID is a parent
+   domain of the Hub's host, and for a development origin such as
+   `http://localhost:PORT`. The Hub compares against its configured
+   `public_origin`, and pairing pins that origin: every `htu` the Hub accepted
+   was derived from it (§4);
+8. `authenticatorData` carries the SHA-256 of the pinned RP ID;
+9. the user-present flag is set;
+10. the user-verified flag is set;
+11. **the counter advances**, the rule of WebAuthn Level 2 §7.2 step 21: a
+    stored and a reported count of 0 is accepted, because synced passkeys
+    commonly report zero; otherwise the reported count must be strictly greater
+    than the stored one. An equal non-zero count is refused as a possible clone.
+    The reported count is stored once the assertion is accepted, before a gate is
+    decided, and in the same transaction as an endorsement's or a revocation's
+    write.
 
 The instance recomputes the challenge instead of reading one from the Hub, so the
-Hub cannot present an assertion for one decision as an assertion for another. It
-does not rely on a signature counter: synced passkeys commonly report zero.
+Hub cannot present an assertion for one decision as an assertion for another. The
+Hub refuses nothing over a counter: its sign-in logs one that did not advance as a
+warning and lets the sign-in through
+([`auth/handlers/sign_in.rs`](../crates/demeteo-hub/src/auth/handlers/sign_in.rs)),
+and its own chain of endorsements and revocations compares none. The desktop,
+which is the authority for a gate, keeps one per pinned key and refuses by the
+rule above.
+
+Signatures are verified with `aws-lc-rs`, already a dependency of
+`demeteo-core` and the library the Hub's verifier uses, so both ends accept the
+same signatures. `ring` was proposed and is not a direct dependency: adding it is an
+[AGENTS.md §6](../AGENTS.md) Gate item, and it was asked and not answered.
 
 `decision` is `approve` or `cancel`. `redirect` carries free-text feedback that none
 of the six fields binds, so a relaying Hub could rewrite what the human wrote; until
@@ -1325,20 +1393,57 @@ that is settled (§11) an instance refuses a `gate_decision` that is not `approv
 ### The pinned set
 
 The set **starts from the passkeys returned at pairing** (§4). It changes only by
-two request kinds, and neither is authorised by the Hub:
+two request kinds, and neither is authorised by the Hub. The desktop applies only
+the second today:
 
-- **`passkey_endorsement`** adds one. It carries the new credential's id and public
-  key and an assertion, **by an already-trusted passkey, over the new credential's
-  id and public key** (challenge prefix `demeteo-hub/v1/endorse`). The new key is
-  trusted when the instance verifies that assertion, not before.
+- **`passkey_endorsement`** would add one. The desktop consumes and refuses every
+  one as `unknown_kind` without reading its assertion (§11 item 20). The rule it
+  is designed to, that of
+  [decision 65](DECISIONS.md#65--hub-gate-decisions-detail), is this: it carries
+  the new credential's id and public key and an assertion, **by an
+  already-trusted passkey, over the new credential's id and public key**
+  (challenge prefix `demeteo-hub/v1/endorse`). The new key is
+  trusted when the instance verifies that assertion, not before. The new key
+  must be a canonical `COSE_Key`, its id must not be pinned already — an
+  endorsement never replaces a key — and the signer must be **a different key**
+  from the one endorsed, so a key cannot vouch for itself. The new key is stored
+  exactly as the request carried it, because the challenge commits to that
+  string. `endorsement_verdict` and the store's `endorse` implement this, and no
+  request reaches them.
 - **`passkey_revocation`** removes one. It carries an assertion **by another trusted
   passkey** over the credential to remove (prefix `demeteo-hub/v1/revoke`). A key
   cannot revoke itself, and **the last trusted key cannot be revoked**, so no
-  request can leave the instance with nothing it trusts.
+  request can leave the instance with nothing it trusts. The target is checked
+  to be pinned and not the last before the signer is looked up. What keeps two
+  revocations racing each other from emptying the set is the signer: the store
+  deletes the target in the transaction that advances the signer's counter by
+  compare-and-set, and only while the signer's own row still exists
+  (`EXISTS(signer)`), so every deletion leaves its signer behind however they
+  interleave. The store's refusal to delete the last row (`COUNT(*) > 1`) is
+  defence in depth against a self-revocation reaching the store, the only write
+  it can catch, which `revocation_verdict` refuses first as `self_revocation`.
 
 Both assertions bind `instance_id`, `request_id` and `expires_at` the way a gate's
 does; the exact field lists are those of `endorsement_challenge` and
-`revocation_challenge` in `canonical.rs`, and remain defaults (§11).
+`revocation_challenge` in `canonical.rs`, and remain defaults (§11). The
+instance verifies a revocation by the checks of *What the desktop verifies* over a
+challenge it recomputes with **its own pinned `instance_id`**, so it accepts an
+instance-bound assertion only, never a `"*"`-bound one. A failed check is
+answered as a gate's is; a target that is not pinned is `credential_not_pinned`,
+and the two revocation rules `self_revocation` and `last_credential`.
+`endorsement_verdict` judges an endorsement the same way, with a signer equal to
+the key endorsed `credential_not_pinned` and an id already pinned or a key that
+is not canonical `malformed_body`, once a request reaches it.
+
+**An endorsement binds what the ceremony signed, not what the user meant to
+sign**, which is why the desktop refuses every one (§11 item 20). The Hub serves
+the hub-web bundle that runs every passkey ceremony (§2), so a compromised Hub
+can feed an `endorsement_challenge` for a key it holds to a ceremony the user
+takes for a sign-in, and the authenticator shows the user only the RP. The same
+substitution can still revoke one of the user's other keys. An applied
+revocation's activity-log row, whose reason names the revoked id and its signer,
+is the desktop's only record of it, and no view shows that log or the trusted
+set yet (§2).
 
 **The Hub keeps the same chain for itself.** After a tenant's first passkey, which
 passkeys may sign in to the Hub changes only by these two assertions, and the Hub
@@ -1371,6 +1476,10 @@ assertion, or none can be trusted.
 > attacker who controls the Hub *at pairing* can hand over their own passkey keys.
 > The consent screen showing the device-key fingerprint on both ends is what the
 > user has to catch it with. After pairing the set changes only by a signed chain.
+> **Pairing again starts the set over**: it is replaced by the passkeys the new
+> pairing returns, so keys endorsed since, and every stored counter, are reset.
+> That is trust-on-first-pair applied again, not a loss to repair by merging the
+> two sets.
 
 ---
 
@@ -1485,10 +1594,10 @@ process.
 | `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, `access.rs` is the admission of a DPoP-bound access token that the socket and the attachment fetch share, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
 | `crates/demeteo-core/src/domain/hub_socket/` | the desktop socket's policy — **built**, and synchronous: `src-tauri/tests/hub_layout.rs` fails on an `async fn` anywhere in it. `projection.rs` is the allowlist a `run_events` row passes to become a protocol `RunEvent`, `mod.rs` the `Hello` and whether events are sent at all, and `verdict.rs` what follows a connection's or a refresh's end, the backoff, and the numbers the session runs on |
-| `crates/demeteo-core/src/ports/hub.rs` | the ports pairing, the socket and the requests reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`, `HubRequestRepository`, and the policy's `HubPolicyReader` and `HubPolicyWriter`, kept apart so the handler can be given the first alone), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`), the attachment fetch (`HubAttachmentFetcher`), the request handler the socket hands frames to (`HubRequestHandler`) and a browser — **built**. Only the keyring port carries a secret |
+| `crates/demeteo-core/src/ports/hub.rs` | the ports pairing, the socket and the requests reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`, `HubRequestRepository`, and the policy's `HubPolicyReader` and `HubPolicyWriter`, kept apart so the handler can be given the first alone), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`), the attachment fetch (`HubAttachmentFetcher`), the trusted passkey set and its counters (`HubPasskeyTrust`, over the `sign_count` column migration `V66__hub_passkey_sign_count.sql` adds, with its SQL beside the pins' in `adapters/database/repos/hub.rs`), the request handler the socket hands frames to (`HubRequestHandler`) and a browser — **built**. Only the keyring port carries a secret |
 | `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps and owns the refresh lock and the socket's lifetime; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters, and `attachments.rs` fetches an attachment once and checks its size and SHA-256 (§6.3). It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
-| `crates/demeteo-core/src/domain/hub_request/` | the desktop's request policy (§6.1, §7) — **built**, and synchronous. `mod.rs` is the scopes in force, `precheck` (signature, scope, instance, expiry) and `decide` (replay, then spend), split around the consumption of the id; `ceiling.rs` the two ceilings, `verify.rs` the Ed25519 check against the pinned key, and `log.rs` the activity-log row |
-| `crates/demeteo-core/src/application/hub_requests.rs` | the request handler — **built**. It parses, loads the pins, the policy and the committed total, records the id, and acts through the desktop's own launch, cancel and assignment calls. `composition/mod.rs` binds it to `HubPairing`. The SQL is `adapters/database/repos/hub_requests.rs` |
+| `crates/demeteo-core/src/domain/hub_request/` | the desktop's request policy (§6.1, §7) — **built**, and synchronous. `mod.rs` is the scopes in force, `precheck` (signature, scope, instance, expiry) and `decide` (replay, then spend), split around the consumption of the id; `ceiling.rs` the two ceilings, `verify.rs` the Ed25519 check against the pinned key, `log.rs` the activity-log row, and three for §8: `cose.rs` the parse of a canonical `COSE_Key`, `assertion.rs` the WebAuthn assertion check and the counter rule, and `passkeys.rs` the three challenge digests and the gate, endorsement and revocation verdicts |
+| `crates/demeteo-core/src/application/hub_requests.rs` | the request handler — **built**. It parses, loads the pins, the policy, the committed total and the trusted passkeys, records the id, and acts through the desktop's own launch, cancel, assignment and `gate_decide` calls. `hub_requests/start.rs` holds a start once its id is spent, and `hub_requests/trust.rs` the I/O of the three kinds a passkey signs: loading the set and a gate's step, the counter or set write, and the gate decision. `composition/mod.rs` binds it to `HubPairing`. The SQL is `adapters/database/repos/hub_requests.rs` |
 | `crates/demeteo-core/src/adapters/hub/socket/` | the desktop socket's I/O — **built**. `mod.rs` is the supervisor (refresh, proof, dial, session, verdict, backoff), `session.rs` one connection from its `Hello` to its end, `wake.rs` the `RunEventsPort` decorator that wakes a session on every append, and `ws_transport.rs` the `HubSocketDialer` over `tokio-tungstenite` and rustls, the only file that names the WebSocket crate. `ws_transport.rs` exists only with `demeteo-core`'s default `hub-socket` feature, which `demeteo-runner` builds without |
 | `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds the `GET /socket` upgrade and its admission (`admitted`, which names the socket's URL to `pairing/access.rs`), `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
 | `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs`, `request_status.rs` and `attachments.rs`, the upload. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
@@ -1521,15 +1630,30 @@ WebAuthn verifier). Each one is a **Gate item** in
 half, the approval page and the desktop's device key, loopback listener,
 `/authorize` request, token redemption and refresh, fingerprint and socket client
 are built, and so are the desktop's request verification and local ceilings
-(§6.1, §7). Three things are not:
+(§6.1, §7) and its verification of gate decisions and passkey changes against
+the pinned set (§8). Four things are not:
 
-- **What the desktop's socket does not send.** It answers no `gate_decision`
-  and neither passkey kind, because nothing on the desktop verifies a WebAuthn
-  assertion against the pinned set yet (§8), so it defers them (§6.1 *On the
-  desktop*); it sends no `ticket_*` event, because no desktop `run_events` row
-  records a ticket's lifecycle, so the Hub's ticket counts read zero; and it
-  relays local runs only (§5 *Events and the cursor*). §11 *The desktop socket's carried
-  defaults* has what it does instead.
+- **What the desktop's socket does not send.** It sends no `ticket_*` event,
+  because no desktop `run_events` row records a ticket's lifecycle, so the
+  Hub's ticket counts read zero; and it relays local runs only (§5 *Events and
+  the cursor*). §11 *The desktop socket's carried defaults* has what it does
+  instead.
+- **Two gaps in Hub gate decisions and passkey changes**, each recorded so it
+  is not mistaken for a decision:
+  - *A gate of a run a `demeteo-runner` owns.* The desktop's `gate_decide`
+    refuses a run it mirrors from a runner, which also has no local gate row,
+    so a Hub `gate_decision` for one is answered `runner_owned` before its
+    assertion is checked (§8). The desktop's own view decides those gates
+    through `remote_decide_gate` instead; a Hub cancel already goes to whoever
+    owns the run, found by the same remote-run mirror lookup. Closing it needs
+    a pending check against the runner, and the conformance suites of
+    [AGENTS.md §7](../AGENTS.md) to prove the two paths alike.
+  - *No Hub producer for the passkey kinds.* The desktop verifies and applies
+    a `passkey_revocation` bound to its own id (§8), and consumes and refuses
+    every `passkey_endorsement` as `unknown_kind` without reading its assertion
+    (§11 item 20). No Hub route queues either for an instance, and the Hub's
+    own records bind `"*"` (§11 item 9). Until one does, only tests reach the
+    revocation path.
 - **A Settings › Hub tab.** The commands and their wrappers exist, and no view
   renders them, so the fingerprint is not on screen yet, and no view sets the
   toggles and ceilings (§7): every request that needs `spend` or `gates` is
@@ -1619,6 +1743,18 @@ what a desktop client implements.
    is written, a `Hello` included (§5). There is no negotiation and no range
    of versions. What an instance does about a frame of another version from
    the Hub is still open.
+   **A new variant an instance sends is a wire change**, a new `RefusalReason`
+   included, though `v` stays the same. `RefusalReason` has no
+   `#[serde(other)]`, so a Hub built before the variant cannot parse a result
+   that carries it. Its session ends on the frame error and closes the socket
+   with `1008`. The desktop reads `1008` as `StopReason::ProtocolViolation` and
+   stops reconnecting until an app restart or a re-pair. After that, the
+   redelivered request is answered `replayed`, because its id is already spent,
+   so the Hub never learns the real reason. **Until a version gate exists, the
+   Hub ships first:** upgrade it before any desktop that can send the new
+   value. `runner_owned` is the first reason added since v1. An honest Hub
+   never draws it, because the socket relays local runs only (§5), so no Hub
+   view offers a gate on a run a `demeteo-runner` owns.
 9. **Defaults carried, not measured:** ES256 for the device key, EdDSA for the
    envelope, 128 bits for a request id, the field lists of the two passkey
    challenges, and an upper bound on `expires_at` an instance will accept.
@@ -1629,7 +1765,11 @@ what a desktop client implements.
    assertions bind `instance_id = "*"`, a fresh `request_id` and a 300-second
    `expires_at`, all stored with the record (§8). How an instance accepts such
    a record — relayed as it stands, or replaced by a fresh assertion bound to
-   that instance — is not decided.
+   that instance — is not decided. **Default built, the desktop's half only:**
+   an instance recomputes every passkey challenge with its own id, so it
+   accepts a fresh instance-bound revocation and refuses a record relayed as
+   it stands, whose challenge is another. It refuses every endorsement,
+   however bound (item 20). No Hub route sends either yet (§10).
 10. *Decided by the desktop pairing build, kept so the numbering holds.* The
     desktop-side client sits in `demeteo-core`: its decisions in
     `domain/hub_pairing/`, its ports in `ports/hub.rs`, its I/O in
@@ -1719,6 +1859,31 @@ what a desktop client implements.
     **Default built:** kept, so the stored signature still verifies. Redacting
     it once the request is answered or expired, deleting old request rows, or
     signing something other than the content digest are each open.
+20. **A key endorsed through a substituted ceremony.** A compromised Hub can
+    spend one ceremony the user takes for something else, a sign-in included,
+    on an assertion by a trusted key A over an `endorsement_challenge` for a key
+    X it holds. Every check of §8 passes, so a desktop that applied it would
+    trust X with no prompt, and X could decide every later gate. X could also
+    revoke the user's keys down to {X}: a revocation by X of A is accepted while
+    {A, X} are trusted, after which the last-key guard protects X, the user's
+    own passkey is refused `credential_not_pinned`, and only a re-pair
+    recovers. The activity-log row would be the desktop's only record, and no
+    view shows it (§2).
+    **Default built: refused.** The desktop consumes every
+    `passkey_endorsement` and answers it `unknown_kind` without reading its
+    assertion or loading the pinned set. `unknown_kind` already means *this
+    build does not act on this kind*, and a new `RefusalReason` would close an
+    older Hub's socket (item 8). Nothing legitimate is lost: no Hub route
+    queues one for an instance (§10). It stays refused until both exist: a Hub
+    producer of instance-bound endorsements (item 9), and a desktop-side
+    confirmation of each endorsement before its key is trusted, or a view of
+    the trusted set in Settings › Hub (§2). The confirmation reopens part of
+    what §8 rejects, accepting each new passkey by hand on every desktop.
+    Accepting the risk in writing instead is the other way to lift it, and no
+    one has.
+    **What remains:** a substituted ceremony can still spend that one ceremony
+    on one gate decision the user did not mean, or on revoking one of the
+    user's other pinned keys — never the last, and never adding one.
 
 ### Pairing's carried defaults
 
@@ -1764,17 +1929,37 @@ question — the `4001` close and the version gate — are items 6 and 8 above.
 
 ### The desktop socket's carried defaults
 
-The desktop's client (§9 *Code layout*) was built ahead of a WebAuthn
-verifier and any Settings view, and its snapshots ahead of item 11, so it
-carries an answer for each gap. None is decided; each is what the desktop does today.
+The desktop's client (§9 *Code layout*) was built ahead of any Settings view,
+and its snapshots ahead of item 11, so it carries an answer for each gap. None
+is decided; each is what the desktop does today.
 
 - **A deferred request is left unanswered and the socket stays open.** A
-  `gate_decision` with `gates` on and either passkey kind get no
-  `RequestResult` and their ids are not spent (§6.1 *On the desktop*). The Hub
+  request the desktop cannot judge for a storage failure gets no
+  `RequestResult` and its id is not spent (§6.1 *On the desktop*). The Hub
   keeps the first outcome it records (§5 *Queued requests*), so a `refused`
-  sent now would still stand once a verifier exists; unanswered, the request is
+  sent for a passing failure would stand for good; unanswered, the request is
   delivered again on the next connection until it expires. A session with no
   handler bound leaves every request unanswered the same way.
+- **An equal non-zero signature counter is refused** as a possible clone, by
+  the counter rule of §8 *What the desktop verifies*. Accepting a count that
+  merely does not go backwards would let it through; which of the two a gate
+  needs was not decided.
+- **A key's earlier decision can be refused for a later one.** Each request
+  is handled on a task of its own, so two the Hub delivers in queue order can
+  take the hold of §6.1 *On the desktop* in either order, and the counter is
+  compared with whichever count was stored last. A key that keeps a count,
+  such as a hardware security key or Windows Hello, approves gate G1 at 10 and
+  G2 at 11 while the desktop is offline: if G2 takes the hold first it is
+  accepted, and G1 is refused `assertion_invalid` with its id spent. A
+  decision deferred for a storage failure is refused the same way when its
+  redelivery arrives after a later one from that key was accepted. Synced
+  passkeys, which report 0 every time, are unaffected. The recourse is to
+  decide that gate again, a new ceremony with a new count. Handling the kinds a
+  passkey signs in delivery order was not built: a deferred request comes back
+  only on a later connection, by when one queued behind it may have been
+  accepted, so order cannot reach that case; and the session reads no further
+  into a frame than its `request_id`, so ordering there would change how it
+  runs every kind.
 - **The policy, the activity log and the consumed ids outlive the pairing.**
   `hub_disconnect` clears the pins and the keyring entries and nothing else
   (§7 *Local ceilings*).

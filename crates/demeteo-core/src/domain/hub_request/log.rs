@@ -3,7 +3,8 @@
 //!
 //! There is deliberately no field for a description, a title, an attachment
 //! or anything secret: the log says what was asked and what was answered,
-//! never what the request carried.
+//! never what the request carried, save the credential ids of a change to the
+//! trusted set ([`trust_change_note`]).
 
 use demeteo_hub_protocol::{RequestPayload, Scope};
 use serde::Serialize;
@@ -147,6 +148,38 @@ pub fn launch_failure_reason(detail: &str, withheld: &[&str]) -> String {
     format!("malformed_body: {detail}")
 }
 
+/// A change to the trusted passkey set that was written, by credential id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustChange<'a> {
+    Endorsed {
+        credential_id: &'a str,
+        signer: &'a str,
+    },
+    Revoked {
+        credential_id: &'a str,
+        signer: &'a str,
+    },
+}
+
+/// The `reason` of an accepted `passkey_endorsement` or `passkey_revocation`:
+/// the key the set gained or lost, and the trusted key that signed for it.
+/// A change is applied with no prompt, so this row is the desktop's only
+/// record of it; no endorsement is accepted today (docs/HUB.md §11 item 20).
+/// A credential id is a public identifier; the public key and the assertion
+/// are never part of the note.
+pub fn trust_change_note(change: TrustChange<'_>) -> String {
+    match change {
+        TrustChange::Endorsed {
+            credential_id,
+            signer,
+        } => format!("endorsed {credential_id}, signed by {signer}"),
+        TrustChange::Revoked {
+            credential_id,
+            signer,
+        } => format!("revoked {credential_id}, signed by {signer}"),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HubRequestLogEntry {
     pub request_id: String,
@@ -156,7 +189,8 @@ pub struct HubRequestLogEntry {
     pub scope: Option<Scope>,
     pub outcome: LogOutcome,
     /// A `RefusalReason` in its snake_case spelling, `signature` for a drop,
-    /// a note on a field that was ignored, or [`launch_failure_reason`].
+    /// a note on a field that was ignored, [`launch_failure_reason`], or
+    /// [`trust_change_note`].
     pub reason: Option<String>,
     pub feature_id: Option<String>,
     pub received_at_ms: i64,

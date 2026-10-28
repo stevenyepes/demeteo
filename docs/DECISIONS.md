@@ -445,7 +445,11 @@ not carry a token that approves. It relays a **WebAuthn assertion** — a signat
 made on the user's authenticator, per decision — and the **desktop verifies it
 itself** against passkey public keys it pinned. The Hub cannot mint an assertion
 and cannot widen what one covers, so a compromised Hub can withhold or replay a
-decision but cannot make one. What decision 50 protects, a human at the
+decision but cannot make one. That holds per ceremony: the Hub serves the page
+that runs the ceremony, and can spend one on a decision the user did not mean
+([HUB.md §3](HUB.md#what-a-compromised-hub-can-and-cannot-do)). The desktop
+refuses every endorsement, so a substituted ceremony cannot get a key the Hub
+holds trusted ([HUB.md §11 item 20](HUB.md#11-what-is-not-decided)). What decision 50 protects, a human at the
 checkpoint, is what the assertion proves. It is a separate surface, not a
 reopening: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently).
 

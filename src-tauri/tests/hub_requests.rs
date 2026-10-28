@@ -263,6 +263,8 @@ mod decision {
         Start,
         Cancel,
         Assign,
+        Gate,
+        Revoke,
         Refuse(RefusalReason),
         Drop(DropReason),
         Defer,
@@ -273,6 +275,8 @@ mod decision {
             Verdict::Execute(ExecuteKind::StartFeature(_)) => Kind::Start,
             Verdict::Execute(ExecuteKind::CancelFeature(_)) => Kind::Cancel,
             Verdict::Execute(ExecuteKind::SetStepAssignment(_)) => Kind::Assign,
+            Verdict::Execute(ExecuteKind::GateDecision(_)) => Kind::Gate,
+            Verdict::Execute(ExecuteKind::PasskeyRevocation(_)) => Kind::Revoke,
             Verdict::Refuse(reason) => Kind::Refuse(reason),
             Verdict::Drop(reason) => Kind::Drop(reason),
             Verdict::Defer => Kind::Defer,
@@ -477,7 +481,7 @@ mod decision {
                 Kind::Assign,
             ),
             // Gates and passkeys.
-            row("gate decision, gates on", gate(), Kind::Defer),
+            row("gate decision, gates on", gate(), Kind::Gate),
             Row {
                 policy: policy(true, false, Some(500), Some(2_000)),
                 ..row("gate decision, gates off", gate(), refuse(ScopeOff))
@@ -500,7 +504,7 @@ mod decision {
                         new_public_key: "k2".into(),
                         assertion: assertion(),
                     }),
-                    Kind::Defer,
+                    refuse(UnknownKind),
                 )
             },
             Row {
@@ -512,7 +516,7 @@ mod decision {
                         credential_id: "c".into(),
                         assertion: assertion(),
                     }),
-                    Kind::Defer,
+                    Kind::Revoke,
                 )
             },
         ];
@@ -786,10 +790,14 @@ mod signature {
 /// over a real database file that is reopened where persistence is the point.
 mod repository {
     use demeteo_core::adapters::database::SqliteAdapter;
+    use demeteo_core::domain::hub_pairing::{HubPins, PinnedPasskey};
+    use demeteo_core::domain::hub_request::passkeys::{TrustWrite, TrustedPasskey};
     use demeteo_core::domain::hub_request::{
         Consumption, HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome,
     };
-    use demeteo_core::ports::hub::{HubPolicyReader, HubPolicyWriter, HubRequestRepository};
+    use demeteo_core::ports::hub::{
+        HubPasskeyTrust, HubPinRepository, HubPolicyReader, HubPolicyWriter, HubRequestRepository,
+    };
     use demeteo_hub::protocol::Scope;
 
     const NOW: u64 = 1_800_000_000;
@@ -959,6 +967,326 @@ mod repository {
         assert_eq!(store.list_log(2).expect("list"), newest_first[..2]);
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    /// Pinned before `B` and sorting after it, so pairing order is not
+    /// mistaken for the primary key's.
+    const A: &str = "yubikey";
+    const B: &str = "laptop";
+
+    fn pins_of(credential_ids: &[&str]) -> HubPins {
+        HubPins {
+            hub_origin: "https://hub.example".into(),
+            instance_id: "i-1".into(),
+            request_signing_key: "signing-key".into(),
+            rp_id: "hub.example".into(),
+            scopes: vec!["gates".into()],
+            device_jkt: "jkt".into(),
+            paired_at: 0,
+            passkeys: credential_ids
+                .iter()
+                .map(|id| PinnedPasskey {
+                    credential_id: (*id).into(),
+                    public_key: format!("cose-{id}"),
+                })
+                .collect(),
+        }
+    }
+
+    fn counts(store: &SqliteAdapter) -> Vec<(String, u32)> {
+        store
+            .trusted()
+            .expect("trusted")
+            .into_iter()
+            .map(|passkey| (passkey.credential_id, passkey.sign_count))
+            .collect()
+    }
+
+    #[test]
+    fn trusted_lists_the_pins_in_pairing_order_at_count_zero() {
+        let dir = scratch("trusted");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A, B])).expect("save");
+
+        assert_eq!(
+            store.trusted().expect("trusted"),
+            [A, B].map(|id| TrustedPasskey {
+                credential_id: id.into(),
+                public_key: format!("cose-{id}"),
+                sign_count: 0,
+            })
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn advance_count_writes_only_over_the_count_it_expects() {
+        let dir = scratch("advance");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A, B])).expect("save");
+
+        assert!(store.advance_count(A, 0, 7).expect("advance"));
+        assert_eq!(counts(&store), [(A.into(), 7), (B.into(), 0)]);
+
+        assert!(!store.advance_count(A, 0, 9).expect("stale advance"));
+        assert!(!store.advance_count("unknown", 0, 1).expect("unknown"));
+        assert_eq!(counts(&open(&dir)), [(A.into(), 7), (B.into(), 0)]);
+
+        // A synced passkey reports 0 every time: writing the count it already
+        // holds is still a match, not a missing row.
+        assert!(store.advance_count(B, 0, 0).expect("synced advance"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn re_pairing_starts_every_count_over() {
+        let dir = scratch("re-pair");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A, B])).expect("save");
+        assert!(store.advance_count(A, 0, 7).expect("advance"));
+
+        HubPinRepository::save(&store, &pins_of(&[A, B])).expect("re-save");
+
+        assert_eq!(counts(&store), [(A.into(), 0), (B.into(), 0)]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_stored_count_outside_u32_fails_to_read_rather_than_clamping() {
+        for stored in [-1, i64::from(u32::MAX) + 1] {
+            let dir = scratch("out-of-range");
+            let store = open(&dir);
+            HubPinRepository::save(&store, &pins_of(&[A])).expect("save");
+            rusqlite::Connection::open(dir.join("demeteo.db"))
+                .expect("a second connection")
+                .execute("UPDATE hub_pinned_passkeys SET sign_count = ?1", [stored])
+                .expect("write a corrupt count");
+
+            assert!(store.trusted().is_err(), "{stored} must not read");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    const C: &str = "phone";
+    const C_KEY: &str = "pQECAyYgASFYIPx-_3kQ0aZ9";
+
+    /// AC3, with `revocation_verdict` bypassed. The racing revocation pins the
+    /// signer's compare-and-set: its signer is already gone, so it stops
+    /// before the delete. The self-revocation on the shrunk set pins the
+    /// store's own last-key guard. It is the only write that can reach that
+    /// guard, since a distinct signer and target are two rows, and the domain
+    /// refuses it as `self_revocation`. The reopened store still at count 1
+    /// shows the signer's counter write rolled back with the refused delete.
+    #[test]
+    fn revoke_never_deletes_the_last_key_even_unchecked() {
+        let dir = scratch("revoke-guard");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A, B])).expect("save");
+
+        assert_eq!(
+            store.revoke(A, 0, 1, B).expect("revoke"),
+            TrustWrite::Applied
+        );
+        assert_eq!(counts(&store), [(A.into(), 1)]);
+
+        assert_eq!(
+            store.revoke(B, 0, 1, A).expect("racing revoke"),
+            TrustWrite::SignerChanged
+        );
+        assert_eq!(
+            store.revoke(A, 1, 2, A).expect("self revoke"),
+            TrustWrite::LastCredential
+        );
+        assert_eq!(counts(&open(&dir)), [(A.into(), 1)]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn revoking_the_only_key_is_last_credential_and_writes_nothing() {
+        let dir = scratch("revoke-last");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A])).expect("save");
+
+        assert_eq!(
+            store.revoke(A, 0, 1, A).expect("revoke"),
+            TrustWrite::LastCredential
+        );
+        assert_eq!(counts(&store), [(A.into(), 0)]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn revoking_an_unknown_target_is_target_gone_and_keeps_the_count() {
+        let dir = scratch("revoke-gone");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A, B])).expect("save");
+
+        assert_eq!(
+            store.revoke(A, 0, 1, "unknown").expect("revoke"),
+            TrustWrite::TargetGone
+        );
+        assert_eq!(counts(&store), [(A.into(), 0), (B.into(), 0)]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn endorse_appends_the_key_exactly_as_given() {
+        let dir = scratch("endorse");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A])).expect("save");
+
+        assert_eq!(
+            store.endorse(A, 0, 4, C, C_KEY, 1).expect("endorse"),
+            TrustWrite::Applied
+        );
+        assert_eq!(
+            open(&dir).trusted().expect("trusted"),
+            [
+                TrustedPasskey {
+                    credential_id: A.into(),
+                    public_key: format!("cose-{A}"),
+                    sign_count: 4,
+                },
+                TrustedPasskey {
+                    credential_id: C.into(),
+                    public_key: C_KEY.into(),
+                    sign_count: 0,
+                },
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn endorsing_a_pinned_id_is_already_pinned_and_replaces_nothing() {
+        let dir = scratch("endorse-pinned");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A])).expect("save");
+        let before = store.trusted().expect("trusted");
+
+        assert_eq!(
+            store.endorse(A, 0, 4, A, C_KEY, 1).expect("endorse"),
+            TrustWrite::AlreadyPinned
+        );
+        assert_eq!(store.trusted().expect("trusted"), before);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn endorsing_over_a_stale_count_is_signer_changed_and_adds_no_row() {
+        let dir = scratch("endorse-stale");
+        let store = open(&dir);
+        HubPinRepository::save(&store, &pins_of(&[A])).expect("save");
+        assert!(store.advance_count(A, 0, 3).expect("advance"));
+
+        assert_eq!(
+            store.endorse(A, 0, 4, C, C_KEY, 1).expect("endorse"),
+            TrustWrite::SignerChanged
+        );
+        assert_eq!(counts(&store), [(A.into(), 3)]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The strict presenter AC4 and AC5 swap into `ctx.presenter`: it accepts the
+/// one call it was scripted with, once, and refuses the rest.
+mod gate_presenter_double {
+    use demeteo_core::adapters::hub::testing::ScriptedGatePresenter;
+    use demeteo_core::error::AppError;
+    use demeteo_core::ports::step_executor::GatePresenter;
+
+    const STEP: &str = "se-gate";
+
+    fn scripted() -> ScriptedGatePresenter {
+        ScriptedGatePresenter::expecting(STEP, "approve", Some("ship it"))
+    }
+
+    fn the_scripted_call() -> (String, String, Option<String>) {
+        (STEP.into(), "approve".into(), Some("ship it".into()))
+    }
+
+    #[tokio::test]
+    async fn the_scripted_call_is_accepted_and_recorded() {
+        let presenter = scripted();
+
+        presenter
+            .gate_decide(STEP, "approve", Some("ship it"))
+            .await
+            .expect("the scripted call is accepted");
+
+        assert_eq!(presenter.calls(), [the_scripted_call()]);
+        assert_eq!(presenter.unexpected(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_repeat_of_the_scripted_call_is_refused() {
+        let presenter = scripted();
+        presenter
+            .gate_decide(STEP, "approve", Some("ship it"))
+            .await
+            .expect("the scripted call is accepted");
+
+        let repeat = presenter
+            .gate_decide(STEP, "approve", Some("ship it"))
+            .await;
+
+        assert!(
+            matches!(repeat, Err(AppError::Validation { .. })),
+            "{repeat:?}"
+        );
+        assert_eq!(presenter.unexpected(), 1);
+        assert_eq!(presenter.calls(), [the_scripted_call()]);
+    }
+
+    #[tokio::test]
+    async fn a_call_with_other_arguments_is_refused() {
+        for (step, decision, feedback) in [
+            (STEP, "cancel", Some("ship it")),
+            (STEP, "approve", None),
+            (STEP, "approve", Some("ship it!")),
+            ("se-other", "approve", Some("ship it")),
+        ] {
+            let presenter = scripted();
+
+            let refused = presenter.gate_decide(step, decision, feedback).await;
+
+            assert!(
+                matches!(refused, Err(AppError::Validation { .. })),
+                "{step} {decision} {feedback:?}: {refused:?}"
+            );
+            assert_eq!(presenter.unexpected(), 1, "{step} {decision} {feedback:?}");
+            assert!(
+                presenter.calls().is_empty(),
+                "{step} {decision} {feedback:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gate_pending_for_run_is_refused() {
+        let presenter = scripted();
+
+        let pending = presenter.gate_pending_for_run("f-1").await;
+
+        assert!(pending.is_err(), "{pending:?}");
+        assert_eq!(presenter.unexpected(), 1);
+        assert!(presenter.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn refusing_all_refuses_every_gate_decision() {
+        let presenter = ScriptedGatePresenter::refusing_all();
+
+        let refused = presenter
+            .gate_decide(STEP, "approve", Some("ship it"))
+            .await;
+
+        assert!(
+            matches!(refused, Err(AppError::Validation { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(presenter.unexpected(), 1);
+        assert!(presenter.calls().is_empty());
+    }
 }
 
 /// AC2, AC3: the handler over a real context, judged by what reached an
@@ -969,7 +1297,7 @@ mod handler {
 
     use async_trait::async_trait;
     use demeteo_core::adapters::database::SqliteAdapter;
-    use demeteo_core::adapters::hub::testing::ScriptedAttachments;
+    use demeteo_core::adapters::hub::testing::{ScriptedAttachments, ScriptedGatePresenter};
     use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
     use demeteo_core::application::attachments::{
         MAX_ATTACHMENTS_PER_FEATURE, MAX_ATTACHMENT_BYTES,
@@ -979,21 +1307,24 @@ mod handler {
         build_core_context, build_core_context_with_policy_writer, CoreConfig, ExecutionMode,
     };
     use demeteo_core::domain::feature_origin::FeatureOrigin;
-    use demeteo_core::domain::hub_pairing::HubPins;
+    use demeteo_core::domain::hub_pairing::{HubPins, PinnedPasskey};
     use demeteo_core::domain::hub_request::{
         HubLocalPolicy, LogKind, LogOutcome, MAX_REQUEST_ID_LEN,
     };
-    use demeteo_core::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId, WorkflowId};
+    use demeteo_core::domain::ids::{
+        FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
+    };
     use demeteo_core::domain::models::{
-        EffortLevel, Feature, FeatureDivergence, FeatureDrift, LaunchedBy, Project, StepExecution,
-        StepOverride, Workflow,
+        EffortLevel, Feature, FeatureDivergence, FeatureDrift, GateDecision, LaunchedBy, Project,
+        StepExecution, StepOverride, Workflow,
     };
     use demeteo_core::domain::step_assignment::StepAssignment;
     use demeteo_core::domain::sync_resolver::SyncResolverChoice;
     use demeteo_core::domain::upstream_feature::DivergenceReconcile;
     use demeteo_core::error::AppError;
     use demeteo_core::ports::hub::{
-        AttachmentFetchError, HubAttachmentFetcher, HubPinRepository, HubRequestHandler,
+        AttachmentFetchError, HubAttachmentFetcher, HubPasskeyTrust, HubPinRepository,
+        HubRequestHandler,
     };
     use demeteo_core::ports::step_executor::{
         FeatureLaunch, StepExecutor, SyncOutcomeView, SyncResolverView,
@@ -1285,11 +1616,35 @@ mod handler {
             Self::open_with(dir, |scripted| scripted)
         }
 
+        /// [`Desktop::open`], deciding gates through `presenter`.
+        fn presenting(dir: &std::path::Path, presenter: Arc<ScriptedGatePresenter>) -> Self {
+            Self::build(dir, |scripted| scripted, Some(presenter), |store| store)
+        }
+
+        /// [`Desktop::presenting`], whose handler reaches the trusted set
+        /// through what `passkeys` makes of the desktop's own store.
+        fn presenting_through(
+            dir: &std::path::Path,
+            presenter: Arc<ScriptedGatePresenter>,
+            passkeys: impl FnOnce(Arc<SqliteAdapter>) -> Arc<dyn HubPasskeyTrust>,
+        ) -> Self {
+            Self::build(dir, |scripted| scripted, Some(presenter), passkeys)
+        }
+
         /// `fetcher` is handed the scripted attachments and returns what the
         /// handler fetches through.
         fn open_with(
             dir: &std::path::Path,
             fetcher: impl FnOnce(Arc<ScriptedAttachments>) -> Arc<dyn HubAttachmentFetcher>,
+        ) -> Self {
+            Self::build(dir, fetcher, None, |store| store)
+        }
+
+        fn build(
+            dir: &std::path::Path,
+            fetcher: impl FnOnce(Arc<ScriptedAttachments>) -> Arc<dyn HubAttachmentFetcher>,
+            presenter: Option<Arc<ScriptedGatePresenter>>,
+            passkeys: impl FnOnce(Arc<SqliteAdapter>) -> Arc<dyn HubPasskeyTrust>,
         ) -> Self {
             let mut ctx = build_core_context(
                 CoreConfig {
@@ -1301,6 +1656,9 @@ mod handler {
             );
             let spy = Arc::new(ExecutorSpy::default());
             ctx.executor = spy.clone();
+            if let Some(presenter) = presenter {
+                ctx.presenter = presenter;
+            }
             let ctx = Arc::new(ctx);
             let pins = demeteo_core::db::init_db(dir.to_path_buf()).expect("init temp db");
             let pins = Arc::new(SqliteAdapter::new(pins).expect("build sqlite adapter"));
@@ -1312,7 +1670,8 @@ mod handler {
                 HubRequestPorts {
                     requests: ctx.hub_requests.clone(),
                     policy: ctx.hub_policy.clone(),
-                    pins,
+                    pins: pins.clone(),
+                    passkeys: passkeys(pins),
                     attachments: fetcher(attachments.clone()),
                     now_ms: Arc::new(move || now.load(Ordering::SeqCst)),
                 },
@@ -1367,6 +1726,36 @@ mod handler {
                 self.ctx.features.step_create(row).expect("add the step");
             }
         }
+
+        /// Feature `f-1`, whose gate step `step_execution_id` awaits a
+        /// decision.
+        fn seed_pending_gate(&self, step_execution_id: &str) {
+            self.ctx
+                .features
+                .add(feature("f-1", "p-1"))
+                .expect("add the feature");
+            self.ctx
+                .features
+                .step_create(step(
+                    step_execution_id,
+                    "s-gate",
+                    "gate",
+                    "awaiting_gate",
+                    40,
+                ))
+                .expect("add the gate step");
+            self.ctx
+                .gates
+                .create(GateDecision {
+                    id: GateDecisionId::new("gd-1"),
+                    step_execution_id: StepExecutionId::new(step_execution_id),
+                    decision: None,
+                    feedback: None,
+                    created_at: 40,
+                    auto_approved: false,
+                })
+                .expect("add the undecided gate");
+        }
     }
 
     fn save_policy(dir: &std::path::Path, policy: &HubLocalPolicy) {
@@ -1384,6 +1773,15 @@ mod handler {
     /// A paired desktop with spend on, both ceilings well above 250 cents,
     /// and the project and workflow a start names.
     async fn paired(tag: &str, hub: &Hub) -> std::path::PathBuf {
+        paired_trusting(tag, hub, Vec::new()).await
+    }
+
+    /// [`paired`], with `passkeys` as the trusted set.
+    async fn paired_trusting(
+        tag: &str,
+        hub: &Hub,
+        passkeys: Vec<PinnedPasskey>,
+    ) -> std::path::PathBuf {
         let dir = demeteo_core::test_dir::scratch(&format!("demeteo-hub-handler-{tag}"));
         save_policy(
             &dir,
@@ -1414,7 +1812,7 @@ mod handler {
                 scopes: vec!["read".into(), "spend".into(), "gates".into()],
                 device_jkt: "jkt".into(),
                 paired_at: 0,
-                passkeys: Vec::new(),
+                passkeys,
             },
         )
         .expect("save the pins");
@@ -2287,9 +2685,8 @@ mod handler {
     mod activity_log {
         use super::*;
         use demeteo_core::domain::hub_request::HubRequestLogEntry;
-        use demeteo_hub::protocol::{
-            Decision, GateDecision, PasskeyEndorsement, PasskeyRevocation, Scope, WebAuthnAssertion,
-        };
+        use demeteo_hub::auth::testing::SoftAuthenticator;
+        use demeteo_hub::protocol::{Decision, GateDecision, Scope, WebAuthnAssertion};
 
         const TITLE: &str = "From the Hub";
         const DESCRIPTION: &str = "Started from a phone";
@@ -2677,28 +3074,45 @@ mod handler {
             let _ = std::fs::remove_dir_all(dir);
         }
 
+        /// The gate awaits a decision, so the placeholder assertion is what
+        /// refuses the first delivery; its id is spent all the same.
         #[tokio::test]
-        async fn a_gate_decision_with_gates_on_is_deferred_on_every_delivery() {
+        async fn a_gate_decision_with_gates_on_is_answered_then_replayed() {
             let hub = Hub::new();
             let dir = paired("log-gate-on", &hub).await;
             save_policy(&dir, &policy(true, true, 1_000, 10_000));
-            let desktop = Desktop::open(&dir);
+            let presenter = Arc::new(ScriptedGatePresenter::refusing_all());
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            desktop.seed_pending_gate("se-review");
             let text = hub.signed(gate("r-gate")).await;
 
-            for delivery in ["first", "second"] {
+            for (delivery, reason, logged) in [
+                (
+                    "first",
+                    RefusalReason::AssertionInvalid,
+                    "assertion_invalid",
+                ),
+                ("second", RefusalReason::Replayed, "replayed"),
+            ] {
                 let (result, entry) = deliver(&desktop, &text).await;
-                assert_eq!(result, None, "{delivery}");
+                assert_eq!(
+                    result.expect("an answer").outcome,
+                    refused(reason),
+                    "{delivery}"
+                );
                 assert_eq!(
                     row_of(&entry),
                     (
                         LogKind::GateDecision,
                         Some(Scope::Gates),
-                        LogOutcome::Deferred,
-                        None
+                        LogOutcome::Refused,
+                        Some(logged)
                     ),
                     "{delivery}"
                 );
             }
+            assert!(presenter.calls().is_empty());
+            assert_eq!(presenter.unexpected(), 0);
             assert_eq!(desktop.spy.effects(), 0);
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -2746,12 +3160,19 @@ mod handler {
             let _ = std::fs::remove_dir_all(dir);
         }
 
+        /// Gates are pinned and toggled off, and A's assertion would verify:
+        /// the toggle is the only thing refusing it.
         #[tokio::test]
         async fn a_gate_decision_with_gates_off_is_refused_scope_off() {
             let hub = Hub::new();
-            let dir = paired("log-gate-off", &hub).await;
-            let desktop = Desktop::open(&dir);
-            let text = hub.signed(gate("r-gate")).await;
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let dir = paired_trusting("log-gate-off", &hub, vec![trust::pinned(&a)]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::refusing_all());
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            desktop.seed_pending_gate(trust::STEP_EXECUTION);
+            let text = hub
+                .signed(trust::gate("r-gate", Decision::Approve, &a))
+                .await;
 
             let (result, entry) = deliver(&desktop, &text).await;
 
@@ -2767,49 +3188,71 @@ mod handler {
                     Some("scope_off")
                 )
             );
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 0);
+            assert_eq!(trust::stored_count(&dir, &a), 0);
             assert_eq!(desktop.spy.effects(), 0);
             let _ = std::fs::remove_dir_all(dir);
         }
 
+        /// The passkey kinds spend no scope, so turning every toggle off
+        /// leaves an endorsement to its standing refusal and a revocation to
+        /// its assertion.
         #[tokio::test]
-        async fn the_passkey_kinds_are_deferred_even_with_every_scope_off() {
+        async fn the_passkey_kinds_are_answered_even_with_every_scope_off() {
             let hub = Hub::new();
-            let dir = paired("log-passkeys", &hub).await;
+            let a = SoftAuthenticator::new();
+            let c = trust::pinned(&SoftAuthenticator::new());
+            let dir =
+                paired_trusting("log-passkeys", &hub, vec![trust::pinned(&a), c.clone()]).await;
             save_policy(&dir, &HubLocalPolicy::default());
             let desktop = Desktop::open(&dir);
-            let cases = [
+
+            let d = trust::pinned(&SoftAuthenticator::new());
+            let text = hub
+                .signed(trust::endorsement(
+                    "r-endorse",
+                    &d.credential_id,
+                    &d.public_key,
+                    &a,
+                ))
+                .await;
+            let (result, entry) = deliver(&desktop, &text).await;
+            assert_eq!(
+                result.expect("an answer").outcome,
+                RequestOutcome::Refused {
+                    reason: RefusalReason::UnknownKind
+                }
+            );
+            assert_eq!(
+                row_of(&entry),
                 (
-                    request(
-                        "r-endorse",
-                        RequestPayload::PasskeyEndorsement(PasskeyEndorsement {
-                            new_credential_id: "c2".into(),
-                            new_public_key: "k2".into(),
-                            assertion: assertion(),
-                        }),
-                    ),
                     LogKind::PasskeyEndorsement,
-                ),
+                    None,
+                    LogOutcome::Refused,
+                    Some("unknown_kind")
+                )
+            );
+
+            let text = hub
+                .signed(trust::revocation("r-revoke", &c.credential_id, &a))
+                .await;
+            let (result, entry) = deliver(&desktop, &text).await;
+            assert_eq!(result.expect("an answer").outcome, RequestOutcome::Accepted);
+            let revoked = format!(
+                "revoked {}, signed by {}",
+                c.credential_id,
+                a.credential_id()
+            );
+            assert_eq!(
+                row_of(&entry),
                 (
-                    request(
-                        "r-revoke",
-                        RequestPayload::PasskeyRevocation(PasskeyRevocation {
-                            credential_id: "c".into(),
-                            assertion: assertion(),
-                        }),
-                    ),
                     LogKind::PasskeyRevocation,
-                ),
-            ];
-            for (request, kind) in cases {
-                let text = hub.signed(request).await;
-                let (result, entry) = deliver(&desktop, &text).await;
-                assert_eq!(result, None, "{kind:?}");
-                assert_eq!(
-                    row_of(&entry),
-                    (kind, None, LogOutcome::Deferred, None),
-                    "{kind:?}"
-                );
-            }
+                    None,
+                    LogOutcome::Accepted,
+                    Some(revoked.as_str())
+                )
+            );
             let _ = std::fs::remove_dir_all(dir);
         }
 
@@ -3130,6 +3573,1160 @@ mod handler {
                 before
             );
             let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// Spec AC2 to AC4: an endorsement, a revocation and a gate decision a
+    /// trusted passkey signed, judged over real SQLite, a gate applied through a
+    /// presenter that refuses any call it was not scripted with.
+    mod trust {
+        use super::*;
+        use demeteo_core::domain::hub_request::assertion::{FLAG_USER_PRESENT, FLAG_USER_VERIFIED};
+        use demeteo_core::domain::hub_request::passkeys::{
+            endorsement_challenge_digest, gate_challenge_digest, revocation_challenge_digest,
+            TrustWrite, TrustedPasskey,
+        };
+        use demeteo_hub::auth::testing::SoftAuthenticator;
+        use demeteo_hub::auth::RelyingParty;
+        use demeteo_hub::protocol::{
+            Decision, GateDecision as GatePayload, PasskeyEndorsement, PasskeyRevocation, Scope,
+            WebAuthnAssertion,
+        };
+
+        const FEATURE: &str = "f-1";
+        pub(super) const STEP_EXECUTION: &str = "se-gate";
+        /// Every gate decision carries it and no presenter is scripted with
+        /// it: the desktop drops Hub feedback, so if it ever reaches
+        /// `gate_decide` the strict double refuses the call.
+        const FEEDBACK: &str = "ship it";
+        const EXPIRES_AT: u64 = NOW + 600;
+
+        fn rp() -> RelyingParty {
+            RelyingParty {
+                rp_id: "hub.example".into(),
+                origin: "https://hub.example".into(),
+            }
+        }
+
+        pub(super) fn pinned(authenticator: &SoftAuthenticator) -> PinnedPasskey {
+            PinnedPasskey {
+                credential_id: authenticator.credential_id(),
+                public_key: base64url_encode(&authenticator.public_key_cose()),
+            }
+        }
+
+        /// A paired desktop with gates on and pinned, trusting `trusted`.
+        async fn trusting(
+            tag: &str,
+            hub: &Hub,
+            trusted: &[&SoftAuthenticator],
+        ) -> std::path::PathBuf {
+            let dir = paired_trusting(
+                &format!("trust-{tag}"),
+                hub,
+                trusted.iter().map(|a| pinned(a)).collect(),
+            )
+            .await;
+            save_policy(
+                &dir,
+                &HubLocalPolicy {
+                    spend_enabled: false,
+                    gates_enabled: true,
+                    run_ceiling_cents: None,
+                    daily_ceiling_cents: None,
+                },
+            );
+            dir
+        }
+
+        /// `decision` on [`STEP_EXECUTION`], asserted by `signer` over the
+        /// challenge the envelope commits it to.
+        pub(super) fn gate(
+            request_id: &str,
+            decision: Decision,
+            signer: &SoftAuthenticator,
+        ) -> SignedRequest {
+            gate_asserted(request_id, FEATURE, decision, |challenge| {
+                signer.assert(&rp(), challenge)
+            })
+        }
+
+        /// `decision` on [`STEP_EXECUTION`] naming `feature_id`, carrying
+        /// whatever `assert` makes of the challenge that pair commits it to.
+        fn gate_asserted(
+            request_id: &str,
+            feature_id: &str,
+            decision: Decision,
+            assert: impl FnOnce(&[u8; 32]) -> WebAuthnAssertion,
+        ) -> SignedRequest {
+            let challenge = gate_challenge_digest(
+                INSTANCE,
+                feature_id,
+                STEP_EXECUTION,
+                decision,
+                request_id,
+                EXPIRES_AT,
+            )
+            .expect("encode the gate challenge");
+            SignedRequest {
+                expires_at: EXPIRES_AT,
+                ..request(
+                    request_id,
+                    RequestPayload::GateDecision(GatePayload {
+                        feature_id: feature_id.into(),
+                        step_execution_id: STEP_EXECUTION.into(),
+                        decision,
+                        feedback: Some(FEEDBACK.into()),
+                        assertion: assert(&challenge),
+                    }),
+                )
+            }
+        }
+
+        fn store(dir: &std::path::Path) -> SqliteAdapter {
+            SqliteAdapter::new(demeteo_core::db::init_db(dir.to_path_buf()).expect("init db"))
+                .expect("build sqlite adapter")
+        }
+
+        fn trusted_set(dir: &std::path::Path) -> Vec<TrustedPasskey> {
+            store(dir).trusted().expect("load the trusted set")
+        }
+
+        pub(super) fn stored_count(
+            dir: &std::path::Path,
+            authenticator: &SoftAuthenticator,
+        ) -> u32 {
+            trusted_set(dir)
+                .into_iter()
+                .find(|passkey| passkey.credential_id == authenticator.credential_id())
+                .expect("the passkey is still trusted")
+                .sign_count
+        }
+
+        async fn assert_decided(tag: &str, decision: Decision, word: &str) {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let dir = trusting(tag, &hub, &[&a]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::expecting(STEP_EXECUTION, word, None));
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let text = hub.signed(gate("r-gate", decision, &a)).await;
+
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, RequestOutcome::Accepted, "{tag}");
+            let entry = desktop
+                .ctx
+                .hub_requests
+                .list_log(1)
+                .expect("list the log")
+                .pop()
+                .expect("a log row");
+            assert_eq!(
+                (
+                    entry.kind,
+                    entry.scope,
+                    entry.outcome,
+                    entry.reason.as_deref(),
+                    entry.feature_id.as_deref()
+                ),
+                (
+                    LogKind::GateDecision,
+                    Some(Scope::Gates),
+                    LogOutcome::Accepted,
+                    None,
+                    Some(FEATURE)
+                ),
+                "{tag}"
+            );
+            assert!(!format!("{entry:?}").contains(FEEDBACK), "{tag}: {entry:?}");
+            assert_eq!(
+                presenter.calls(),
+                [(STEP_EXECUTION.to_owned(), word.to_owned(), None)],
+                "{tag}"
+            );
+            assert_eq!(presenter.unexpected(), 0, "{tag}");
+            assert_eq!(stored_count(&dir, &a), 7, "{tag}");
+            assert_eq!(desktop.spy.effects(), 0, "{tag}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn an_approval_by_a_trusted_key_is_the_presenters_gate_decide() {
+            assert_decided("approve", Decision::Approve, "approve").await;
+        }
+
+        #[tokio::test]
+        async fn a_cancel_by_a_trusted_key_is_the_presenters_gate_decide() {
+            assert_decided("cancel", Decision::Cancel, "cancel").await;
+        }
+
+        /// A desktop trusting `trusted` whose presenter takes no call. The
+        /// gate is each test's to seed.
+        async fn refusing(
+            tag: &str,
+            hub: &Hub,
+            trusted: &[&SoftAuthenticator],
+        ) -> (std::path::PathBuf, Desktop, Arc<ScriptedGatePresenter>) {
+            let dir = trusting(tag, hub, trusted).await;
+            let presenter = Arc::new(ScriptedGatePresenter::refusing_all());
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            (dir, desktop, presenter)
+        }
+
+        async fn assert_refused_untouched(
+            desktop: &Desktop,
+            presenter: &ScriptedGatePresenter,
+            text: &str,
+            reason: (RefusalReason, &str),
+        ) {
+            let result = desktop.handle(text).await.expect("an answer");
+            assert_eq!(result.outcome, refused(reason.0));
+            assert_eq!(
+                desktop.last_log(),
+                (
+                    LogKind::GateDecision,
+                    LogOutcome::Refused,
+                    Some(reason.1.to_owned())
+                )
+            );
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 0);
+            assert_eq!(desktop.spy.effects(), 0);
+        }
+
+        #[tokio::test]
+        async fn a_wrong_origin_assertion_is_assertion_invalid() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("wrong-origin", &hub, &[&a]).await;
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let request = gate_asserted("r-gate", FEATURE, Decision::Approve, |challenge| {
+                a.assert_with(
+                    &rp().rp_id,
+                    "https://evil.example",
+                    FLAG_USER_PRESENT | FLAG_USER_VERIFIED,
+                    challenge,
+                )
+            });
+            let text = hub.signed(request).await;
+
+            assert_refused_untouched(
+                &desktop,
+                &presenter,
+                &text,
+                (RefusalReason::AssertionInvalid, "assertion_invalid"),
+            )
+            .await;
+            assert_eq!(stored_count(&dir, &a), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn an_assertion_reporting_the_stored_count_again_is_assertion_invalid() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("count-again", &hub, &[&a]).await;
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            assert!(store(&dir)
+                .advance_count(&a.credential_id(), 0, 7)
+                .expect("advance the count"));
+            let text = hub
+                .signed(gate("r-gate-again", Decision::Approve, &a))
+                .await;
+
+            assert_refused_untouched(
+                &desktop,
+                &presenter,
+                &text,
+                (RefusalReason::AssertionInvalid, "assertion_invalid"),
+            )
+            .await;
+            assert_eq!(stored_count(&dir, &a), 7);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn a_gate_already_decided_is_gate_not_pending() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("decided", &hub, &[&a]).await;
+            desktop
+                .ctx
+                .features
+                .add(feature(FEATURE, "p-1"))
+                .expect("add the feature");
+            desktop
+                .ctx
+                .features
+                .step_create(step(STEP_EXECUTION, "s-gate", "gate", "completed", 40))
+                .expect("add the gate step");
+            desktop
+                .ctx
+                .gates
+                .create(GateDecision {
+                    id: GateDecisionId::new("gd-1"),
+                    step_execution_id: StepExecutionId::new(STEP_EXECUTION),
+                    decision: Some("approve".into()),
+                    feedback: None,
+                    created_at: 40,
+                    auto_approved: false,
+                })
+                .expect("add the decided gate");
+            let text = hub.signed(gate("r-gate", Decision::Approve, &a)).await;
+
+            assert_refused_untouched(
+                &desktop,
+                &presenter,
+                &text,
+                (RefusalReason::GateNotPending, "gate_not_pending"),
+            )
+            .await;
+            assert_eq!(stored_count(&dir, &a), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// The gate row seeded here, which a mirrored run does not have,
+        /// passes the pending check, so only whose run it is refuses it.
+        #[tokio::test]
+        async fn a_gate_decision_on_a_runner_owned_run_is_runner_owned() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("runner-owned", &hub, &[&a]).await;
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            desktop
+                .ctx
+                .remote_run_mirror
+                .upsert_submitted("m-1", "run-1", Some("p-1"), Some(FEATURE), "t", 0)
+                .expect("mirror the run");
+            let text = hub.signed(gate("r-gate", Decision::Approve, &a)).await;
+
+            assert_refused_untouched(
+                &desktop,
+                &presenter,
+                &text,
+                (RefusalReason::RunnerOwned, "runner_owned"),
+            )
+            .await;
+            assert_eq!(stored_count(&dir, &a), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn an_assertion_by_an_untrusted_key_is_credential_not_pinned() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new();
+            let b = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("untrusted", &hub, &[&a]).await;
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let text = hub.signed(gate("r-gate", Decision::Approve, &b)).await;
+
+            assert_refused_untouched(
+                &desktop,
+                &presenter,
+                &text,
+                (RefusalReason::CredentialNotPinned, "credential_not_pinned"),
+            )
+            .await;
+            assert_eq!(stored_count(&dir, &a), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// The assertion is over the challenge for the feature the request
+        /// names, so the step's owner is the only thing refusing it.
+        #[tokio::test]
+        async fn a_gate_decision_for_a_step_of_another_feature_is_unknown_step() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("another-feature", &hub, &[&a]).await;
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            desktop
+                .ctx
+                .features
+                .add(feature("f-2", "p-1"))
+                .expect("add the other feature");
+            let request = gate_asserted("r-gate", "f-2", Decision::Approve, |challenge| {
+                a.assert(&rp(), challenge)
+            });
+            let text = hub.signed(request).await;
+
+            assert_refused_untouched(
+                &desktop,
+                &presenter,
+                &text,
+                (RefusalReason::UnknownStep, "unknown_step"),
+            )
+            .await;
+            assert_eq!(stored_count(&dir, &a), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// Fails every read that selects `table.from` until it is renamed
+        /// back. Nothing may open the store meanwhile: `init_db` re-adds
+        /// any column it adds only if missing, under the old name.
+        fn rename_column(dir: &std::path::Path, table: &str, from: &str, to: &str) {
+            rusqlite::Connection::open(dir.join("demeteo.db"))
+                .expect("open the desktop's DB")
+                .execute_batch(&format!("ALTER TABLE {table} RENAME COLUMN {from} TO {to}"))
+                .expect("rename the column");
+        }
+
+        /// `trusted()` is the one read naming `sign_count`; the pins load
+        /// before it names only the other passkey columns.
+        fn rename_sign_count(dir: &std::path::Path, from: &str, to: &str) {
+            rename_column(dir, "hub_pinned_passkeys", from, to);
+        }
+
+        /// A's approval is deferred unspent, the gate never asked, while
+        /// `table.column` is renamed away, and its redelivery is decided
+        /// once it is back.
+        async fn assert_gate_deferred_unspent(tag: &str, table: &str, column: &str) {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let dir = trusting(tag, &hub, &[&a]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::expecting(
+                STEP_EXECUTION,
+                "approve",
+                None,
+            ));
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let text = hub.signed(gate("r-gate", Decision::Approve, &a)).await;
+            let away = format!("{column}_away");
+            rename_column(&dir, table, column, &away);
+
+            assert_eq!(desktop.handle(&text).await, None, "{tag}");
+            assert_eq!(
+                desktop.last_log(),
+                (LogKind::GateDecision, LogOutcome::Deferred, None),
+                "{tag}"
+            );
+            assert!(
+                presenter.calls().is_empty(),
+                "{tag}: {:?}",
+                presenter.calls()
+            );
+            assert_eq!(presenter.unexpected(), 0, "{tag}");
+
+            rename_column(&dir, table, &away, column);
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, RequestOutcome::Accepted, "{tag}");
+            assert_eq!(
+                presenter.calls(),
+                [(STEP_EXECUTION.to_owned(), "approve".to_owned(), None)],
+                "{tag}"
+            );
+            assert_eq!(presenter.unexpected(), 0, "{tag}");
+            assert_eq!(stored_count(&dir, &a), 7, "{tag}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn a_gate_decision_whose_trusted_set_cannot_load_is_deferred_unspent() {
+            assert_gate_deferred_unspent("trusted-unloaded", "hub_pinned_passkeys", "sign_count")
+                .await;
+        }
+
+        /// `step_get` selects `artifact_paths`; nothing a gate decision
+        /// reads before it does.
+        #[tokio::test]
+        async fn a_gate_decision_whose_step_cannot_load_is_deferred_unspent() {
+            assert_gate_deferred_unspent("step-unloaded", "step_executions", "artifact_paths")
+                .await;
+        }
+
+        /// A gate decision reads `remote_run_mirror` only through
+        /// `find_mirror_for_feature`, last.
+        #[tokio::test]
+        async fn a_gate_decision_whose_run_owner_cannot_load_is_deferred_unspent() {
+            assert_gate_deferred_unspent(
+                "mirror-unloaded",
+                "remote_run_mirror",
+                "last_notified_status",
+            )
+            .await;
+        }
+
+        /// The one passkey write a [`ScriptedPasskeys`] answers, and how.
+        #[derive(Clone, Copy)]
+        enum Script {
+            Advance(fn() -> Result<bool, AppError>),
+            Revoke(fn() -> Result<TrustWrite, AppError>),
+        }
+
+        /// Reads the desktop's own trusted set and answers every call of
+        /// the write `script` names, counted by `writes`, writing nothing.
+        /// Any other write is an `Err` counted by `unexpected`.
+        struct ScriptedPasskeys {
+            store: Arc<SqliteAdapter>,
+            script: Script,
+            writes: AtomicUsize,
+            unexpected: AtomicUsize,
+        }
+
+        impl ScriptedPasskeys {
+            fn scripted<T>(&self, answer: fn() -> Result<T, AppError>) -> Result<T, AppError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                answer()
+            }
+
+            fn unscripted<T>(&self, call: &str) -> Result<T, AppError> {
+                self.unexpected.fetch_add(1, Ordering::SeqCst);
+                Err(AppError::internal(format!(
+                    "unscripted passkey write: {call}"
+                )))
+            }
+        }
+
+        impl HubPasskeyTrust for ScriptedPasskeys {
+            fn trusted(&self) -> Result<Vec<TrustedPasskey>, AppError> {
+                self.store.trusted()
+            }
+
+            fn advance_count(&self, _: &str, _: u32, _: u32) -> Result<bool, AppError> {
+                match self.script {
+                    Script::Advance(answer) => self.scripted(answer),
+                    _ => self.unscripted("advance_count"),
+                }
+            }
+
+            fn endorse(
+                &self,
+                _: &str,
+                _: u32,
+                _: u32,
+                _: &str,
+                _: &str,
+                _: i64,
+            ) -> Result<TrustWrite, AppError> {
+                self.unscripted("endorse")
+            }
+
+            fn revoke(&self, _: &str, _: u32, _: u32, _: &str) -> Result<TrustWrite, AppError> {
+                match self.script {
+                    Script::Revoke(answer) => self.scripted(answer),
+                    _ => self.unscripted("revoke"),
+                }
+            }
+        }
+
+        /// A desktop over `dir` deciding gates through `presenter`, whose
+        /// passkey writes are `script`'s.
+        fn scripted(
+            dir: &std::path::Path,
+            presenter: Arc<ScriptedGatePresenter>,
+            script: Script,
+        ) -> (Desktop, Arc<ScriptedPasskeys>) {
+            let mut passkeys = None;
+            let desktop = Desktop::presenting_through(dir, presenter, |store| {
+                let scripted = Arc::new(ScriptedPasskeys {
+                    store,
+                    script,
+                    writes: AtomicUsize::new(0),
+                    unexpected: AtomicUsize::new(0),
+                });
+                passkeys = Some(scripted.clone());
+                scripted
+            });
+            let passkeys = passkeys.expect("the handler is built over the scripted passkeys");
+            (desktop, passkeys)
+        }
+
+        /// The assertion verifies, so only the counter write can refuse it.
+        async fn assert_count_unwritten(
+            tag: &str,
+            advance: fn() -> Result<bool, AppError>,
+            reason: (RefusalReason, &str),
+        ) {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let dir = trusting(tag, &hub, &[&a]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::refusing_all());
+            let (desktop, counter) = scripted(&dir, presenter.clone(), Script::Advance(advance));
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let text = hub.signed(gate("r-gate", Decision::Approve, &a)).await;
+
+            assert_refused_untouched(&desktop, &presenter, &text, reason).await;
+            assert_eq!(counter.writes.load(Ordering::SeqCst), 1, "{tag}");
+            assert_eq!(counter.unexpected.load(Ordering::SeqCst), 0, "{tag}");
+            assert_eq!(stored_count(&dir, &a), 0, "{tag}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn a_counter_write_lost_to_a_race_is_credential_not_pinned() {
+            assert_count_unwritten(
+                "lost-race",
+                || Ok(false),
+                (RefusalReason::CredentialNotPinned, "credential_not_pinned"),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_counter_write_that_fails_is_malformed_body() {
+            assert_count_unwritten(
+                "count-unwritten",
+                || Err(AppError::database("disk I/O error")),
+                (RefusalReason::MalformedBody, "malformed_body"),
+            )
+            .await;
+        }
+
+        /// The count is written before the gate is asked, and a gate that
+        /// refuses does not give it back.
+        #[tokio::test]
+        async fn a_gate_that_refuses_the_decision_is_gate_not_pending_and_keeps_the_count() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let (dir, desktop, presenter) = refusing("gate-refuses", &hub, &[&a]).await;
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let text = hub.signed(gate("r-gate", Decision::Approve, &a)).await;
+
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(RefusalReason::GateNotPending));
+            assert_eq!(
+                desktop.last_log(),
+                (
+                    LogKind::GateDecision,
+                    LogOutcome::Refused,
+                    Some("gate_not_pending".to_owned())
+                )
+            );
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 1);
+            assert_eq!(stored_count(&dir, &a), 7);
+            assert_eq!(desktop.spy.effects(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// Were the second delivery judged, the count the first wrote would
+        /// still refuse it, as `assertion_invalid`: only the reason shows it
+        /// was refused as a replay.
+        #[tokio::test]
+        async fn an_accepted_gate_decision_delivered_again_is_replayed_and_decided_once() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(7);
+            let dir = trusting("redelivered", &hub, &[&a]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::expecting(
+                STEP_EXECUTION,
+                "approve",
+                None,
+            ));
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let text = hub.signed(gate("r-gate", Decision::Approve, &a)).await;
+
+            for (delivery, outcome, logged, reason) in [
+                (
+                    "first",
+                    RequestOutcome::Accepted,
+                    LogOutcome::Accepted,
+                    None,
+                ),
+                (
+                    "second",
+                    refused(RefusalReason::Replayed),
+                    LogOutcome::Refused,
+                    Some("replayed".to_owned()),
+                ),
+            ] {
+                let result = desktop.handle(&text).await.expect("an answer");
+                assert_eq!(result.outcome, outcome, "{delivery}");
+                assert_eq!(
+                    desktop.last_log(),
+                    (LogKind::GateDecision, logged, reason),
+                    "{delivery}"
+                );
+            }
+            assert_eq!(
+                presenter.calls(),
+                [(STEP_EXECUTION.to_owned(), "approve".to_owned(), None)]
+            );
+            assert_eq!(presenter.unexpected(), 0);
+            assert_eq!(stored_count(&dir, &a), 7);
+            assert_eq!(desktop.spy.effects(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// `signer`'s endorsement of `new_credential_id` with
+        /// `new_public_key`, over the challenge the envelope commits them to.
+        pub(super) fn endorsement(
+            request_id: &str,
+            new_credential_id: &str,
+            new_public_key: &str,
+            signer: &SoftAuthenticator,
+        ) -> SignedRequest {
+            let challenge = endorsement_challenge_digest(
+                INSTANCE,
+                request_id,
+                EXPIRES_AT,
+                new_credential_id,
+                new_public_key,
+            )
+            .expect("encode the endorsement challenge");
+            SignedRequest {
+                expires_at: EXPIRES_AT,
+                ..request(
+                    request_id,
+                    RequestPayload::PasskeyEndorsement(PasskeyEndorsement {
+                        new_credential_id: new_credential_id.into(),
+                        new_public_key: new_public_key.into(),
+                        assertion: signer.assert(&rp(), &challenge),
+                    }),
+                )
+            }
+        }
+
+        /// Trusting A, `endorse` builds a request from A, a new key C and an
+        /// untrusted key D, and it is refused `unknown_kind` with the set,
+        /// every stored key and counter among it, as it was (docs/HUB.md §11
+        /// item 20).
+        async fn assert_endorsement_refused(
+            tag: &str,
+            endorse: impl FnOnce(
+                &SoftAuthenticator,
+                &SoftAuthenticator,
+                &SoftAuthenticator,
+            ) -> SignedRequest,
+        ) {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let c = SoftAuthenticator::new().with_sign_count(3);
+            let d = SoftAuthenticator::new().with_sign_count(3);
+            let (dir, desktop, presenter) = refusing(tag, &hub, &[&a]).await;
+            let before = trusted_set(&dir);
+            let text = hub.signed(endorse(&a, &c, &d)).await;
+
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(RefusalReason::UnknownKind), "{tag}");
+            let entry = desktop
+                .ctx
+                .hub_requests
+                .list_log(1)
+                .expect("list the log")
+                .pop()
+                .expect("a log row");
+            assert_eq!(
+                (
+                    entry.kind,
+                    entry.scope,
+                    entry.outcome,
+                    entry.reason.as_deref()
+                ),
+                (
+                    LogKind::PasskeyEndorsement,
+                    None,
+                    LogOutcome::Refused,
+                    Some("unknown_kind")
+                ),
+                "{tag}"
+            );
+            assert_eq!(trusted_set(&dir), before, "{tag}");
+            assert!(
+                presenter.calls().is_empty(),
+                "{tag}: {:?}",
+                presenter.calls()
+            );
+            assert_eq!(presenter.unexpected(), 0, "{tag}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// A's assertion over C's endorsement challenge verifies, and A's
+        /// stored count stays 0 although A reports 3.
+        #[tokio::test]
+        async fn an_endorsement_by_a_trusted_key_is_unknown_kind_and_trusts_nothing() {
+            assert_endorsement_refused("endorse", |a, c, _| {
+                let new = pinned(c);
+                endorsement("r-endorse", &new.credential_id, &new.public_key, a)
+            })
+            .await;
+        }
+
+        #[tokio::test]
+        async fn an_endorsement_signed_by_the_key_it_endorses_is_unknown_kind() {
+            assert_endorsement_refused("endorse-self", |_, c, _| {
+                let new = pinned(c);
+                endorsement("r-endorse", &new.credential_id, &new.public_key, c)
+            })
+            .await;
+        }
+
+        #[tokio::test]
+        async fn an_endorsement_signed_by_an_untrusted_key_is_unknown_kind() {
+            assert_endorsement_refused("endorse-untrusted", |_, c, d| {
+                let new = pinned(c);
+                endorsement("r-endorse", &new.credential_id, &new.public_key, d)
+            })
+            .await;
+        }
+
+        /// A signs for its own id with C's key: a trusted key is never
+        /// replaced, by its own word or any other.
+        #[tokio::test]
+        async fn an_endorsement_reusing_a_trusted_id_is_unknown_kind() {
+            assert_endorsement_refused("endorse-reused-id", |a, c, _| {
+                endorsement("r-endorse", &a.credential_id(), &pinned(c).public_key, a)
+            })
+            .await;
+        }
+
+        /// The substituted-ceremony attack: A's valid endorsement of C, which
+        /// the Hub holds, is refused, so C's own approval of a pending gate
+        /// is refused too, through a presenter that would have taken it.
+        #[tokio::test]
+        async fn a_key_whose_endorsement_was_refused_cannot_decide_a_gate() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new();
+            let c = SoftAuthenticator::new().with_sign_count(7);
+            let dir = trusting("endorsed-gate", &hub, &[&a]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::expecting(
+                STEP_EXECUTION,
+                "approve",
+                None,
+            ));
+            let desktop = Desktop::presenting(&dir, presenter.clone());
+            desktop.seed_pending_gate(STEP_EXECUTION);
+            let before = trusted_set(&dir);
+            let new = pinned(&c);
+            let text = hub
+                .signed(endorsement(
+                    "r-endorse",
+                    &new.credential_id,
+                    &new.public_key,
+                    &a,
+                ))
+                .await;
+            let endorsed = desktop.handle(&text).await.expect("an answer");
+            assert_eq!(endorsed.outcome, refused(RefusalReason::UnknownKind));
+
+            let text = hub.signed(gate("r-gate", Decision::Approve, &c)).await;
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(RefusalReason::CredentialNotPinned));
+            assert_eq!(
+                desktop.last_log(),
+                (
+                    LogKind::GateDecision,
+                    LogOutcome::Refused,
+                    Some("credential_not_pinned".to_owned())
+                )
+            );
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 0);
+            assert_eq!(trusted_set(&dir), before);
+            assert_eq!(desktop.spy.effects(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// `signer`'s revocation of `target`, over the challenge the envelope
+        /// commits it to.
+        pub(super) fn revocation(
+            request_id: &str,
+            target: &str,
+            signer: &SoftAuthenticator,
+        ) -> SignedRequest {
+            let challenge = revocation_challenge_digest(INSTANCE, request_id, EXPIRES_AT, target)
+                .expect("encode the revocation challenge");
+            SignedRequest {
+                expires_at: EXPIRES_AT,
+                ..request(
+                    request_id,
+                    RequestPayload::PasskeyRevocation(PasskeyRevocation {
+                        credential_id: target.into(),
+                        assertion: signer.assert(&rp(), &challenge),
+                    }),
+                )
+            }
+        }
+
+        /// Hands `text` over, checks no gate was touched, and returns its
+        /// answer with the outcome and reason its log row holds.
+        async fn revoked(
+            desktop: &Desktop,
+            presenter: &ScriptedGatePresenter,
+            text: &str,
+        ) -> (RequestOutcome, LogOutcome, Option<String>) {
+            let result = desktop.handle(text).await.expect("an answer");
+            let (kind, outcome, reason) = desktop.last_log();
+            assert_eq!(kind, LogKind::PasskeyRevocation);
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 0);
+            (result.outcome, outcome, reason)
+        }
+
+        fn last_credential() -> (RequestOutcome, LogOutcome, Option<String>) {
+            (
+                refused(RefusalReason::LastCredential),
+                LogOutcome::Refused,
+                Some("last_credential".to_owned()),
+            )
+        }
+
+        #[tokio::test]
+        async fn a_revocation_of_the_last_key_is_last_credential_and_keeps_it() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let (dir, desktop, presenter) = refusing("revoke-last", &hub, &[&a]).await;
+            let before = trusted_set(&dir);
+            let text = hub
+                .signed(revocation("r-revoke", &a.credential_id(), &a))
+                .await;
+
+            assert_eq!(
+                revoked(&desktop, &presenter, &text).await,
+                last_credential()
+            );
+            assert_eq!(trusted_set(&dir), before);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// The last revocation is signed by a key no longer trusted, and is
+        /// still `last_credential`: that check runs before the signer is
+        /// looked up (spec §5).
+        #[tokio::test]
+        async fn a_revocation_removes_another_trusted_key_but_never_the_last() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let b = SoftAuthenticator::new().with_sign_count(5);
+            let (dir, desktop, presenter) = refusing("revoke-pair", &hub, &[&a, &b]).await;
+            let pair = trusted_set(&dir);
+            let only_a = [TrustedPasskey {
+                sign_count: 3,
+                ..pair[0].clone()
+            }];
+
+            let text = hub
+                .signed(revocation("r-self", &b.credential_id(), &b))
+                .await;
+            assert_eq!(
+                revoked(&desktop, &presenter, &text).await,
+                (
+                    refused(RefusalReason::SelfRevocation),
+                    LogOutcome::Refused,
+                    Some("self_revocation".to_owned())
+                )
+            );
+            assert_eq!(trusted_set(&dir), pair);
+
+            let text = hub
+                .signed(revocation("r-by-a", &b.credential_id(), &a))
+                .await;
+            assert_eq!(
+                revoked(&desktop, &presenter, &text).await,
+                (
+                    RequestOutcome::Accepted,
+                    LogOutcome::Accepted,
+                    Some(format!(
+                        "revoked {}, signed by {}",
+                        b.credential_id(),
+                        a.credential_id()
+                    ))
+                )
+            );
+            assert_eq!(trusted_set(&dir), only_a);
+
+            let text = hub
+                .signed(revocation("r-by-b", &a.credential_id(), &b))
+                .await;
+            assert_eq!(
+                revoked(&desktop, &presenter, &text).await,
+                last_credential()
+            );
+            assert_eq!(trusted_set(&dir), only_a);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn a_revocation_whose_trusted_set_cannot_load_is_deferred_unspent() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let b = SoftAuthenticator::new();
+            let (dir, desktop, presenter) = refusing("revoke-unloaded", &hub, &[&a, &b]).await;
+            let text = hub
+                .signed(revocation("r-revoke", &b.credential_id(), &a))
+                .await;
+            rename_sign_count(&dir, "sign_count", "sign_count_away");
+
+            assert_eq!(desktop.handle(&text).await, None);
+            assert_eq!(
+                desktop.last_log(),
+                (LogKind::PasskeyRevocation, LogOutcome::Deferred, None)
+            );
+
+            rename_sign_count(&dir, "sign_count_away", "sign_count");
+            assert_eq!(
+                revoked(&desktop, &presenter, &text).await,
+                (
+                    RequestOutcome::Accepted,
+                    LogOutcome::Accepted,
+                    Some(format!(
+                        "revoked {}, signed by {}",
+                        b.credential_id(),
+                        a.credential_id()
+                    ))
+                )
+            );
+            assert_eq!(trusted_set(&dir).len(), 1);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// Nothing is loaded for an endorsement, so a broken trusted-set
+        /// table does not defer it: its id is spent and it is refused, and
+        /// its redelivery is a replay.
+        #[tokio::test]
+        async fn an_endorsement_whose_trusted_set_cannot_load_is_still_unknown_kind() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let c = pinned(&SoftAuthenticator::new());
+            let (dir, desktop, presenter) = refusing("endorse-unloaded", &hub, &[&a]).await;
+            let before = trusted_set(&dir);
+            let text = hub
+                .signed(endorsement(
+                    "r-endorse",
+                    &c.credential_id,
+                    &c.public_key,
+                    &a,
+                ))
+                .await;
+            rename_sign_count(&dir, "sign_count", "sign_count_away");
+
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(RefusalReason::UnknownKind));
+            assert_eq!(
+                desktop.last_log(),
+                (
+                    LogKind::PasskeyEndorsement,
+                    LogOutcome::Refused,
+                    Some("unknown_kind".to_owned())
+                )
+            );
+
+            rename_sign_count(&dir, "sign_count_away", "sign_count");
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(RefusalReason::Replayed));
+            assert_eq!(trusted_set(&dir), before);
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        /// Trusting A and B, `request` makes a request A signs that
+        /// verifies, so only `script`'s write can refuse it, and it is
+        /// refused `reason` with its id spent and nothing written.
+        async fn assert_trust_write_refused(
+            tag: &str,
+            kind: LogKind,
+            request: impl FnOnce(&SoftAuthenticator, &SoftAuthenticator) -> SignedRequest,
+            script: Script,
+            reason: (RefusalReason, &str),
+        ) {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let b = SoftAuthenticator::new().with_sign_count(5);
+            let dir = trusting(tag, &hub, &[&a, &b]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::refusing_all());
+            let (desktop, passkeys) = scripted(&dir, presenter.clone(), script);
+            let before = trusted_set(&dir);
+            let text = hub.signed(request(&a, &b)).await;
+
+            for (delivery, (refusal, logged)) in [
+                ("first", reason),
+                ("again", (RefusalReason::Replayed, "replayed")),
+            ] {
+                let result = desktop.handle(&text).await.expect("an answer");
+                assert_eq!(result.outcome, refused(refusal), "{tag}: {delivery}");
+                assert_eq!(
+                    desktop.last_log(),
+                    (kind, LogOutcome::Refused, Some(logged.to_owned())),
+                    "{tag}: {delivery}"
+                );
+            }
+            assert_eq!(trusted_set(&dir), before, "{tag}");
+            assert_eq!(passkeys.writes.load(Ordering::SeqCst), 1, "{tag}");
+            assert_eq!(passkeys.unexpected.load(Ordering::SeqCst), 0, "{tag}");
+            assert!(
+                presenter.calls().is_empty(),
+                "{tag}: {:?}",
+                presenter.calls()
+            );
+            assert_eq!(presenter.unexpected(), 0, "{tag}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        fn revoking_b(a: &SoftAuthenticator, b: &SoftAuthenticator) -> SignedRequest {
+            revocation("r-revoke", &b.credential_id(), a)
+        }
+
+        /// No script answers `endorse`, so a call to it would be counted
+        /// as unexpected.
+        #[tokio::test]
+        async fn an_endorsement_never_reaches_the_passkey_store() {
+            let hub = Hub::new();
+            let a = SoftAuthenticator::new().with_sign_count(3);
+            let dir = trusting("endorse-unwritten", &hub, &[&a]).await;
+            let presenter = Arc::new(ScriptedGatePresenter::refusing_all());
+            let (desktop, passkeys) =
+                scripted(&dir, presenter.clone(), Script::Advance(|| Ok(true)));
+            let new = pinned(&SoftAuthenticator::new());
+            let text = hub
+                .signed(endorsement(
+                    "r-endorse",
+                    &new.credential_id,
+                    &new.public_key,
+                    &a,
+                ))
+                .await;
+
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(RefusalReason::UnknownKind));
+            assert_eq!(passkeys.writes.load(Ordering::SeqCst), 0);
+            assert_eq!(passkeys.unexpected.load(Ordering::SeqCst), 0);
+            assert!(presenter.calls().is_empty(), "{:?}", presenter.calls());
+            assert_eq!(presenter.unexpected(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[tokio::test]
+        async fn a_revocation_whose_write_fails_is_malformed_body() {
+            assert_trust_write_refused(
+                "revoke-unwritten",
+                LogKind::PasskeyRevocation,
+                revoking_b,
+                Script::Revoke(|| Err(AppError::database("disk I/O error"))),
+                (RefusalReason::MalformedBody, "malformed_body"),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_revocation_whose_signer_changed_before_the_write_is_credential_not_pinned() {
+            assert_trust_write_refused(
+                "revoke-signer-changed",
+                LogKind::PasskeyRevocation,
+                revoking_b,
+                Script::Revoke(|| Ok(TrustWrite::SignerChanged)),
+                (RefusalReason::CredentialNotPinned, "credential_not_pinned"),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_revocation_whose_target_went_before_the_write_is_credential_not_pinned() {
+            assert_trust_write_refused(
+                "revoke-target-gone",
+                LogKind::PasskeyRevocation,
+                revoking_b,
+                Script::Revoke(|| Ok(TrustWrite::TargetGone)),
+                (RefusalReason::CredentialNotPinned, "credential_not_pinned"),
+            )
+            .await;
         }
     }
 }

@@ -110,8 +110,8 @@ const ASSERTION_FIELDS = {
 
 const TICKET = { request_id: CHALLENGE.request_id, expires_at: EXPIRES_AT };
 
-function decide(decision: GateDecision, feedback?: string) {
-  return decideGate({ instanceId: INSTANCE_ID, featureId: 'f-1', stepExecutionId: 'se-3', decision, feedback });
+function decide(decision: GateDecision) {
+  return decideGate({ instanceId: INSTANCE_ID, featureId: 'f-1', stepExecutionId: 'se-3', decision });
 }
 
 afterEach(() => {
@@ -138,29 +138,6 @@ describe('decideGate', () => {
       { ceremony_id: 'cer-9', request_id: 'q7Zr-1_x', assertion: ASSERTION_FIELDS },
     ]);
     expect(pending).toEqual([]);
-  });
-
-  it('sends feedback beside the assertion, as written', async () => {
-    const { bodies } = stubFetch([post(CHALLENGE_PATH, CHALLENGE, 200), post(DECISION_PATH, TICKET, 202)]);
-    stubWebAuthn(async () => ASSERTION);
-
-    await decide('cancel', ' wrong branch ');
-
-    expect(bodies[1]).toStrictEqual({
-      ceremony_id: 'cer-9',
-      request_id: 'q7Zr-1_x',
-      assertion: ASSERTION_FIELDS,
-      feedback: ' wrong branch ',
-    });
-  });
-
-  it.each(['', '  \n'])('omits feedback %j', async (feedback) => {
-    const { bodies } = stubFetch([post(CHALLENGE_PATH, CHALLENGE, 200), post(DECISION_PATH, TICKET, 202)]);
-    stubWebAuthn(async () => ASSERTION);
-
-    await decide('approve', feedback);
-
-    expect(Object.keys(bodies[1] as object)).toEqual(['ceremony_id', 'request_id', 'assertion']);
   });
 
   it('sends no decision when the passkey prompt is cancelled', async () => {

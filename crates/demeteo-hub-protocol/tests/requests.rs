@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 const ACCEPTED: &str = include_str!("fixtures/request_result_accepted.json");
 const REFUSED: &str = include_str!("fixtures/request_result_refused.json");
 
-const REASONS: [&str; 20] = [
+const REASONS: [&str; 21] = [
     "scope_off",
     "expired",
     "replayed",
@@ -28,6 +28,7 @@ const REASONS: [&str; 20] = [
     "attachment_mismatch",
     "last_credential",
     "self_revocation",
+    "runner_owned",
 ];
 
 fn round_trip(fixture: &str) -> RequestResult {
@@ -79,8 +80,8 @@ fn outcome_serialises_as_a_tagged_object() {
 }
 
 #[test]
-fn refusal_reason_accepts_exactly_its_twenty_spellings() {
-    assert_eq!(REASONS.len(), 20);
+fn refusal_reason_accepts_exactly_its_twenty_one_spellings() {
+    assert_eq!(REASONS.len(), 21);
     for name in REASONS {
         let reason: RefusalReason = serde_json::from_value(json!(name)).unwrap();
         assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));

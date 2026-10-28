@@ -215,6 +215,15 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // the migration's header.
     add_column_if_missing(conn, "features", "launched_by", "TEXT")?;
 
+    // The signature counter last accepted per passkey (V66) — see the
+    // migration's header.
+    add_column_if_missing(
+        conn,
+        "hub_pinned_passkeys",
+        "sign_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+
     Ok(())
 }
 
