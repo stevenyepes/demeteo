@@ -12,6 +12,7 @@ use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
+use crate::domain::hub_request::passkeys::{TrustWrite, TrustedPasskey};
 use crate::domain::hub_request::{Consumption, HubLocalPolicy, HubRequestLogEntry};
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
@@ -43,6 +44,51 @@ pub trait HubPinRepository: Send + Sync {
     fn save(&self, pins: &HubPins) -> Result<(), AppError>;
     /// Deletes the pairing and its passkeys in one transaction.
     fn clear(&self) -> Result<(), AppError>;
+}
+
+/// The trusted passkey set in `hub_pinned_passkeys`, with the signature
+/// counter each one last had accepted (V66, docs/HUB.md §8). A trait of its
+/// own rather than methods of [`HubPinRepository`], so a double of that is
+/// not obliged to answer these.
+pub trait HubPasskeyTrust: Send + Sync {
+    /// In pairing order.
+    fn trusted(&self) -> Result<Vec<TrustedPasskey>, AppError>;
+    /// A compare-and-set: `Ok(false)`, with nothing written, when the row is
+    /// gone or its count is no longer `expected`. Never read-then-write: two
+    /// assertions racing between a `SELECT` and an `UPDATE` would both read
+    /// the old count and both be accepted.
+    fn advance_count(&self, credential_id: &str, expected: u32, new: u32)
+        -> Result<bool, AppError>;
+    /// The signer's [`HubPasskeyTrust::advance_count`] and the new row, in one
+    /// transaction that commits both or neither. `public_key` is stored as
+    /// given: the endorsement challenge commits to those exact bytes. An id
+    /// already pinned is `AlreadyPinned`, never a replaced key. No request
+    /// path reaches this while `decide` refuses the kind (docs/HUB.md §11
+    /// item 20).
+    fn endorse(
+        &self,
+        signer: &str,
+        expected: u32,
+        new: u32,
+        credential_id: &str,
+        public_key: &str,
+        pinned_at: i64,
+    ) -> Result<TrustWrite, AppError>;
+    /// The signer's [`HubPasskeyTrust::advance_count`] and the deletion of
+    /// `target`, in one transaction that commits both or neither. The signer's
+    /// row must still exist and survives the deletion, so revocations by
+    /// distinct signers cannot empty the set however they interleave. The
+    /// store also refuses to delete the last row whatever the caller checked.
+    /// That is defence in depth against a self-revocation reaching the store,
+    /// the only write it can catch, which `revocation_verdict` refuses first
+    /// as `self_revocation`.
+    fn revoke(
+        &self,
+        signer: &str,
+        expected: u32,
+        new: u32,
+        target: &str,
+    ) -> Result<TrustWrite, AppError>;
 }
 
 /// The `hub_consumed_requests` and `hub_request_log` tables (V65).
@@ -208,8 +254,9 @@ pub trait HubAttachmentFetcher: Send + Sync {
 #[async_trait]
 pub trait HubRequestHandler: Send + Sync {
     /// The `result` to send for `text`, or `None` when nothing may be sent: a
-    /// request whose signature does not verify, one deferred to the handler
-    /// of its kind, or a frame with no `request_id` to answer.
+    /// request whose signature does not verify, one whose judging could not
+    /// read what it needs from storage, left unspent so its redelivery is
+    /// judged afresh, or a frame with no `request_id` to answer.
     async fn handle(&self, text: &str) -> Option<RequestResult>;
 }
 

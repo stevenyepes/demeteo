@@ -78,6 +78,9 @@ pub struct RunEvent {
 /// exactly two variants.
 ///
 /// Deliberately no `#[serde(other)]`: an unknown reason must fail to parse.
+/// So a variant added here closes an older Hub's socket with `1008` the first
+/// time an instance sends it, and the desktop stops reconnecting. The Hub has to
+/// ship before any desktop that can send it (HUB.md §11 item 8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RefusalReason {
@@ -101,6 +104,8 @@ pub enum RefusalReason {
     AttachmentMismatch,
     LastCredential,
     SelfRevocation,
+    /// A gate of a run a `demeteo-runner` owns, which the desktop only mirrors.
+    RunnerOwned,
 }
 
 /// What the instance did with a request: it acted, or it refused for a reason.

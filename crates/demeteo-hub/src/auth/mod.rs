@@ -14,8 +14,12 @@
 //! verifying the assertion itself, under a key it already pinned, and it never
 //! takes the Hub's word that a key is trusted. An endorsement or a revocation
 //! is therefore worth exactly what its assertion is, and the Hub refuses what
-//! an instance would refuse: a passkey accepted here and nowhere else is a
-//! sign-in that can approve nothing.
+//! an instance would refuse, save the checks [`assertion`] names as an
+//! instance's alone: a passkey accepted here and nowhere else is a sign-in
+//! that can approve nothing. Among those is the counter. An instance keeps a
+//! count per pinned key and refuses one that does not advance, which the chain
+//! here does not compare, so an endorsement or a revocation the Hub accepted
+//! can still be refused by an instance for its counter.
 //!
 //! # Rejected designs
 //!

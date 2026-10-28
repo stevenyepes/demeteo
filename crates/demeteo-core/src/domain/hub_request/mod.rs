@@ -10,8 +10,9 @@
 //! still a replay the second time it arrives.
 
 use demeteo_hub_protocol::{
-    AttachmentRef, CancelFeature, Effort, RefusalReason, RequestPayload, Scope, SetStepAssignment,
-    SignedRequest, StartFeature, StepOverride as WireStepOverride,
+    AttachmentRef, CancelFeature, Effort, GateDecision as GatePayload, PasskeyRevocation,
+    RefusalReason, RequestPayload, Scope, SetStepAssignment, SignedRequest, StartFeature,
+    StepOverride as WireStepOverride,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,8 +22,11 @@ use crate::domain::step_assignment::{
     assignment_refusal, harness_refusal, identifier_refusal, kind_refusal, StepAssignment,
 };
 
+pub mod assertion;
 pub mod ceiling;
+pub mod cose;
 pub mod log;
+pub mod passkeys;
 pub mod verify;
 
 pub use ceiling::spend_verdict;
@@ -97,15 +101,19 @@ pub enum DropReason {
     BadSignature,
 }
 
-/// The kinds that reach an effect on this path. Gate decisions and passkey
-/// changes are verified against pinned passkeys elsewhere and are deferred
-/// here. Each borrows the payload [`decide`] was given, so the caller
-/// dispatches on the verdict alone and has no arm for a kind it cannot run.
+/// The kinds that reach an effect on this path: every kind but an
+/// endorsement, which [`decide`] refuses. A gate decision or a revocation
+/// reaches one only if its passkey assertion verifies, which
+/// [`passkeys::gate_verdict`] and [`passkeys::revocation_verdict`] decide
+/// after the id is spent. Each borrows the payload [`decide`] was given, so
+/// the caller dispatches on the verdict alone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExecuteKind<'a> {
     StartFeature(&'a StartFeature),
     CancelFeature(&'a CancelFeature),
     SetStepAssignment(&'a SetStepAssignment),
+    GateDecision(&'a GatePayload),
+    PasskeyRevocation(&'a PasskeyRevocation),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,8 +121,10 @@ pub enum Verdict<'a> {
     Execute(ExecuteKind<'a>),
     Refuse(RefusalReason),
     Drop(DropReason),
-    /// Not consumed and not answered, so a redelivery reaches the handler
-    /// that owns the kind instead of reading as a replay.
+    /// Not consumed and not answered, so a redelivery is judged afresh
+    /// instead of reading as a replay. Never a kind's verdict: neither
+    /// [`precheck`] nor [`decide`] returns it. The caller does, for a request
+    /// whose judging could not read what it needs from storage.
     Defer,
 }
 
@@ -135,7 +145,9 @@ pub enum Precheck {
 /// `now_secs >= expires_at`, the bound the Hub's `delivery_verdict` applies
 /// before it sends, checked here against this instance's clock.
 ///
-/// `scopes` is [`effective_scopes`], not the pinned set.
+/// `scopes` is [`effective_scopes`], not the pinned set. A gate decision
+/// with `gates` off is refused here, before its assertion is looked at.
+/// Every kind that passes these is consumed; nothing here defers.
 pub fn precheck(
     request: &SignedRequest,
     signature: SignatureCheck,
@@ -156,14 +168,7 @@ pub fn precheck(
     if now_secs >= request.expires_at {
         return Precheck::Settled(Verdict::Refuse(RefusalReason::Expired));
     }
-    match &request.payload {
-        RequestPayload::StartFeature(_)
-        | RequestPayload::CancelFeature(_)
-        | RequestPayload::SetStepAssignment(_) => Precheck::Consume,
-        RequestPayload::GateDecision(_)
-        | RequestPayload::PasskeyEndorsement(_)
-        | RequestPayload::PasskeyRevocation(_) => Precheck::Settled(Verdict::Defer),
-    }
+    Precheck::Consume
 }
 
 /// Replay, then the kind-specific spend check, for a request [`precheck`]
@@ -202,9 +207,13 @@ pub fn decide<'a>(
         RequestPayload::SetStepAssignment(change) => {
             Verdict::Execute(ExecuteKind::SetStepAssignment(change))
         }
-        RequestPayload::GateDecision(_)
-        | RequestPayload::PasskeyEndorsement(_)
-        | RequestPayload::PasskeyRevocation(_) => Verdict::Defer,
+        RequestPayload::GateDecision(gate) => Verdict::Execute(ExecuteKind::GateDecision(gate)),
+        // Refused, assertion unread, until a Hub producer and a desktop-side
+        // confirmation or trusted-set view exist (docs/HUB.md §11 item 20).
+        RequestPayload::PasskeyEndorsement(_) => Verdict::Refuse(RefusalReason::UnknownKind),
+        RequestPayload::PasskeyRevocation(revocation) => {
+            Verdict::Execute(ExecuteKind::PasskeyRevocation(revocation))
+        }
     }
 }
 

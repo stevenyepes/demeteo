@@ -242,7 +242,6 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
             "ceremony_id": challenge["ceremony_id"],
             "request_id": challenge["request_id"],
             "assertion": assertion,
-            "feedback": "ship it",
         });
         let answer = post_as(&base, &a.at("/gates/decision"), &a.session, &decided).await;
         assert_eq!(
@@ -267,7 +266,7 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
                 feature_id: "f-a".to_owned(),
                 step_execution_id: "e1".to_owned(),
                 decision: Decision::Approve,
-                feedback: Some("ship it".to_owned()),
+                feedback: None,
                 assertion,
             })
         );
@@ -297,6 +296,36 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
             (&read["kind"], &read["status"]),
             (&json!("gate_decision"), &json!("queued"))
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_gate_decision_naming_feedback_is_refused_without_spending_its_challenge() {
+    in_fresh_schema(|db| async move {
+        let a = Tenant::new(&db, &["gates"]).await;
+        let base = serve_state(state_over(db.clone())).await;
+        let asked = json!({"feature_id": "f-a", "step_execution_id": "e1", "decision": "cancel"});
+        let (status, challenge) =
+            post_as(&base, &a.at("/gates/challenge"), &a.session, &asked).await;
+        assert_eq!(status, 200, "{challenge}");
+        let decided = json!({
+            "ceremony_id": challenge["ceremony_id"],
+            "request_id": challenge["request_id"],
+            "assertion": a.key.assert(&rp(), &digest_in(&challenge)),
+        });
+        let mut noted = decided.clone();
+        noted["feedback"] = json!("leave the migrations alone");
+
+        let refused = post_as(&base, &a.at("/gates/decision"), &a.session, &noted).await;
+        assert_eq!(refused, (400, json!({"error": "invalid_request"})));
+        assert_eq!(request_rows(&db).await, 0);
+
+        let (status, queued) = post_as(&base, &a.at("/gates/decision"), &a.session, &decided).await;
+        assert_eq!(status, 202, "{queued}");
+        assert_eq!(queued["request_id"], challenge["request_id"]);
+        assert_eq!(request_rows(&db).await, 1);
     })
     .await;
 }

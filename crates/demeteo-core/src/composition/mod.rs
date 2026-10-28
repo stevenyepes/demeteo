@@ -361,6 +361,7 @@ pub fn build_core_context_with_policy_writer(
     let hub_policy_reader: Arc<dyn ports::hub::HubPolicyReader> = db_adapter.clone();
     let hub_policy_writer: Arc<dyn ports::hub::HubPolicyWriter> = db_adapter.clone();
     let hub_pins: Arc<dyn ports::hub::HubPinRepository> = db_adapter.clone();
+    let hub_passkeys: Arc<dyn ports::hub::HubPasskeyTrust> = db_adapter.clone();
 
     let app_version = AppVersion::default();
     let hub = match execution_mode {
@@ -458,6 +459,7 @@ pub fn build_core_context_with_policy_writer(
                 requests: ctx.hub_requests.clone(),
                 policy: ctx.hub_policy.clone(),
                 pins: hub_pins,
+                passkeys: hub_passkeys,
                 attachments: hub.attachments(),
                 now_ms: Arc::new(crate::shared::time::now_ms),
             },

@@ -226,3 +226,33 @@ fn v65_reads_existing_features_as_desktop_launches_and_keeps_their_origin() {
     assert_eq!(launched_by, None);
     assert_eq!(origin_json, origin.as_bytes());
 }
+
+/// V66 starts a passkey pinned before it at count 0: the one stored count
+/// that accepts both a synced passkey's constant 0 and a hardware key's first
+/// count, so no existing pin is locked out.
+#[test]
+fn v66_starts_every_already_pinned_passkey_at_count_zero() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migration::migrations::runner()
+        .set_target(refinery::Target::Version(65))
+        .run(&mut conn)
+        .unwrap();
+    conn.execute(
+        "INSERT INTO hub_pinned_passkeys (credential_id, public_key, pinned_at)
+         VALUES ('cred-1', 'cose-1', 0)",
+        [],
+    )
+    .unwrap();
+
+    migration::run(&mut conn).unwrap();
+
+    assert!(applied_versions(&conn).contains(&66));
+    let sign_count: i64 = conn
+        .query_row(
+            "SELECT sign_count FROM hub_pinned_passkeys WHERE credential_id = 'cred-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sign_count, 0);
+}

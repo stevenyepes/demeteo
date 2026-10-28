@@ -744,8 +744,12 @@ that could approve would let an agent approve its own work, which is the argumen
 above. A Hub gate decision is authorised by a **WebAuthn assertion** made by a
 human on an authenticator, and the desktop **verifies it itself** against passkey
 public keys it pinned. The Hub only relays it and cannot produce one, so **no token
-can approve**. If a future change would let a token do what the assertion does, it
-reopens this section; one that leaves the assertion in place does not. Mechanism:
+can approve**. That the Hub cannot produce one holds per ceremony: it serves the
+page that runs each ceremony, so one it substitutes can decide one gate the user
+did not mean ([`HUB.md` §3](HUB.md#what-a-compromised-hub-can-and-cannot-do)).
+The desktop refuses every endorsement, so a substituted ceremony cannot get a key
+the Hub holds trusted ([`HUB.md` §11 item 20](HUB.md#11-what-is-not-decided)). If a future change would let a
+token do what the assertion does, it reopens this section; one that leaves the assertion in place does not. Mechanism:
 [`HUB.md` §8](HUB.md#8-gate-decisions); decision:
 [decision 65](DECISIONS.md#65--hub-gate-decisions-detail).
 

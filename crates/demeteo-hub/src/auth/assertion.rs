@@ -1,12 +1,21 @@
-//! Verifies a WebAuthn assertion over a challenge the caller chose: steps 3–5
-//! of "What the desktop verifies" in `docs/HUB.md` §8, in that order. An
-//! instance runs those same steps before it changes its pinned set, and
-//! [`super`] says why the Hub may not accept an assertion an instance would
-//! refuse.
+//! Verifies a WebAuthn assertion over a challenge the caller chose. Of the
+//! checks under "What the desktop verifies" in `docs/HUB.md` §8 it shares the
+//! COSE key, the signature, the `clientDataJSON` type and challenge, the
+//! origin, the RP ID hash, and the user-present and user-verified flags. An
+//! instance runs those before it changes its pinned set, and [`super`] says
+//! why the Hub may not accept an assertion an instance would refuse.
 //!
-//! Step 2, finding the key the assertion claims to be made under, is the
+//! An instance's other checks are not here. No field is bounded before it is
+//! decoded. Finding the key the assertion claims to be made under is the
 //! caller's: [`verify`] is handed that key and never reads
-//! `assertion.credential_id`.
+//! `assertion.credential_id`. No counter is compared, where an instance
+//! refuses a count that does not advance for its own pinned set.
+//!
+//! The shared checks run in another order and accept less. This decodes the
+//! fields and checks the type and challenge first (`shaped`), then the origin,
+//! the RP ID hash and the flags, then the COSE key, and the signature last; an
+//! instance verifies the signature before it parses `clientDataJSON`. This
+//! accepts an ES256 key only, where an instance also accepts Ed25519.
 
 use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1};
 use demeteo_hub_protocol::WebAuthnAssertion;

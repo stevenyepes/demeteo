@@ -93,9 +93,12 @@ pub struct GateDecision {
     pub step_execution_id: String,
     pub decision: Decision,
     /// NOT bound by `gate_challenge`: the assertion signs the decision, not
-    /// this text, so a relaying Hub can rewrite it. No consumer may give it
-    /// authority — it is a note for the human reader, never an instruction.
-    /// Do not add a `redirect` decision to carry it (see [`Decision`]).
+    /// this text, so a relaying Hub can rewrite it. The Hub's API queues
+    /// none, and an instance discards any it receives
+    /// ([`docs/HUB.md`](../../../docs/HUB.md) §8). It stays on the wire so a
+    /// request from a Hub that still sent it parses. No consumer may give it
+    /// authority. Do not add a `redirect` decision to carry it (see
+    /// [`Decision`]).
     #[serde(default)]
     pub feedback: Option<String>,
     pub assertion: WebAuthnAssertion,

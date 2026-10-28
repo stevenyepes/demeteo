@@ -101,6 +101,14 @@ const ASSERTION = {
   },
 };
 
+/** `ASSERTION` as `getGateAssertion` encodes it. */
+const ASSERTION_FIELDS = {
+  credential_id: '-_8',
+  authenticator_data: 'BAUGBw',
+  client_data_json: 'AQID',
+  signature: 'CA',
+};
+
 const ticket = { status: 202, body: { request_id: REQUEST_ID, expires_at: EXPIRES_AT } };
 
 function renderPanel(overrides: Partial<ComponentProps<typeof GatePanel>> = {}) {
@@ -168,24 +176,10 @@ describe('GatePanel', () => {
         step_execution_id: STEP_EXECUTION_ID,
         decision,
       });
+      expect(sent[1]?.body).toStrictEqual({ ceremony_id: 'cer-9', request_id: REQUEST_ID, assertion: ASSERTION_FIELDS });
       expect(onDecided.mock.calls).toEqual([[DECIDED]]);
     },
   );
-
-  it('sends typed feedback with the decision', async () => {
-    const { sent } = stubHub({
-      [`POST ${CHALLENGE_PATH}`]: [challenge],
-      [`POST ${DECISION_PATH}`]: [ticket],
-    });
-    stubWebAuthn();
-    renderPanel();
-
-    fireEvent.change(screen.getByLabelText(/feedback/i), { target: { value: 'wrong branch' } });
-    fireEvent.click(button('Cancel'));
-    await advance(0);
-
-    expect(sent[1]?.body).toMatchObject({ feedback: 'wrong branch' });
-  });
 
   it('reads no request status itself: the gate leaves the mirror before the instance answers', async () => {
     stubHub({
@@ -234,12 +228,14 @@ describe('GatePanel', () => {
     expect(redirect).toHaveAccessibleDescription(/not available from the Hub yet/i);
   });
 
-  it('says every decision asks for the passkey, and that feedback is unsigned', () => {
+  it('says every decision asks for the passkey, and offers no feedback the instance would discard', () => {
     stubHub({});
     renderPanel();
 
     expect(screen.getByText(/every gate decision asks for your passkey/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/feedback/i)).toHaveAccessibleDescription(/not covered by the passkey signature/i);
+    expect(screen.queryByLabelText(/feedback/i)).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByText(/feedback can only be given on the desktop/i)).toBeInTheDocument();
   });
 
   it('disables every button while the ceremony is in flight, so a double click spends one challenge', async () => {

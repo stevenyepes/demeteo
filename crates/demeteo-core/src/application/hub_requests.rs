@@ -2,14 +2,20 @@
 //! socket: the I/O half of [`crate::domain::hub_request`], which decides.
 //!
 //! A start is launched by the call the desktop's own launch button makes,
-//! [`launch_run`] with [`RunPlacement::Local`], so a Hub-started run is the
-//! same run wherever it executes. Nothing here asks which transport carries
-//! it. The MCP surface's start is not used either: it drops the run shape a
-//! Hub request carries.
+//! [`launch_run`](crate::application::launch::launch_run) with
+//! [`RunPlacement::Local`](crate::domain::run_placement::RunPlacement::Local),
+//! so a Hub-started run is the same run wherever it executes. Nothing here
+//! asks which transport carries it. The MCP surface's start is not used
+//! either: it drops the run shape a Hub request carries.
 //!
 //! Cancel and step assignment are likewise the desktop's own calls: the
 //! feature cancel its stop button makes, resolved to whoever owns the run,
-//! and [`step_control::set_step_assignment`], decision 54's resolver.
+//! and [`step_control::set_step_assignment`], decision 54's resolver. A gate
+//! decision is the presenter's `gate_decide`, the desktop's own `gate_decide`
+//! command, made once its passkey assertion has verified. A revocation has no
+//! desktop counterpart: its only effect is the trusted set's own write. An
+//! endorsement has none at all, since
+//! [`decide`](crate::domain::hub_request::decide) refuses it.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,46 +23,30 @@ use std::time::Duration;
 use async_trait::async_trait;
 use demeteo_hub_protocol::{
     RefusalReason, RequestHeader, RequestOutcome, RequestPayload, RequestResult, SetStepAssignment,
-    SignedRequest, StartFeature, PROTOCOL_VERSION,
+    SignedRequest, PROTOCOL_VERSION,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
-use crate::adapters::step_executor::setup::slug_from_description;
-use crate::application::attachments::{
-    StagedAttachmentInput, MAX_AGENT_ATTACHMENT_BATCH_BYTES, MAX_ATTACHMENTS_PER_FEATURE,
-    MAX_ATTACHMENT_BYTES,
-};
-use crate::application::launch::{launch_run, LaunchRequest};
 use crate::application::remote_runs::{cancel_remote_run, find_mirror_for_feature};
 use crate::application::step_control;
-use crate::domain::attachment::{sniff_attachment_mime, sniffed_source_filename};
-use crate::domain::feature_origin::FeatureOrigin;
-use crate::domain::hub_request::log::{launch_failure_reason, parse_scope};
+use crate::domain::hub_request::log::parse_scope;
 use crate::domain::hub_request::{
-    attachment_refusal, decide, effective_scopes, effort_level, latest_execution, precheck,
-    reassignment_refusal, required_scope, start_refusal, step_assignment, step_override,
-    unparsed_refusal, verify_signature, AttachmentLimits, DropReason, ExecuteKind,
+    decide, effective_scopes, latest_execution, precheck, reassignment_refusal, required_scope,
+    step_assignment, unparsed_refusal, verify_signature, DropReason, ExecuteKind,
     HubRequestLogEntry, LogKind, LogOutcome, Precheck, Verdict, MAX_REQUEST_ID_LEN,
 };
-use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
-use crate::domain::models::LaunchedBy;
-use crate::domain::run_placement::{DetachedOptions, RunPlacement};
+use crate::domain::ids::FeatureId;
 use crate::error::AppError;
 use crate::ports::hub::{
-    AttachmentFetchError, HubAttachmentFetcher, HubPinRepository, HubPolicyReader,
-    HubRequestHandler, HubRequestRepository,
+    HubAttachmentFetcher, HubPasskeyTrust, HubPinRepository, HubPolicyReader, HubRequestHandler,
+    HubRequestRepository,
 };
-use crate::ports::step_executor::FeatureLaunch;
-use crate::shared::secret_scrub::scrub_secrets;
 use crate::state::AppContext;
 
-const DAY_MS: u64 = 86_400_000;
+mod start;
+mod trust;
 
-const ATTACHMENT_LIMITS: AttachmentLimits = AttachmentLimits {
-    max_count: MAX_ATTACHMENTS_PER_FEATURE,
-    max_bytes: MAX_ATTACHMENT_BYTES,
-    max_total_bytes: MAX_AGENT_ATTACHMENT_BATCH_BYTES,
-};
+const DAY_MS: u64 = 86_400_000;
 
 /// How long one start's attachment fetches may take together, however many
 /// it names. A start holds [`HubRequests`]' turn through them, so this — not
@@ -75,6 +65,7 @@ pub struct HubRequestPorts {
     pub requests: Arc<dyn HubRequestRepository>,
     pub policy: Arc<dyn HubPolicyReader>,
     pub pins: Arc<dyn HubPinRepository>,
+    pub passkeys: Arc<dyn HubPasskeyTrust>,
     pub attachments: Arc<dyn HubAttachmentFetcher>,
     pub now_ms: Clock,
 }
@@ -91,6 +82,11 @@ pub struct HubRequests {
     /// because this handler is bound once per process and outlives every
     /// connection — a re-paired socket shares it.
     turn: Mutex<()>,
+    /// Serialises a request a passkey signed from loading the trusted set
+    /// through the counter or set write its verified assertion commits, so
+    /// each is judged against the set the one before it left (docs/HUB.md
+    /// §8). Never held across `gate_decide`, which can spawn a driver.
+    trust: Mutex<()>,
     fetch_deadline: Duration,
 }
 
@@ -148,51 +144,6 @@ fn refusal_str(reason: RefusalReason) -> Option<String> {
         .and_then(|v| v.as_str().map(str::to_owned))
 }
 
-/// The forms a launch error can quote the start's text in besides verbatim:
-/// the branch slug, as the executor derives it. A text with nothing to slug
-/// gets the `"feature"` fallback, which is not the request's and is left
-/// alone, or every `demeteo/features/…` branch in a detail would be cut.
-fn withheld_slugs(start: &StartFeature) -> Vec<String> {
-    [&start.title, &start.description]
-        .into_iter()
-        .map(|text| slug_from_description(text))
-        .filter(|slug| slug != "feature")
-        .collect()
-}
-
-/// The run a start asks for. `source_path` stays empty: a path named by the
-/// Hub would be a path on this disk the Hub chose, so attachments arrive as
-/// the bytes fetched for them and the type sniffed from those bytes: with no
-/// type, the bootstrap's commit resolves `application/octet-stream` and fails.
-fn feature_launch(
-    start: &StartFeature,
-    attachments: Vec<(Vec<u8>, &'static str)>,
-) -> FeatureLaunch {
-    FeatureLaunch {
-        project_id: start.project_id.clone(),
-        workflow_id: start.workflow_id.clone(),
-        title: start.title.clone(),
-        description: start.description.clone(),
-        agent_kind: start.agent_kind.clone(),
-        model: start.model.clone(),
-        effort: start.effort.map(effort_level),
-        max_budget_usd: start.max_budget_cents.map(|cents| cents as f64 / 100.0),
-        step_overrides: start.step_overrides.iter().map(step_override).collect(),
-        staged_attachments: attachments
-            .into_iter()
-            .map(|(bytes, mime)| StagedAttachmentInput {
-                source_path: String::new(),
-                mime: Some(mime.to_owned()),
-                source_filename: sniffed_source_filename(mime, &bytes),
-                bytes: Some(bytes),
-            })
-            .collect(),
-        origin: FeatureOrigin::default(),
-        launched_by: LaunchedBy::Hub,
-        ..FeatureLaunch::default()
-    }
-}
-
 /// Stop a run the way the desktop's own cancel does, sent to whoever owns
 /// it as [`step_control`] sends a step: a run a `demeteo-runner` owns is
 /// refused by the local executor, so it is cancelled on the runner.
@@ -213,6 +164,7 @@ impl HubRequests {
             ctx,
             ports,
             turn: Mutex::new(()),
+            trust: Mutex::new(()),
             fetch_deadline: START_FETCH_DEADLINE,
         }
     }
@@ -252,7 +204,12 @@ impl HubRequests {
         )
     }
 
-    async fn judged(&self, request: &SignedRequest, now_ms: u64) -> Settled {
+    async fn judged(
+        &self,
+        request: &SignedRequest,
+        now_ms: u64,
+        trust: Option<MutexGuard<'_, ()>>,
+    ) -> Settled {
         let now_secs = now_ms / 1000;
         let pins = match self.ports.pins.load() {
             Ok(Some(pins)) => pins,
@@ -276,7 +233,7 @@ impl HubRequests {
             Precheck::Settled(verdict) => return Settled::verdict(verdict),
             Precheck::Consume => {}
         }
-        // Before `try_consume`: a start this cannot judge is deferred, and a
+        // Before `try_consume`: a request this cannot judge is deferred, and a
         // deferred id has to stay unspent or its redelivery reads `replayed`.
         let committed = match &request.payload {
             RequestPayload::StartFeature(_) => match self.committed_cents(now_ms) {
@@ -287,6 +244,13 @@ impl HubRequests {
                 }
             },
             _ => None,
+        };
+        let record = match self.trust_record(&request.payload) {
+            Ok(record) => record,
+            Err(e) => {
+                tracing::warn!(error = %e, "Hub request deferred: the trusted passkeys or the gate did not load");
+                return Settled::verdict(Verdict::Defer);
+            }
         };
         let consumption = match self.ports.requests.try_consume(
             &request.request_id,
@@ -311,7 +275,15 @@ impl HubRequests {
                 self.cancel(&cancel.feature_id).await
             }
             Verdict::Execute(ExecuteKind::SetStepAssignment(change)) => self.assign(change).await,
-            other => Settled::verdict(other),
+            Verdict::Execute(ExecuteKind::GateDecision(gate)) => {
+                self.gate(request, gate, &pins, record, trust).await
+            }
+            Verdict::Execute(ExecuteKind::PasskeyRevocation(revocation)) => {
+                self.revoke(request, revocation, &pins, &record, trust)
+            }
+            verdict @ (Verdict::Refuse(_) | Verdict::Drop(_) | Verdict::Defer) => {
+                Settled::verdict(verdict)
+            }
         }
     }
 
@@ -383,103 +355,6 @@ impl HubRequests {
         }
     }
 
-    /// Every check that could refuse has passed and the id is spent, so a
-    /// failure from here on is answered rather than left for a redelivery
-    /// that would read as `Replayed`. `RefusalReason` has no generic failure,
-    /// so one that is not a lookup or an attachment is `MalformedBody`, with
-    /// the detail kept to this desktop's own log.
-    async fn start(&self, start: &StartFeature) -> Settled {
-        match self
-            .ctx
-            .projects
-            .get_project(&ProjectId::from(start.project_id.clone()))
-        {
-            Ok(Some(_)) => {}
-            Ok(None) => return Settled::refused(RefusalReason::UnknownProject),
-            Err(e) => {
-                tracing::warn!(error = %e, "Hub start refused: the project lookup failed");
-                return Settled::refused(RefusalReason::MalformedBody);
-            }
-        }
-        match self
-            .ctx
-            .workflows
-            .get(&WorkflowId::from(start.workflow_id.clone()))
-        {
-            Ok(Some(_)) => {}
-            Ok(None) => return Settled::refused(RefusalReason::UnknownWorkflow),
-            Err(e) => {
-                tracing::warn!(error = %e, "Hub start refused: the workflow lookup failed");
-                return Settled::refused(RefusalReason::MalformedBody);
-            }
-        }
-        if let Some(reason) = start_refusal(start, &self.registered()) {
-            return Settled::refused(reason);
-        }
-        if let Some(reason) = attachment_refusal(&start.attachments, ATTACHMENT_LIMITS) {
-            return Settled::refused(reason);
-        }
-        let fetched = match tokio::time::timeout(self.fetch_deadline, self.fetch_all(start)).await {
-            Ok(Ok(fetched)) => fetched,
-            Ok(Err(e)) => {
-                if e != AttachmentFetchError::Mismatch {
-                    tracing::warn!(error = %e, "Hub start refused: an attachment did not arrive");
-                }
-                return Settled::refused(RefusalReason::AttachmentMismatch);
-            }
-            Err(_) => {
-                tracing::warn!("Hub start refused: its attachments overran the fetch deadline");
-                return Settled::refused(RefusalReason::AttachmentMismatch);
-            }
-        };
-        // Refused here, not left to the bootstrap: the Hub has already deleted
-        // the bytes, so an accept would be a run that fails before its first
-        // step with nothing left to retry from.
-        let mut typed = Vec::with_capacity(fetched.len());
-        for bytes in fetched {
-            match sniff_attachment_mime(&bytes) {
-                Some(mime) => typed.push((bytes, mime)),
-                None => return Settled::refused(RefusalReason::AttachmentMismatch),
-            }
-        }
-        // A local run has no wall-clock cap to give it: `check_options`
-        // refuses one for `RunPlacement::Local`, so it is not passed on.
-        let note = start
-            .max_wall_clock_secs
-            .map(|_| "max_wall_clock_secs ignored".to_owned());
-        let launched = launch_run(
-            &self.ctx,
-            LaunchRequest {
-                launch: feature_launch(start, typed),
-                placement: RunPlacement::Local,
-                detached: DetachedOptions::default(),
-            },
-        )
-        .await;
-        match launched {
-            Ok(run) => Settled::accepted(Some(run.feature.id.to_string()), note),
-            Err(e) => {
-                tracing::warn!(error = %e, "Hub start refused: the launch failed");
-                let detail = scrub_secrets(&e.to_string()).into_owned();
-                let slugs = withheld_slugs(start);
-                let mut withheld = vec![start.title.as_str(), start.description.as_str()];
-                withheld.extend(slugs.iter().map(String::as_str));
-                Settled {
-                    reason: Some(launch_failure_reason(&detail, &withheld)),
-                    ..Settled::refused(RefusalReason::MalformedBody)
-                }
-            }
-        }
-    }
-
-    async fn fetch_all(&self, start: &StartFeature) -> Result<Vec<Vec<u8>>, AttachmentFetchError> {
-        let mut fetched = Vec::with_capacity(start.attachments.len());
-        for attachment in &start.attachments {
-            fetched.push(self.ports.attachments.fetch(attachment).await?);
-        }
-        Ok(fetched)
-    }
-
     fn finish(
         &self,
         request_id: &str,
@@ -528,7 +403,16 @@ impl HubRequestHandler for HubRequests {
             RequestPayload::StartFeature(_) => Some(self.turn.lock().await),
             _ => None,
         };
-        let settled = self.judged(&request, now_ms).await;
+        let trust = match request.payload {
+            RequestPayload::GateDecision(_) | RequestPayload::PasskeyRevocation(_) => {
+                Some(self.trust.lock().await)
+            }
+            RequestPayload::StartFeature(_)
+            | RequestPayload::CancelFeature(_)
+            | RequestPayload::SetStepAssignment(_)
+            | RequestPayload::PasskeyEndorsement(_) => None,
+        };
+        let settled = self.judged(&request, now_ms, trust).await;
         self.finish(
             &request.request_id,
             LogKind::of(&request.payload),

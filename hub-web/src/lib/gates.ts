@@ -11,8 +11,6 @@ export type GateDecisionInput = {
   featureId: string;
   stepExecutionId: string;
   decision: GateDecision;
-  /** Not covered by the passkey signature: the instance receives it as an unbound note. */
-  feedback?: string;
 };
 
 type WireGateChallenge = {
@@ -46,12 +44,11 @@ export async function decideGate(input: GateDecisionInput): Promise<RequestTicke
     isWireGateChallenge,
   );
   const assertion = await getGateAssertion(challenge.public_key);
-  const body: { ceremony_id: string; request_id: string; assertion: AssertionFields; feedback?: string } = {
+  const body: { ceremony_id: string; request_id: string; assertion: AssertionFields } = {
     ceremony_id: challenge.ceremony_id,
     request_id: challenge.request_id,
     assertion,
   };
-  if (input.feedback !== undefined && input.feedback.trim() !== '') body.feedback = input.feedback;
   return requestTicketOf(await postInSession(`${gates}/decision`, body, isWireRequestTicket));
 }
 

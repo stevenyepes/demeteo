@@ -7,4 +7,5 @@
 
 pub mod notification_capture;
 pub mod preflight_strategy;
+pub mod soft_passkey;
 pub use crate::test_dir;
