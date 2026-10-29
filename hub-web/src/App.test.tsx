@@ -118,7 +118,7 @@ describe('App shell, signed in', () => {
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveAccessibleName(heading);
     expect(headings[0]).toHaveClass('font-heading');
-    expect(headings[0].closest('.glass-panel')).not.toBeNull();
+    expect(headings[0].closest('.panel')).not.toBeNull();
   });
 
   it.each(ROUTES)('$hash marks $activeHref as the current nav link', async ({ hash, activeHref }) => {

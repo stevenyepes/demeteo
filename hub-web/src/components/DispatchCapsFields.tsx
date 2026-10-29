@@ -35,7 +35,7 @@ export function DispatchCapsFields({
           <label htmlFor={costId} className="text-xs font-medium text-slate-300">
             Max cost (USD)
           </label>
-          <span aria-hidden="true" className="text-xs text-violet-300">
+          <span aria-hidden="true" className="text-xs text-accent-ink">
             required
           </span>
         </div>

@@ -379,6 +379,7 @@ mod tests {
         let gate = DomainEvent::GateRequired {
             feature_id: feature(),
             step_execution_id: StepExecutionId::new("se-1"),
+            step_id: "s-gate".into(),
         };
         let mr = DomainEvent::MrMerged {
             feature_id: feature(),

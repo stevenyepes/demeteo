@@ -59,6 +59,11 @@ pub fn hub_event(row: &run_events::RunEvent) -> Option<RunEvent> {
             kind,
             RunEventPayload {
                 step_execution_id: Some(id("step_execution_id")?),
+                // Rows written before `gate_required` carried it have none;
+                // the Hub still lists such a gate, only without a node.
+                step_id: (kind == RunEventKind::GatePending)
+                    .then(|| id("step_id"))
+                    .flatten(),
                 ..RunEventPayload::default()
             },
         ),
@@ -80,7 +85,10 @@ fn text<'a>(payload: &'a Value, field: &str) -> Option<&'a str> {
 fn feature_kind(status: &str) -> Option<RunEventKind> {
     match status {
         "running" => Some(RunEventKind::FeatureStarted),
-        "completed" => Some(RunEventKind::FeatureCompleted),
+        // The run ended well and only the PR is left to open (see
+        // `auto_publish_pr`): the Hub has no kind for "finished, unpublished",
+        // and dropping the row would leave the run `running` there for good.
+        "completed" | "awaiting_mr" => Some(RunEventKind::FeatureCompleted),
         "failed" => Some(RunEventKind::FeatureFailed),
         "cancelled" => Some(RunEventKind::FeatureCancelled),
         _ => None,

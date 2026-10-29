@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { AlertTriangle, Cloud, KeyRound, Link2, RotateCw } from 'lucide-react';
 import type { HubConnection, HubConnectionState, HubMachine, HubStatus } from '../../lib/hub';
+import { Button } from '../ui/Button';
 import { formatEventNumber, stopReasonCopy, syncStateLabel } from '../../lib/hubPresentation';
 
 const STATE_LABELS: Readonly<Record<HubConnectionState, string>> = {
@@ -16,8 +17,9 @@ function statusDotClass(state: HubConnectionState | undefined): string {
     case 'connected':
       return 'w-2 h-2 rounded-full shrink-0 bg-emerald-400 animate-pulse';
     case 'connecting':
+      return 'w-2 h-2 rounded-full shrink-0 bg-cyan-400';
     case 'reconnecting':
-      return 'w-2 h-2 rounded-full shrink-0 bg-amber-400 animate-pulse';
+      return 'w-2 h-2 rounded-full shrink-0 bg-slate-400';
     case 'stopped':
       return 'w-2 h-2 rounded-full shrink-0 bg-ruby-400';
     default:
@@ -41,9 +43,9 @@ export function HubConnectionCard({
   onPair,
 }: HubConnectionCardProps) {
   return (
-    <div className="glass-panel p-6 rounded-xl space-y-4">
-      <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-        <Cloud className="w-4 h-4 text-violet-400" /> Hub connection
+    <div className="panel p-6 space-y-4">
+      <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+        <Cloud className="w-4 h-4 text-slate-400" /> Hub connection
       </h3>
       <p className="text-xs text-slate-400 leading-relaxed">
         Report this machine to a Demeteo Hub and let it ask for runs. What it may do is decided
@@ -55,15 +57,10 @@ export function HubConnectionCard({
         <PairedDetails status={status} connection={connection} machine={machine} />
       )}
       {status.state === 'incomplete' && status.hub_url && (
-        <button
-          type="button"
-          onClick={() => status.hub_url && onPair(status.hub_url)}
-          disabled={pairing}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-violet-500/10 border border-violet-500/30 text-violet-300 hover:bg-violet-500/20 transition-all disabled:opacity-50"
-        >
+        <Button variant="secondary" onClick={() => status.hub_url && onPair(status.hub_url)} disabled={pairing}>
           {pairing ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
           {pairing ? 'Waiting for the Hub…' : 'Pair again'}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -93,14 +90,10 @@ function PairForm({ pairing, onPair }: { pairing: boolean; onPair: (hubUrl: stri
           disabled={pairing}
           className="flex-1 bg-black/40 border border-slate-700/60 rounded-lg py-2 px-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600 disabled:opacity-50"
         />
-        <button
-          type="submit"
-          disabled={pairing || trimmed === ''}
-          className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-violet-500/10 border border-violet-500/30 text-violet-300 hover:bg-violet-500/20 transition-all disabled:opacity-50"
-        >
+        <Button type="submit" variant="primary" disabled={pairing || trimmed === ''} className="shrink-0">
           {pairing ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
           {pairing ? 'Waiting for the Hub…' : 'Pair'}
-        </button>
+        </Button>
       </div>
       {pairing && (
         <p className="text-xs text-slate-500">
@@ -128,7 +121,7 @@ function PairedDetails({
   return (
     <div className="space-y-3">
       <div className="nested-card p-4 space-y-2">
-        <p className="font-mono text-sm text-violet-400 break-all">{status.hub_url}</p>
+        <p className="font-mono text-sm text-slate-200 break-all">{status.hub_url}</p>
         <div className="flex items-center gap-2" role="status">
           <span data-testid="hub-status-dot" className={statusDotClass(connection?.state)} />
           <span className="text-xs text-slate-300">
@@ -143,7 +136,7 @@ function PairedDetails({
       </div>
 
       <div className="nested-card p-4 space-y-1">
-        <p className="text-[11px] text-slate-500 uppercase tracking-wider">
+        <p className="text-[11px] text-slate-500">
           This machine, as the Hub sees it
         </p>
         {machine ? (
@@ -167,7 +160,7 @@ function PairedDetails({
         <div className="flex items-start gap-2">
           <KeyRound className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
           <div className="min-w-0 space-y-1">
-            <p className="text-[11px] text-slate-500 uppercase tracking-wider">Device key</p>
+            <p className="text-[11px] text-slate-500">Device key</p>
             <p className="font-mono text-xs text-slate-300 break-all">
               {status.fingerprint ?? '—'}
             </p>

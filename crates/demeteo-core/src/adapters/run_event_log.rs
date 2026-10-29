@@ -26,7 +26,7 @@
 //! | `retry_exhausted`    | `step_id`, `target_id`, `attempt`, `max`, `reason` | user-facing alarm when a redirect budget is spent |
 //! | `env_not_ready`      | `step_id`, `reason` | harness triage verdict: the machine, not the code, is broken (C6) |
 //! | `agent_commits_folded` | `step_id`, `task_id`, `commits` (`sha`, `author`, `subject`), `note` | the agent committed itself; Demeteo folded it into its own commit |
-//! | `gate_required`      | `step_execution_id` | a gate is waiting on a human |
+//! | `gate_required`      | `step_execution_id`, `step_id` | a gate is waiting on a human |
 //! | `gate_held_by_review` | `step_execution_id`, `reason` | written just before `gate_required` when `clean` gate autonomy would have approved the gate and its review did not allow it; `reason` is shown to the person deciding |
 //! | `gate_decided`       | `step_execution_id`, `decision`, `feedback` | the human's answer (`approve`/`reject`/`redirect`) |
 //! | `gate_auto_approved` | `step_execution_id`, `decision`, `feedback` | the project's gate autonomy approved the gate; nobody was asked |
@@ -208,10 +208,14 @@ pub fn run_event_record(event: &DomainEvent) -> Option<RunEventRecord> {
         DomainEvent::GateRequired {
             feature_id,
             step_execution_id,
+            step_id,
         } => RunEventRecord {
             feature_id: feature_id.0.clone(),
             kind: "gate_required",
-            payload: serde_json::json!({ "step_execution_id": step_execution_id.as_str() }),
+            payload: serde_json::json!({
+                "step_execution_id": step_execution_id.as_str(),
+                "step_id": step_id,
+            }),
         },
         DomainEvent::GateHeldByReview {
             feature_id,

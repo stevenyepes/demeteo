@@ -110,7 +110,7 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
               Device key fingerprint
             </h2>
             <p className="mt-2 font-mono text-slate-200 break-all">{prompt.fingerprint}</p>
-            <p className="mt-2 text-xs text-cyan-300">
+            <p className="mt-2 text-xs text-slate-300">
               Check that this matches the fingerprint Demeteo shows on the machine. If it does not,
               choose Deny.
             </p>
@@ -148,7 +148,7 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
                   onChange={(event) => toggle(scope, event.target.checked)}
                   disabled={!answerable}
                   aria-describedby={`${id}-${scope}-allows`}
-                  className="mt-0.5 accent-violet-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="mt-0.5 accent-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
                 />
                 <div className="flex flex-col gap-0.5">
                   <label htmlFor={`${id}-${scope}`} className="font-mono text-slate-200">
@@ -192,7 +192,7 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
       {failure && (
         <div className="mt-4 max-w-xl">
           <CeremonyError error={failure.error} />
-          {spentHint !== null && <p className="mt-3 text-xs text-cyan-300">{spentHint}</p>}
+          {spentHint !== null && <p className="mt-3 text-xs text-slate-300">{spentHint}</p>}
         </div>
       )}
     </PlaceholderCard>

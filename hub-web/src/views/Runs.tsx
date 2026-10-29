@@ -91,7 +91,7 @@ function Loaded({ runs, filter, onFilter }: LoadedProps) {
             onClick={() => onFilter(option)}
             className={`rounded-lg border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 ${
               option === filter
-                ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                ? 'border-accent-edge bg-accent-tint text-white'
                 : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-cyan-300'
             }`}
           >

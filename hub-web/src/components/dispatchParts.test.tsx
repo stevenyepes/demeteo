@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { TONE_CHIP } from '../../../src/lib/runStatus';
 import type { FleetInstance } from '../lib/fleet';
 import { AttachmentPicker } from './AttachmentPicker';
 import { DispatchCapsFields } from './DispatchCapsFields';
@@ -269,7 +270,7 @@ describe('RequestStatusCard', () => {
     await elapse(2_000);
 
     const card = screen.getByRole('status');
-    expect(card).toHaveClass('text-ruby-300', 'border-ruby-500/30', 'bg-ruby-500/10');
+    expect(card).toHaveClass(TONE_CHIP.ruby);
     expect(card).toHaveTextContent(/Refused/);
     expect(screen.getByText("The max cost is above this instance's per-run ceiling.")).toBeVisible();
     expect(screen.getByText('over_run_ceiling')).toHaveClass('font-mono');
@@ -319,7 +320,7 @@ describe('RequestStatusCard', () => {
     await elapse(1);
     expect(screen.getByRole('status')).toHaveTextContent(/Delivered/);
     await elapse(8_000);
-    expect(screen.getByRole('status')).toHaveClass('text-emerald-300');
+    expect(screen.getByRole('status')).toHaveClass(TONE_CHIP.emerald);
 
     await elapse(60_000);
     expect(asked).toHaveLength(3);

@@ -38,10 +38,17 @@ export function HubCeilingsCard({ policy, saving, onSave }: HubCeilingsCardProps
   });
   const [errors, setErrors] = useState<Errors>(NO_ERRORS);
 
+  // One effect per ceiling: a stored value changing resets its own draft only,
+  // so a draft on the other field survives a save landing for this one.
   useEffect(() => {
-    setDrafts({ run_ceiling_cents: ceilingInputValue(run), daily_ceiling_cents: ceilingInputValue(daily) });
-    setErrors(NO_ERRORS);
-  }, [run, daily]);
+    setDrafts((current) => ({ ...current, run_ceiling_cents: ceilingInputValue(run) }));
+    setErrors((current) => ({ ...current, run_ceiling_cents: null }));
+  }, [run]);
+
+  useEffect(() => {
+    setDrafts((current) => ({ ...current, daily_ceiling_cents: ceilingInputValue(daily) }));
+    setErrors((current) => ({ ...current, daily_ceiling_cents: null }));
+  }, [daily]);
 
   const commit = (field: CeilingField) => {
     if (!policy || saving) return;
@@ -55,9 +62,9 @@ export function HubCeilingsCard({ policy, saving, onSave }: HubCeilingsCardProps
   };
 
   return (
-    <div className="glass-panel p-6 rounded-xl space-y-4">
-      <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-        <CircleDollarSign className="w-4 h-4 text-violet-400" /> Spending ceilings
+    <div className="panel p-6 space-y-4">
+      <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+        <CircleDollarSign className="w-4 h-4 text-slate-400" /> Spending ceilings
       </h3>
       <p className="text-xs text-slate-400 leading-relaxed">
         A Hub start over either ceiling is refused on this machine. Leave one blank and every Hub

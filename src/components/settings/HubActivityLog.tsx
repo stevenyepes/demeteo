@@ -15,9 +15,9 @@ interface HubActivityLogProps {
 
 export function HubActivityLog({ entries }: HubActivityLogProps) {
   return (
-    <div className="glass-panel p-6 rounded-xl space-y-4">
-      <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-        <Activity className="w-4 h-4 text-violet-400" /> Hub activity
+    <div className="panel p-6 space-y-4">
+      <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+        <Activity className="w-4 h-4 text-slate-400" /> Hub activity
       </h3>
       <p className="text-xs text-slate-400 leading-relaxed">
         Every request the Hub sent this desktop, newest first, and what this desktop did with it.
@@ -47,7 +47,7 @@ export function HubActivityLog({ entries }: HubActivityLogProps) {
                 )}
               </div>
               <span
-                className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-bold uppercase tracking-wider ${OUTCOME_PILL[entry.outcome]}`}
+                className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full border font-medium ${OUTCOME_PILL[entry.outcome]}`}
               >
                 {entry.outcome}
               </span>

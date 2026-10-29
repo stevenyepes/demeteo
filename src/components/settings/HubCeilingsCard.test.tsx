@@ -96,6 +96,19 @@ describe('HubCeilingsCard', () => {
     expect(run).toHaveAttribute('aria-invalid', 'true');
   });
 
+  it('keeps a draft on one ceiling when the other one is saved', async () => {
+    const onSave = vi.fn();
+    const { rerender } = render(<HubCeilingsCard policy={POLICY} saving={false} onSave={onSave} />);
+    const run = screen.getByLabelText('Per-run maximum');
+
+    await userEvent.clear(run);
+    await userEvent.type(run, 'ten');
+    rerender(<HubCeilingsCard policy={{ ...POLICY, daily_ceiling_cents: 3000 }} saving={false} onSave={onSave} />);
+
+    expect(screen.getByLabelText('Rolling 24-hour total')).toHaveValue('30.00');
+    expect(run).toHaveValue('ten');
+  });
+
   it('disables both ceilings while a policy save is pending', () => {
     const { run, daily } = setup(true);
 

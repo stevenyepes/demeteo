@@ -45,6 +45,7 @@ jobs:
       frontend: ${{ steps.decide.outputs.frontend }}
       rust: ${{ steps.decide.outputs.rust }}
       os_tests: ${{ steps.decide.outputs.os_tests }}
+      hub: ${{ steps.decide.outputs.hub }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -368,6 +369,8 @@ jobs:
   # layer cache either — a cold release build is cheaper than another entry
   # against the 10 GB cap the header describes.
   hub:
+    needs: changes
+    if: needs.changes.outputs.hub == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     defaults:

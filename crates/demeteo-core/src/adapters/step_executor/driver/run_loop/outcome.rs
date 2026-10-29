@@ -129,6 +129,7 @@ impl ExecutionDriver {
                 notif: self.notif.as_ref(),
                 waiters: &self.gate_waiters,
                 f_id: &self.f_id,
+                step_id: &step_exec.step_id,
             },
             &step_exec.id,
             self.cancel_watch.clone(),

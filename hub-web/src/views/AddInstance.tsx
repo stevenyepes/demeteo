@@ -13,18 +13,18 @@ export function AddInstance() {
       </p>
       <ol className="mt-4 space-y-3">
         <li className="nested-card flex gap-3 px-4 py-3">
-          <span aria-hidden="true" className="font-heading font-bold text-violet-400">1</span>
+          <span aria-hidden="true" className="font-heading font-bold text-accent-ink">1</span>
           <span>Open Settings › Hub in Demeteo on the desktop you want to add.</span>
         </li>
         <li className="nested-card flex gap-3 px-4 py-3">
-          <span aria-hidden="true" className="font-heading font-bold text-violet-400">2</span>
+          <span aria-hidden="true" className="font-heading font-bold text-accent-ink">2</span>
           <span>
             Enter this Hub's URL:{' '}
             <span className="font-mono text-slate-200 break-all">{window.location.origin}</span>
           </span>
         </li>
         <li className="nested-card flex gap-3 px-4 py-3">
-          <span aria-hidden="true" className="font-heading font-bold text-violet-400">3</span>
+          <span aria-hidden="true" className="font-heading font-bold text-accent-ink">3</span>
           <span>Click Connect, then compare and approve the fingerprint in the browser page that opens.</span>
         </li>
       </ol>

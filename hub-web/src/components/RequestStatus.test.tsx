@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TONE_TEXT } from '../../../src/lib/runStatus';
 import { RequestStatus } from './RequestStatus';
 
 const INSTANCE_ID = '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21';
@@ -119,10 +120,10 @@ describe('RequestStatus', () => {
   });
 
   it.each([
-    [{ status: 'queued' }, 'Queued at the Hub', 'text-cyan-300'],
-    [{ status: 'delivered' }, 'Delivered, waiting for the instance', 'text-cyan-300'],
-    [{ status: 'accepted' }, 'Accepted by the instance', 'text-emerald-300'],
-    [{ status: 'expired' }, 'Expired before the instance answered', 'text-ruby-300'],
+    [{ status: 'queued' }, 'Queued at the Hub', TONE_TEXT.cyan],
+    [{ status: 'delivered' }, 'Delivered, waiting for the instance', TONE_TEXT.cyan],
+    [{ status: 'accepted' }, 'Accepted by the instance', TONE_TEXT.emerald],
+    [{ status: 'expired' }, 'Expired before the instance answered', TONE_TEXT.ruby],
   ])('labels %o as its own status', async (reply, label, tone) => {
     stubStatus([reply]);
 

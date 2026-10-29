@@ -1770,6 +1770,34 @@ fn a_running_feature(db: &SqliteAdapter) -> Feature {
 }
 
 #[tokio::test]
+async fn disconnect_is_refused_while_a_pairing_waits_on_the_browser() {
+    let rig = Rig::new("hub_disconnect_mid_pairing", Reply::Answer);
+    let waiting = HubRedirect {
+        authorize: rig.authorize.clone(),
+        deliver: false,
+    };
+
+    let (paired, refused) = tokio::join!(
+        rig.hub.pair(HUB_URL, &waiting, Duration::from_millis(600)),
+        async {
+            while rig.authorize.lock().unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            rig.hub.disconnect().await
+        }
+    );
+
+    assert_eq!(refused, Err(HubPairingError::PairingInProgress));
+    assert_eq!(paired, Err(HubPairingError::CallbackTimeout));
+    assert!(
+        rig.secrets
+            .entries()
+            .contains_key(&rig.account(HubSecret::DeviceKey)),
+        "the refused disconnect left the device key where pair holds it"
+    );
+}
+
+#[tokio::test]
 async fn disconnect_forgets_the_hub_twice_over_and_leaves_runs_alone() {
     let rig = Rig::new("hub_disconnect", Reply::Answer);
     rig.pair(HUB_URL).await.expect("a pairing");
@@ -2464,6 +2492,7 @@ fn every_allowlisted_run_event_projects_to_its_protocol_kind() {
     let none = wire_payload(None, None);
     let step = wire_payload(Some("s-implement"), None);
     let execution = wire_payload(None, Some("se-7"));
+    let pending_gate = wire_payload(Some("s-gate"), Some("se-7"));
     let cases = [
         (
             "feature_status",
@@ -2474,6 +2503,12 @@ fn every_allowlisted_run_event_projects_to_its_protocol_kind() {
         (
             "feature_status",
             json!({"status": "completed"}).to_string(),
+            "feature_completed",
+            &none,
+        ),
+        (
+            "feature_status",
+            json!({"status": "awaiting_mr"}).to_string(),
             "feature_completed",
             &none,
         ),
@@ -2497,6 +2532,12 @@ fn every_allowlisted_run_event_projects_to_its_protocol_kind() {
             &step,
         ),
         ("step_progress", progress("failed"), "step_failed", &step),
+        (
+            "gate_required",
+            json!({"step_execution_id": "se-7", "step_id": "s-gate"}).to_string(),
+            "gate_pending",
+            &pending_gate,
+        ),
         (
             "gate_required",
             json!({"step_execution_id": "se-7"}).to_string(),

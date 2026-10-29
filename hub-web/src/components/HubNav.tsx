@@ -58,7 +58,7 @@ export function HubNav({ route, signingOut, onSignOut }: HubNavProps) {
           aria-current={name === active ? 'page' : undefined}
           className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 ${
             name === active
-              ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+              ? 'border-accent-edge bg-accent-tint text-white'
               : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-cyan-300 focus-visible:text-cyan-300'
           }`}
         >

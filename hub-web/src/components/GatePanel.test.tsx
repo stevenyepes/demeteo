@@ -137,7 +137,7 @@ function button(name: string): HTMLElement {
   return screen.getByRole('button', { name });
 }
 
-const LABELS = { approve: 'Approve', cancel: 'Cancel' } as const;
+const LABELS = { approve: 'Approve', cancel: 'Abort feature' } as const;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
@@ -257,9 +257,9 @@ describe('GatePanel', () => {
     await advance(0);
 
     expect(button('Approve')).toBeDisabled();
-    expect(button('Cancel')).toBeDisabled();
+    expect(button('Abort feature')).toBeDisabled();
     expect(button('Redirect')).toBeDisabled();
-    fireEvent.click(button('Cancel'));
+    fireEvent.click(button('Abort feature'));
     await advance(0);
     expect(credentials.get).toHaveBeenCalledTimes(1);
 
@@ -275,7 +275,7 @@ describe('GatePanel', () => {
     renderPanel({ scopes: ['read', 'spend'] });
 
     expect(button('Approve')).toBeDisabled();
-    expect(button('Cancel')).toBeDisabled();
+    expect(button('Abort feature')).toBeDisabled();
     expect(screen.getByRole('group')).toHaveAccessibleDescription(/needs the gates scope/i);
   });
 
@@ -285,7 +285,7 @@ describe('GatePanel', () => {
     const { rerender, onDecided } = renderPanel({ pending: true });
 
     expect(button('Approve')).toBeDisabled();
-    expect(button('Cancel')).toBeDisabled();
+    expect(button('Abort feature')).toBeDisabled();
     expect(screen.getByRole('group')).toHaveAccessibleDescription(/waiting for the instance/i);
     fireEvent.click(button('Approve'));
     await advance(0);
@@ -339,7 +339,7 @@ describe('GatePanel', () => {
     });
     renderPanel();
 
-    fireEvent.click(button('Cancel'));
+    fireEvent.click(button('Abort feature'));
     await advance(0);
 
     expect(screen.getByRole('alert')).toHaveTextContent(/passkey prompt was cancelled/i);

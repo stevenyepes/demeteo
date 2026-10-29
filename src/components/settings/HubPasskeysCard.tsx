@@ -2,7 +2,7 @@ import { KeySquare } from 'lucide-react';
 import type { HubPasskeyOrigin, HubTrustedPasskey } from '../../lib/hub';
 
 const ORIGIN_PILL: Readonly<Record<HubPasskeyOrigin, string>> = {
-  pinned: 'bg-violet-500/10 text-violet-300 border-violet-500/30',
+  pinned: 'bg-white/5 text-slate-300 border-slate-700/60',
   endorsed: 'bg-white/5 text-slate-300 border-slate-700/60',
 };
 
@@ -20,9 +20,9 @@ interface HubPasskeysCardProps {
 
 export function HubPasskeysCard({ passkeys }: HubPasskeysCardProps) {
   return (
-    <div className="glass-panel p-6 rounded-xl space-y-4">
-      <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-        <KeySquare className="w-4 h-4 text-violet-400" /> Trusted Hub passkeys
+    <div className="panel p-6 space-y-4">
+      <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+        <KeySquare className="w-4 h-4 text-slate-400" /> Trusted Hub passkeys
       </h3>
       <p className="text-xs text-slate-400 leading-relaxed">
         A gate decision from the Hub is accepted only when one of these passkeys signed it. The
@@ -53,7 +53,7 @@ export function HubPasskeysCard({ passkeys }: HubPasskeysCardProps) {
                 <p className="text-xs text-slate-400">{signatures(passkey.sign_count)}</p>
               </div>
               <span
-                className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-bold uppercase tracking-wider ${ORIGIN_PILL[passkey.origin]}`}
+                className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full border font-medium ${ORIGIN_PILL[passkey.origin]}`}
               >
                 {passkey.origin}
               </span>

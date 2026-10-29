@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { TONE_CHIP, type RunStatusTone } from '../../../src/lib/runStatus';
 import { HubApiError } from '../lib/api';
 import { type Enqueued, getRequestStatus, type RequestStatus, refusalSentence } from '../lib/dispatch';
 
@@ -8,11 +9,11 @@ const MAX_POLL_MS = 10_000;
 
 const TERMINAL: ReadonlySet<RequestStatus['status']> = new Set(['accepted', 'refused', 'expired']);
 
-const TONE = {
-  waiting: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
-  accepted: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  refused: 'border-ruby-500/30 bg-ruby-500/10 text-ruby-300',
-  expired: 'border-white/10 bg-black/40 text-slate-300',
+const TONE: Record<'waiting' | 'accepted' | 'refused' | 'expired', RunStatusTone> = {
+  waiting: 'cyan',
+  accepted: 'emerald',
+  refused: 'ruby',
+  expired: 'slate',
 };
 
 /**
@@ -81,7 +82,7 @@ export function RequestStatusCard({ instanceId, enqueued, present }: RequestStat
     const { error } = poll;
     const code = error instanceof HubApiError ? (error.code ?? error.message) : String(error);
     return (
-      <div role="alert" className={`rounded-lg border px-4 py-3 text-sm ${TONE.refused}`}>
+      <div role="alert" className={`rounded-lg border px-4 py-3 text-sm ${TONE_CHIP[TONE.refused]}`}>
         <p className="font-medium">The Hub stopped answering for this request's status.</p>
         <p className="font-mono text-xs break-all">{code}</p>
       </div>
@@ -135,8 +136,8 @@ function Refused({ reason }: { reason: string | null }) {
 }
 
 function toneOf(status: RequestStatus['status']): string {
-  if (status === 'accepted') return TONE.accepted;
-  if (status === 'refused') return TONE.refused;
-  if (status === 'expired') return TONE.expired;
-  return TONE.waiting;
+  if (status === 'accepted') return TONE_CHIP[TONE.accepted];
+  if (status === 'refused') return TONE_CHIP[TONE.refused];
+  if (status === 'expired') return TONE_CHIP[TONE.expired];
+  return TONE_CHIP[TONE.waiting];
 }

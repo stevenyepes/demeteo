@@ -75,6 +75,9 @@ pub struct HubPairing {
     /// Held for a whole `pair`. A tokio mutex because the guard lives across
     /// the browser wait, and `try_lock` because a second pairing is refused,
     /// not queued: it would race the first for the same keyring entries.
+    /// `disconnect` is refused by it too, for the same reason: it would
+    /// delete the device key `pair` still holds in memory, and `pair` would
+    /// go on to store a refresh token and pins naming a key no longer there.
     in_flight: tokio::sync::Mutex<()>,
     refresher: Refresher,
     socket_config: Option<SocketConfig>,
@@ -482,7 +485,8 @@ impl HubPairing {
     }
 
     /// Forgets the Hub on this machine only: both keyring entries, then the
-    /// pins. The Hub has no revoke route, so the instance stays listed there
+    /// pins. Refused with [`HubPairingError::PairingInProgress`] while a
+    /// `pair` is waiting on the browser; it can be retried once that ends. The Hub has no revoke route, so the instance stays listed there
     /// and its refresh family lapses on its own within 30 days. Idempotent,
     /// and it touches no table but the pins — runs carry on unaffected.
     ///
@@ -507,6 +511,10 @@ impl HubPairing {
     /// Taking the lock before raising the stop would wait on a refresh the
     /// endpoint may never answer.
     pub async fn disconnect(&self) -> Result<HubStatus, HubPairingError> {
+        let _in_flight = self
+            .in_flight
+            .try_lock()
+            .map_err(|_| HubPairingError::PairingInProgress)?;
         let running = self.stop_socket();
         let _refresh_lock = self.refresher.lock.lock().await;
         let started = self.stop_socket();

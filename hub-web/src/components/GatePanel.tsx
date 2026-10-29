@@ -86,7 +86,7 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
       </h3>
       <p className="mt-1 text-xs text-slate-400">Every gate decision asks for your passkey.</p>
       {blocked && (
-        <p id={reasonId} className="mt-2 text-sm text-cyan-300">
+        <p id={reasonId} className="mt-2 text-sm text-slate-300">
           Deciding a gate needs the <span className="font-mono">gates</span> scope, which this instance has not
           granted.
         </p>
@@ -106,8 +106,8 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
           <Button variant="primary" onClick={() => decide('approve')}>
             Approve
           </Button>
-          <Button variant="secondary" onClick={() => decide('cancel')}>
-            Cancel
+          <Button variant="danger-subtle" onClick={() => decide('cancel')} title="Abort the whole feature">
+            Abort feature
           </Button>
           <Button variant="secondary"
             disabled

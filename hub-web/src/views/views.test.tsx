@@ -87,7 +87,7 @@ describe('placeholder views', () => {
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveTextContent(new RegExp(`^${heading}$`));
     expect(headings[0]).toHaveClass('font-heading');
-    expect(headings[0].closest('.glass-panel')).not.toBeNull();
+    expect(headings[0].closest('.panel')).not.toBeNull();
   });
 
   it('Instance shows its instance id in monospace', () => {

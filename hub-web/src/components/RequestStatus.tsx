@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { TONE_TEXT, type RunStatusTone } from '../../../src/lib/runStatus';
 import { isTerminal, pollRequestStatus, type RequestOutcome, type RequestTicket } from '../lib/requests';
 import { CeremonyError } from './CeremonyError';
 
@@ -22,12 +23,12 @@ const LABELS: Record<RequestOutcome['status'], string> = {
   expired: 'Expired before the instance answered',
 };
 
-const TONES: Record<RequestOutcome['status'], string> = {
-  queued: 'text-cyan-300',
-  delivered: 'text-cyan-300',
-  accepted: 'text-emerald-300',
-  refused: 'text-ruby-300',
-  expired: 'text-ruby-300',
+const TONES: Record<RequestOutcome['status'], RunStatusTone> = {
+  queued: 'cyan',
+  delivered: 'cyan',
+  accepted: 'emerald',
+  refused: 'ruby',
+  expired: 'ruby',
 };
 
 /** The last read failed: the outcome it would have replaced is not known to be current. */
@@ -71,12 +72,19 @@ export function RequestStatus({ instanceId, ticket, onSettled }: RequestStatusPr
         ) : unanswered ? (
           <span className="font-medium text-ruby-300">No answer from the instance before expiry</span>
         ) : (
-          <span className={`font-medium ${TONES[outcome.status]}`}>{LABELS[outcome.status]}</span>
+          <span className={`font-medium ${TONE_TEXT[TONES[outcome.status]]}`}>{LABELS[outcome.status]}</span>
         )}
         {outcome.status === 'refused' && <span className="font-mono text-ruby-300 break-all">{outcome.reason}</span>}
         <span className="text-xs text-slate-400">
-          {outcome.status === 'expired' || stopped ? 'expired at ' : 'expires at '}
-          <time dateTime={expiry.toISOString()}>{expiry.toLocaleTimeString()}</time>
+          {outcome.status === 'expired' || stopped ? (
+            <>
+              expired at <time dateTime={expiry.toISOString()}>{expiry.toLocaleTimeString()}</time>
+            </>
+          ) : (
+            <>
+              expires at <time dateTime={expiry.toISOString()}>{expiry.toLocaleTimeString()}</time>
+            </>
+          )}
         </span>
       </div>
       {failure !== null && <CeremonyError error={failure.error} />}

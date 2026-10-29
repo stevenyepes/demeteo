@@ -182,7 +182,7 @@ function App() {
                   {otherAuthView.prompt}{' '}
                   <a
                     href={routeHref(otherAuthView.route)}
-                    className="text-violet-400 transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
+                    className="text-accent-ink transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
                   >
                     {otherAuthView.label}
                   </a>

@@ -675,9 +675,9 @@ describe('Run, end to end on the real wrappers', () => {
     );
 
     expect(within(gate).getByRole('button', { name: 'Approve' })).toBeDisabled();
-    expect(within(gate).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(gate).getByRole('button', { name: 'Abort feature' })).toBeDisabled();
     expect(within(gate).getByRole('group')).toHaveAccessibleDescription(/waiting for the instance/i);
-    fireEvent.click(within(gate).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(within(gate).getByRole('button', { name: 'Abort feature' }));
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(credentials.get).toHaveBeenCalledTimes(1);
 
@@ -686,7 +686,7 @@ describe('Run, end to end on the real wrappers', () => {
     expect(status).toHaveTextContent('Refused by the instance');
     expect(within(status).getByText(REFUSAL)).toBeInTheDocument();
     expect(within(gate).getByRole('button', { name: 'Approve' })).toBeEnabled();
-    expect(within(gate).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(within(gate).getByRole('button', { name: 'Abort feature' })).toBeEnabled();
   });
 
   it('offers the gate actions again once a decision runs out at expiry without an answer', async () => {

@@ -44,12 +44,14 @@ async fn park_already_cancelled(gates: &SqliteAdapter) -> Option<GateDecision> {
     tx.send(true).unwrap();
     let waiters = Arc::new(Mutex::new(HashMap::new()));
     let f_id = FeatureId::from("f-1".to_string());
+    let step_id = StepId::from("s-implement".to_string());
     park_for_human(
         SyntheticGate {
             gates,
             notif: &NoopNotif,
             waiters: &waiters,
             f_id: &f_id,
+            step_id: &step_id,
         },
         &se(),
         rx,

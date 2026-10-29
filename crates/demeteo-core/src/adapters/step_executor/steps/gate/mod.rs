@@ -184,6 +184,7 @@ impl ExecutionDriver {
         let _ = self.notif.emit(&DomainEvent::GateRequired {
             feature_id: self.f_id.clone(),
             step_execution_id: step_exec.id.clone(),
+            step_id: step_exec.step_id.0.clone(),
         });
 
         // A human gate can park the run for hours. Anthropic's prompt cache

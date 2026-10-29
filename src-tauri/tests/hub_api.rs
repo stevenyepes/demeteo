@@ -4,6 +4,11 @@
 //! `src-tauri/tests/hub_pairing.rs` says why that evidence has to live here
 //! and not beside the code.
 
+use demeteo_core::adapters::run_event_log::run_event_record;
+use demeteo_core::domain::hub_socket::hub_event;
+use demeteo_core::domain::ids::{FeatureId, StepExecutionId};
+use demeteo_core::ports::notification::DomainEvent;
+use demeteo_core::ports::run_events::RunEvent as RunEventRow;
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
 use demeteo_hub::api::dispatch::{
     cancel, dispatch, set_step_assignment, AssignmentBody, DispatchBody, EnqueuedView,
@@ -13,6 +18,7 @@ use demeteo_hub::api::gates::{
     gate_challenge, gate_decision, GateChallengeBody, GateChallengeView, GateDecisionBody,
 };
 use demeteo_hub::api::request_status::request_status;
+use demeteo_hub::api::run_state::fold;
 use demeteo_hub::api::runs::{run_detail, runs, RunsFilter};
 use demeteo_hub::api::testing::MemoryFleet;
 use demeteo_hub::api::{ApiContext, ApiStore, MirrorEvent};
@@ -76,6 +82,33 @@ async fn an_error_with_no_scope_is_its_code_alone() {
         answered(ApiError::UNAUTHENTICATED).await,
         (401, json!({"error": "unauthenticated"}))
     );
+}
+
+/// The desktop's own `gate_required` row through the Hub's own fold: a
+/// pending Gate must name its Step, or hub-web has no node to hang the
+/// decision on. Each half passes against a hand-written payload, which is how
+/// a gate that named no Step shipped.
+#[test]
+fn a_gate_the_desktop_records_is_pending_on_its_step_at_the_hub() {
+    let record = run_event_record(&DomainEvent::GateRequired {
+        feature_id: FeatureId::from("f-1".to_string()),
+        step_execution_id: StepExecutionId::new("se-7"),
+        step_id: "s-gate".into(),
+    })
+    .expect("gate_required is recorded");
+    let row = RunEventRow {
+        offset: 1,
+        run_id: record.feature_id,
+        kind: record.kind.into(),
+        payload_json: Some(record.payload.to_string()),
+        created_at: 1_700_000_000_000,
+    };
+
+    let state = fold(&[hub_event(&row).expect("allowlisted row")]);
+
+    assert_eq!(state.pending_gates.len(), 1);
+    assert_eq!(state.pending_gates[0].step_id.as_deref(), Some("s-gate"));
+    assert_eq!(state.pending_gates[0].step_execution_id, "se-7");
 }
 
 fn started(feature_id: &str) -> RunEvent {

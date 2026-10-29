@@ -330,7 +330,7 @@ function StaleNotice({ readAt }: { readAt: number }) {
   return (
     <p
       role="status"
-      className="max-w-xl rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-500"
+      className="nested-card max-w-xl px-3 py-2 text-sm text-slate-300"
     >
       Last updated at <time dateTime={at.toISOString()}>{at.toLocaleTimeString()}</time> — could not refresh.
     </p>

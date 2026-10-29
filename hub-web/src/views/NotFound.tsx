@@ -13,7 +13,7 @@ export function NotFound({ path }: NotFoundProps) {
       </p>
       <a
         href={routeHref({ name: 'fleet' })}
-        className="mt-4 inline-block text-violet-400 transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
+        className="mt-4 inline-block text-accent-ink transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
       >
         Back to Fleet
       </a>

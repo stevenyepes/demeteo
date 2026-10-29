@@ -31,9 +31,9 @@ interface HubScopesCardProps {
 
 export function HubScopesCard({ policy, saving, onToggle }: HubScopesCardProps) {
   return (
-    <div className="glass-panel p-6 rounded-xl space-y-4">
-      <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-        <ShieldCheck className="w-4 h-4 text-violet-400" /> What the Hub may do
+    <div className="panel p-6 space-y-4">
+      <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+        <ShieldCheck className="w-4 h-4 text-slate-400" /> What the Hub may do
       </h3>
       <p className="text-xs text-slate-400 leading-relaxed">
         Each scope is enforced on this machine. No Hub action can turn a toggle on — not a
@@ -56,7 +56,7 @@ export function HubScopesCard({ policy, saving, onToggle }: HubScopesCardProps) 
                 onClick={() => onToggle(field)}
                 disabled={!policy || saving}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-                  on ? 'bg-violet-600' : 'bg-white/10'
+                  on ? 'bg-accent' : 'bg-white/10'
                 }`}
               >
                 <span

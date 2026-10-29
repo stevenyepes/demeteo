@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowCanvasProps } from '../../../src/components/canvas/WorkflowCanvas';
+import { TONE_CHIP } from '../../../src/lib/runStatus';
 import { setCsrfToken } from '../lib/api';
 import { Dispatch } from './Dispatch';
 
@@ -573,7 +574,7 @@ describe('Dispatch after the 202', () => {
       'Start feature',
     );
 
-    expect(card).toHaveClass('text-ruby-300', 'border-ruby-500/30', 'bg-ruby-500/10');
+    expect(card).toHaveClass(TONE_CHIP.ruby);
     expect(card).toHaveTextContent(/Refused by the instance/);
     expect(within(card).getByText("The max cost is above this instance's per-run ceiling.")).toBeVisible();
     expect(within(card).getByText('over_run_ceiling')).toHaveClass('font-mono');
@@ -582,7 +583,7 @@ describe('Dispatch after the 202', () => {
   it('shows a scope_off refusal as spend being off on the instance', async () => {
     const card = await dispatchThenPoll(detail(), { status: 'refused', reason: 'scope_off' }, 'Start feature');
 
-    expect(card).toHaveClass('text-ruby-300');
+    expect(card).toHaveClass(TONE_CHIP.ruby);
     expect(within(card).getByText(/^Spend is off on this instance/)).toBeVisible();
     expect(within(card).getByText('scope_off')).toBeVisible();
   });

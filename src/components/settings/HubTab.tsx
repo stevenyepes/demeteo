@@ -207,9 +207,9 @@ export function HubTab() {
   if (view.kind === 'unavailable') {
     return (
       <div className="space-y-4">
-        <div className="glass-panel p-6 rounded-xl space-y-3">
-          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400" /> Hub unavailable
+        <div className="panel p-6 space-y-3">
+          <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-ruby-400" /> Hub unavailable
           </h3>
           <p className="text-xs text-slate-400 leading-relaxed">{view.message}</p>
         </div>

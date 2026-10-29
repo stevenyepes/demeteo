@@ -1,3 +1,4 @@
+import { buttonClasses } from '../../../src/components/ui/Button';
 import { elapsedText, type NeedsYouItem } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
 
@@ -25,7 +26,7 @@ export function NeedsYouCard({ item, now }: NeedsYouCardProps) {
       <a
         href={routeHref({ name: 'run', instanceId: item.instanceId, featureId: item.featureId })}
         aria-label={`Review ${item.featureId} on ${item.instanceLabel}`}
-        className="ml-auto rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:border-cyan-500/40 hover:text-cyan-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+        className={`ml-auto ${buttonClasses('secondary', 'sm')} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400`}
       >
         Review
       </a>
