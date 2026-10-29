@@ -2,15 +2,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type HubConnection,
   type HubLocalPolicy,
+  type HubMachine,
   type HubRequestLogEntry,
   type HubStatus,
+  type HubTrustedPasskey,
+  hubConnection,
   hubDisconnect,
+  hubMachine,
   hubPair,
   hubPolicyGet,
   hubPolicySet,
   hubRequestLog,
   hubStatus,
+  hubTrustedPasskeys,
 } from "./hub";
 
 const PAIRED: HubStatus = {
@@ -37,7 +43,29 @@ const UNPAIRED: HubStatus = {
   keyring_available: true,
 };
 
+const STOPPED: HubConnection = {
+  state: "stopped",
+  stop_reason: "displaced",
+  latency_ms: null,
+  reported_through: 42,
+  sync: "offline",
+  last_heard_at_ms: 1_790_000_000_000,
+};
+
+const MACHINE: HubMachine = {
+  instance_name: "Ana's laptop",
+  os: "linux",
+  arch: "x86_64",
+  app_version: "1.4.0",
+};
+
+const PASSKEYS: HubTrustedPasskey[] = [
+  { credential_id: "cred-a", sign_count: 3, pinned_at: 1_790_000_000, origin: "pinned" },
+  { credential_id: "cred-b", sign_count: 0, pinned_at: 1_790_000_060, origin: "endorsed" },
+];
+
 const POLICY: HubLocalPolicy = {
+  read_enabled: true,
   spend_enabled: true,
   gates_enabled: false,
   run_ceiling_cents: 500,
@@ -46,6 +74,7 @@ const POLICY: HubLocalPolicy = {
 
 const LOG: HubRequestLogEntry[] = [
   {
+    id: 1,
     request_id: "r-1",
     kind: "start_feature",
     scope: "spend",
@@ -77,6 +106,33 @@ describe("hub wrappers", () => {
 
     expect(invoke).toHaveBeenCalledWith("hub_status");
     expect(result).toBe(PAIRED);
+  });
+
+  it("hubConnection calls hub_connection with no arguments and returns the connection unchanged", async () => {
+    vi.mocked(invoke).mockResolvedValue(STOPPED);
+
+    const result = await hubConnection();
+
+    expect(invoke).toHaveBeenCalledWith("hub_connection");
+    expect(result).toBe(STOPPED);
+  });
+
+  it("hubMachine calls hub_machine with no arguments and returns the machine unchanged", async () => {
+    vi.mocked(invoke).mockResolvedValue(MACHINE);
+
+    const result = await hubMachine();
+
+    expect(invoke).toHaveBeenCalledWith("hub_machine");
+    expect(result).toBe(MACHINE);
+  });
+
+  it("hubTrustedPasskeys calls hub_trusted_passkeys with no arguments and returns the list unchanged", async () => {
+    vi.mocked(invoke).mockResolvedValue(PASSKEYS);
+
+    const result = await hubTrustedPasskeys();
+
+    expect(invoke).toHaveBeenCalledWith("hub_trusted_passkeys");
+    expect(result).toBe(PASSKEYS);
   });
 
   it("hubDisconnect calls hub_disconnect with no arguments and returns the status unchanged", async () => {

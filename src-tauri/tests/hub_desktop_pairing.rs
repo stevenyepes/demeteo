@@ -270,7 +270,7 @@ async fn the_desktop_pairs_through_the_hubs_own_consent_and_token_handlers() {
     let secrets = Arc::new(MemorySecretStore::new(
         &db.install_id().expect("an install id"),
     ));
-    let pairing = HubPairing::new(db.clone(), secrets, token.clone());
+    let pairing = HubPairing::new(db.clone(), secrets, token.clone(), db.clone());
     let browser = ApprovingBrowser { hub, user };
 
     let paired = pairing

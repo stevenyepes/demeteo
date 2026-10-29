@@ -1305,7 +1305,7 @@ impl PairedDesktop {
             MemorySecretStore::paired(&*db, &hub_pins, &key, &refresh).expect("a seeded store");
         let refreshes = Arc::new(ScriptedRefreshEndpoint::new());
         refreshes.answer(&hub.issued.access.text(), &refresh, 900);
-        let pairing = HubPairing::new(db, Arc::new(secrets), Arc::new(NoRedemption))
+        let pairing = HubPairing::new(db.clone(), Arc::new(secrets), Arc::new(NoRedemption), db)
             .with_refresh_endpoint(refreshes.clone());
         Self {
             pairing,

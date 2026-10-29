@@ -25,16 +25,19 @@ use serde::Serialize;
 use tokio::sync::{mpsc, watch, Mutex, Notify, OwnedMutexGuard};
 use tokio::time::{sleep_until, timeout, Instant};
 
+use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
-    hello, hub_event, sends_events, SocketEnd, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS,
-    PAGE_SIZE, SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
+    hello, hub_event, SocketEnd, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS, PAGE_SIZE,
+    SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 use crate::ports::hub::{
     HubRequestHandler, HubSnapshotSource, HubSocketConnection, SocketGone, SocketReceived,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
+use crate::shared::time::now_ms;
 
 use super::snapshot_send::SnapshotSend;
+use super::status::ConnectionCell;
 
 /// RFC 6455 §7.4.1, for an endpoint that is going away.
 const GOING_AWAY: u16 = 1001;
@@ -54,6 +57,11 @@ pub struct SessionContext {
     pub install_id: String,
     pub app_version: String,
     pub pinned_scopes: Vec<String>,
+    /// Whether this session sends events and snapshots at all, decided by
+    /// [`crate::domain::hub_socket::sends_events`] when the socket is
+    /// started; [`Self::pinned_scopes`] alone decide only the `Hello`. Off
+    /// until [`Self::with_relaying`] says otherwise.
+    pub relaying: bool,
     pub run_events: Arc<dyn RunEventsPort>,
     /// Fired by [`super::wake::WakingRunEvents`] on every append to
     /// `run_events`; it has to be that decorator's, or an append wakes
@@ -74,6 +82,10 @@ pub struct SessionContext {
     /// [`STOP_CLOSE_DEADLINE_SECS`].
     pub stop_close: Duration,
     pub requests: RequestHandlerSlot,
+    /// Where the session, and the supervisor running it, record how the
+    /// connection stands. A fresh, unshared cell until
+    /// [`Self::with_connection`] hands it the pairing's.
+    pub connection: ConnectionCell,
     answers: Answers,
 }
 
@@ -119,6 +131,7 @@ impl SessionContext {
             install_id,
             app_version,
             pinned_scopes,
+            relaying: false,
             run_events,
             wake,
             snapshots,
@@ -127,12 +140,23 @@ impl SessionContext {
             liveness: Duration::from_secs(LIVENESS_DEADLINE_SECS),
             stop_close: Duration::from_secs(STOP_CLOSE_DEADLINE_SECS),
             requests: RequestHandlerSlot::default(),
+            connection: ConnectionCell::default(),
             answers: Answers::new(),
         }
     }
 
+    pub fn with_relaying(mut self, relaying: bool) -> Self {
+        self.relaying = relaying;
+        self
+    }
+
     pub fn with_requests(mut self, requests: RequestHandlerSlot) -> Self {
         self.requests = requests;
+        self
+    }
+
+    pub fn with_connection(mut self, connection: ConnectionCell) -> Self {
+        self.connection = connection;
         self
     }
 
@@ -174,6 +198,7 @@ pub async fn run_session(
         heard_by: Instant::now() + ctx.liveness,
         acked: false,
         requests: ctx.requests.clone(),
+        connection: ctx.connection.clone(),
         answered: ctx.answers.tx.clone(),
         answers: ctx.answers.rx.clone().lock_owned().await,
     };
@@ -212,6 +237,7 @@ struct Session {
     heard_by: Instant,
     acked: bool,
     requests: RequestHandlerSlot,
+    connection: ConnectionCell,
     answered: mpsc::UnboundedSender<RequestResult>,
     answers: OwnedMutexGuard<mpsc::UnboundedReceiver<RequestResult>>,
 }
@@ -231,15 +257,25 @@ impl Session {
         );
         self.send(encoded(&hello).ok_or(Exit::Failed)?, stop)
             .await?;
+        let hello_sent = Instant::now();
         let cursor = loop {
             if let Some(offset) = self.heard(stop).await? {
                 break offset;
             }
         };
         self.acked = true;
+        let latency = hello_sent.elapsed().as_millis();
+        self.connection.update(|facts| {
+            facts.state = ConnectionState::Connected;
+            facts.stop_reason = None;
+            facts.latency_ms = Some(u64::try_from(latency).unwrap_or(u64::MAX));
+            facts.relaying = ctx.relaying;
+            facts.caught_up = false;
+            facts.in_flight = 0;
+        });
         // The Hub stores events from an instance that did not report `read`
         // (docs/HUB.md §7): withholding them is this side's decision alone.
-        if !sends_events(&ctx.pinned_scopes) {
+        if !ctx.relaying {
             loop {
                 self.heard(stop).await?;
             }
@@ -252,6 +288,10 @@ impl Session {
         }
         let mut outbox = Outbox::after(cursor);
         loop {
+            self.connection.update(|facts| {
+                facts.caught_up = outbox.caught_up;
+                facts.in_flight = outbox.in_flight.len();
+            });
             if outbox.pending.is_empty() && !outbox.caught_up {
                 outbox.read(&ctx.run_events).await?;
                 continue;
@@ -310,9 +350,14 @@ impl Session {
     /// unanswered one is delivered again on the next connection.
     fn took(&mut self, received: SocketReceived) -> Result<Option<u64>, Exit> {
         self.heard_by = Instant::now() + self.liveness;
+        let heard_at = now_ms();
+        self.connection
+            .update(|facts| facts.last_heard_at_ms = Some(heard_at));
         match received {
             SocketReceived::Text(text) => {
                 if let Ok(ack) = serde_json::from_str::<CursorAck>(&text) {
+                    self.connection
+                        .update(|facts| facts.reported_through = Some(ack.offset));
                     return Ok(Some(ack.offset));
                 }
                 if let Ok(request) = serde_json::from_str::<RequestHeader>(&text) {

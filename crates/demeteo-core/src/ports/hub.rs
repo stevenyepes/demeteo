@@ -12,8 +12,10 @@ use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
-use crate::domain::hub_request::passkeys::{TrustWrite, TrustedPasskey};
-use crate::domain::hub_request::{Consumption, HubLocalPolicy, HubRequestLogEntry};
+use crate::domain::hub_request::passkeys::{HubTrustedPasskey, TrustWrite, TrustedPasskey};
+use crate::domain::hub_request::{
+    Consumption, HubLocalPolicy, HubRequestLogEntry, HubRequestLogRow,
+};
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 
@@ -91,6 +93,15 @@ pub trait HubPasskeyTrust: Send + Sync {
     ) -> Result<TrustWrite, AppError>;
 }
 
+/// The trusted passkey set as Settings shows it, read side only. Split from
+/// [`HubPasskeyTrust`] as [`HubPolicyReader`] is from [`HubPolicyWriter`]:
+/// what holds this can list the set but never endorse into it or revoke from
+/// it, so this is the one that may sit on [`crate::state::AppContext`].
+pub trait HubPasskeyReader: Send + Sync {
+    /// In pairing order; empty when unpaired.
+    fn listed(&self) -> Result<Vec<HubTrustedPasskey>, AppError>;
+}
+
 /// The `hub_consumed_requests` and `hub_request_log` tables (V65).
 pub trait HubRequestRepository: Send + Sync {
     /// Claims the id in one `INSERT`; a row already there is
@@ -108,7 +119,7 @@ pub trait HubRequestRepository: Send + Sync {
     fn prune_consumed(&self, now_secs: u64) -> Result<(), AppError>;
     fn append_log(&self, entry: &HubRequestLogEntry) -> Result<(), AppError>;
     /// Newest first.
-    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogEntry>, AppError>;
+    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogRow>, AppError>;
 }
 
 /// The `hub_local_policy` row (V65), read side only. This is what the request

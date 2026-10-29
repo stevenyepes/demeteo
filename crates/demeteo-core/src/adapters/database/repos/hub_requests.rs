@@ -1,12 +1,12 @@
 //! SQL for `hub_consumed_requests`, `hub_request_log` and `hub_local_policy`
-//! (V65). The policy's reader and writer are separate traits on purpose; see
+//! (V65; `read_enabled` from V67). The policy's reader and writer are separate traits on purpose; see
 //! [`HubPolicyWriter`].
 
 use rusqlite::{params, OptionalExtension};
 
 use crate::domain::hub_request::log::{parse_scope, scope_as_str};
 use crate::domain::hub_request::{
-    Consumption, HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome,
+    Consumption, HubLocalPolicy, HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome,
 };
 use crate::error::AppError;
 use crate::ports::hub::{HubPolicyReader, HubPolicyWriter, HubRequestRepository};
@@ -22,7 +22,8 @@ const PRUNE_SKEW_SECS: u64 = 600;
 
 const LOG_COLUMNS: &str = "request_id, kind, scope, outcome, reason, feature_id, received_at";
 
-const POLICY_COLUMNS: &str = "spend_enabled, gates_enabled, run_ceiling_cents, daily_ceiling_cents";
+const POLICY_COLUMNS: &str =
+    "spend_enabled, gates_enabled, run_ceiling_cents, daily_ceiling_cents, read_enabled";
 
 fn to_sql_int(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
@@ -36,11 +37,12 @@ fn unrecognised(col: usize, value: String) -> rusqlite::Error {
     )
 }
 
-fn row_to_log_entry(row: &rusqlite::Row) -> rusqlite::Result<HubRequestLogEntry> {
+/// Reads `SELECT {LOG_COLUMNS}, id`.
+fn row_to_log_row(row: &rusqlite::Row) -> rusqlite::Result<HubRequestLogRow> {
     let kind: String = row.get(1)?;
     let scope: Option<String> = row.get(2)?;
     let outcome: String = row.get(3)?;
-    Ok(HubRequestLogEntry {
+    let entry = HubRequestLogEntry {
         request_id: row.get(0)?,
         kind: LogKind::parse(&kind).ok_or_else(|| unrecognised(1, kind))?,
         scope: scope
@@ -50,6 +52,10 @@ fn row_to_log_entry(row: &rusqlite::Row) -> rusqlite::Result<HubRequestLogEntry>
         reason: row.get(4)?,
         feature_id: row.get(5)?,
         received_at_ms: row.get(6)?,
+    };
+    Ok(HubRequestLogRow {
+        id: row.get(7)?,
+        entry,
     })
 }
 
@@ -66,6 +72,7 @@ fn row_to_policy(row: &rusqlite::Row) -> rusqlite::Result<HubLocalPolicy> {
         gates_enabled: row.get::<_, i64>(1)? != 0,
         run_ceiling_cents: ceiling(2)?,
         daily_ceiling_cents: ceiling(3)?,
+        read_enabled: row.get::<_, i64>(4)? != 0,
     })
 }
 
@@ -127,18 +134,18 @@ impl HubRequestRepository for SqliteAdapter {
         Ok(())
     }
 
-    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogEntry>, AppError> {
+    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogRow>, AppError> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT {LOG_COLUMNS} FROM hub_request_log
+                "SELECT {LOG_COLUMNS}, id FROM hub_request_log
                  ORDER BY received_at DESC, id DESC LIMIT ?1"
             ))
             .map_err(DbError::Sqlite)?;
         let entries = stmt
             .query_map(
                 params![i64::try_from(limit).unwrap_or(i64::MAX)],
-                row_to_log_entry,
+                row_to_log_row,
             )
             .map_err(DbError::Sqlite)?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -168,13 +175,14 @@ impl HubPolicyWriter for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO hub_local_policy (id, {POLICY_COLUMNS})
-                 VALUES (1, ?1, ?2, ?3, ?4)"
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5)"
             ),
             params![
                 policy.spend_enabled,
                 policy.gates_enabled,
                 policy.run_ceiling_cents.map(to_sql_int),
                 policy.daily_ceiling_cents.map(to_sql_int),
+                policy.read_enabled,
             ],
         )
         .map_err(DbError::Sqlite)?;

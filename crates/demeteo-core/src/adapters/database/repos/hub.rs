@@ -9,9 +9,11 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{params, OptionalExtension};
 
 use crate::domain::hub_pairing::{HubPins, PinnedPasskey};
-use crate::domain::hub_request::passkeys::{TrustWrite, TrustedPasskey};
+use crate::domain::hub_request::passkeys::{
+    passkey_origin, HubTrustedPasskey, TrustWrite, TrustedPasskey,
+};
 use crate::error::AppError;
-use crate::ports::hub::{HubPasskeyTrust, HubPinRepository};
+use crate::ports::hub::{HubPasskeyReader, HubPasskeyTrust, HubPinRepository};
 use crate::shared::time::now_secs;
 
 use super::super::{DbError, SqliteAdapter};
@@ -54,6 +56,19 @@ fn row_to_trusted(row: &rusqlite::Row) -> rusqlite::Result<TrustedPasskey> {
         public_key: row.get(1)?,
         sign_count: u32::try_from(sign_count)
             .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, sign_count))?,
+    })
+}
+
+fn row_to_listed(row: &rusqlite::Row) -> rusqlite::Result<HubTrustedPasskey> {
+    let sign_count: i64 = row.get(1)?;
+    let pinned_at: i64 = row.get(2)?;
+    let paired_at: i64 = row.get(3)?;
+    Ok(HubTrustedPasskey {
+        credential_id: row.get(0)?,
+        sign_count: u32::try_from(sign_count)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, sign_count))?,
+        pinned_at,
+        origin: passkey_origin(pinned_at, paired_at),
     })
 }
 
@@ -175,6 +190,25 @@ impl HubPinRepository for SqliteAdapter {
             .map_err(DbError::Sqlite)?;
         tx.commit().map_err(DbError::Sqlite)?;
         Ok(())
+    }
+}
+
+impl HubPasskeyReader for SqliteAdapter {
+    fn listed(&self) -> Result<Vec<HubTrustedPasskey>, AppError> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.credential_id, p.sign_count, p.pinned_at, h.paired_at
+                 FROM hub_pinned_passkeys p JOIN hub_pairing h ON h.id = 1
+                 ORDER BY p.rowid",
+            )
+            .map_err(DbError::Sqlite)?;
+        let listed = stmt
+            .query_map([], row_to_listed)
+            .map_err(DbError::Sqlite)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(DbError::Sqlite)?;
+        Ok(listed)
     }
 }
 

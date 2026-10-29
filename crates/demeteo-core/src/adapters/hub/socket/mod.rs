@@ -12,6 +12,7 @@ use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
 use crate::domain::hub_pairing::{socket_dial_url, socket_url, SecretString};
+use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
     after_close, after_refresh, backoff, resets_backoff, Reconnect, RefreshEnd, SocketEnd,
     StopReason,
@@ -27,6 +28,7 @@ use super::{random_token, HubPairing, Refresher};
 pub mod session;
 mod snapshot_send;
 pub mod snapshot_wake;
+pub mod status;
 pub mod wake;
 #[cfg(feature = "hub-socket")]
 pub mod ws_transport;
@@ -170,6 +172,10 @@ pub struct SupervisorDeps {
 /// verdict stops it or `stop` is raised (or its sender dropped), which ends
 /// it as [`StopReason::Stopped`] from whatever it was awaiting — a refresh
 /// included, so `disconnect` can take the refresh lock after it.
+///
+/// Each state it passes through is recorded in the session's
+/// [`status::ConnectionCell`], and the reason it stops on is recorded
+/// before it returns, so whoever awaits the task finds it there.
 pub async fn supervise(deps: SupervisorDeps, mut stop: watch::Receiver<bool>) -> StopReason {
     let mut supervisor = Supervisor { deps, attempt: 0 };
     let reason = match supervisor.run(&mut stop).await {
@@ -179,6 +185,7 @@ pub async fn supervise(deps: SupervisorDeps, mut stop: watch::Receiver<bool>) ->
     if reason != StopReason::Stopped {
         tracing::warn!(?reason, "the Hub socket stopped");
     }
+    supervisor.record(ConnectionState::Stopped, Some(reason));
     reason
 }
 
@@ -209,6 +216,7 @@ impl Supervisor {
                     }
                 },
             };
+            self.record(ConnectionState::Connecting, None);
             let expires_at = self.deps.tokens.access_expires_at();
             let jti = random_token().map_err(|_| StopReason::Refused)?;
             let dpop = self
@@ -263,6 +271,7 @@ impl Supervisor {
                     verdict = Reconnect::RefreshNow;
                 }
                 Reconnect::RefreshNow => {
+                    self.record(ConnectionState::Reconnecting, None);
                     match unless_stopped(stop, self.deps.tokens.refresh_access()).await? {
                         Ok(token) => return Ok(Some(token)),
                         Err(end) => verdict = after_refresh(end),
@@ -273,9 +282,17 @@ impl Supervisor {
     }
 
     async fn back_off(&mut self, stop: &mut watch::Receiver<bool>) -> Result<(), StopReason> {
+        self.record(ConnectionState::Reconnecting, None);
         let wait = backoff(self.attempt, (self.deps.jitter)());
         self.attempt = self.attempt.saturating_add(1);
         unless_stopped(stop, self.deps.sleeper.sleep(wait)).await
+    }
+
+    fn record(&self, state: ConnectionState, stop_reason: Option<StopReason>) {
+        self.deps.session.connection.update(|facts| {
+            facts.state = state;
+            facts.stop_reason = stop_reason;
+        });
     }
 }
 

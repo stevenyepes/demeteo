@@ -144,12 +144,22 @@ function nodeCard(container: HTMLElement, nodeId: string): HTMLElement {
   return card;
 }
 
+/**
+ * The `workflow-canvas` wrapper lands a commit before React Flow's store takes the nodes and
+ * draws them, so a lookup straight after `findByTestId('workflow-canvas')` can find none.
+ */
+async function canvasDrawn(container: HTMLElement) {
+  await vi.waitFor(() => {
+    for (const node of WORKFLOW.nodes) nodeCard(container, node.id);
+  });
+}
+
 describe('Run', () => {
   it('draws the reported graph with each node in the state the mirror reported', async () => {
     stubFetch(json(detail()));
     const { container } = render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
 
-    await screen.findByTestId('workflow-canvas');
+    await canvasDrawn(container);
     for (const node of WORKFLOW.nodes) {
       expect(within(nodeCard(container, node.id)).getByText(node.title)).toBeInTheDocument();
     }
@@ -358,7 +368,7 @@ describe('Run', () => {
     it('opens on a node chosen on the canvas with its kind and title, and clears the highlight on close', async () => {
       stubFetch(json(detail()));
       const { container } = render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
-      await screen.findByTestId('workflow-canvas');
+      await canvasDrawn(container);
 
       fireEvent.click(nodeCard(container, 'ship'));
 
@@ -553,7 +563,7 @@ describe('Run, end to end on the real wrappers', () => {
     const { sent } = stubJourney(journeyScript());
     const credentials = stubWebAuthn();
     const { container } = render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
-    await screen.findByTestId('workflow-canvas');
+    await canvasDrawn(container);
 
     fireEvent.click(nodeCard(container, 'plan'));
     const planInspector = screen.getByRole('region', { name: 'Step' });

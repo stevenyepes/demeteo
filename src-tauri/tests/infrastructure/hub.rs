@@ -9,8 +9,8 @@
 // every OS.
 
 use super::{
-    disconnect_core, pair_core, pairing, policy_get_core, policy_set_core, request_log_core,
-    status_core,
+    connection_core, disconnect_core, machine_core, pair_core, pairing, policy_get_core,
+    policy_set_core, request_log_core, status_core, trusted_passkeys_core,
 };
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::hub::device_key::DeviceKey;
@@ -37,28 +37,34 @@ use crate::domain::hub_pairing::keyring_names::{
 };
 use crate::domain::hub_pairing::pkce::s256_challenge;
 use crate::domain::hub_pairing::{
-    access_token_hash, authorize_url, check_pairing_origin, consent_label, hub_origin, hub_status,
-    pairing_state, redirect_uri, socket_dial_url, socket_url, token_error, token_refusal,
-    token_url, AuthorizeRequest, HubPairingError, HubPairingState, HubPins, HubSecret, HubStatus,
-    KeyringStatus, PairingAnswer, PinnedPasskey, RefreshAnswer, PAIR_TIMEOUT, SCOPES,
+    access_token_hash, authorize_url, check_pairing_origin, consent_label, consent_machine,
+    hub_origin, hub_status, pairing_state, redirect_uri, socket_dial_url, socket_url, token_error,
+    token_refusal, token_url, AuthorizeRequest, HubMachine, HubPairingError, HubPairingState,
+    HubPins, HubSecret, HubStatus, KeyringStatus, PairingAnswer, PinnedPasskey, RefreshAnswer,
+    PAIR_TIMEOUT, SCOPES,
 };
-use crate::domain::hub_request::log::MAX_LOG_PAGE;
+use crate::domain::hub_request::log::{parse_scope, scope_as_str, MAX_LOG_PAGE};
+use crate::domain::hub_request::passkeys::{passkey_origin, PasskeyOrigin, TrustWrite};
 use crate::domain::hub_request::{
-    Consumption, HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome,
+    effective_scopes, read_changed, Consumption, HubLocalPolicy, HubRequestLogEntry,
+    HubRequestLogRow, LogKind, LogOutcome,
+};
+use crate::domain::hub_socket::connection::{
+    sync_state, view, ConnectionFacts, ConnectionState, HubConnection, SyncState,
 };
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, backoff, hello, hub_event, refresh_refusal, resets_backoff,
-    sends_events, Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS,
-    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
+    sends_events, snapshot, Reconnect, RefreshEnd, SnapshotInput, SocketEnd, StopReason,
+    BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, Project, Workflow, WorkflowVersion};
 use crate::error::AppError;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::hub::{
-    BrowserLauncher, DialFailure, HubPinRepository, HubRefreshEndpoint, HubRequestRepository,
-    HubSecretStore, HubSocketConnection, HubSocketDialer, HubTokenEndpoint, SocketGone,
-    SocketReceived, SocketUpgrade,
+    BrowserLauncher, DialFailure, HubPasskeyReader, HubPasskeyTrust, HubPinRepository,
+    HubRefreshEndpoint, HubRequestRepository, HubSecretStore, HubSocketConnection, HubSocketDialer,
+    HubTokenEndpoint, SocketGone, SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::state::AppContext;
@@ -725,6 +731,92 @@ fn install_ids_differ_between_databases() {
     assert_ne!(first.install_id().unwrap(), second.install_id().unwrap());
 }
 
+#[test]
+fn passkey_origin_is_pinned_only_at_the_pairing_second() {
+    assert_eq!(
+        passkey_origin(1_760_000_000, 1_760_000_000),
+        PasskeyOrigin::Pinned
+    );
+    assert_eq!(
+        passkey_origin(1_760_000_060, 1_760_000_000),
+        PasskeyOrigin::Endorsed
+    );
+}
+
+#[test]
+fn an_unpaired_desktop_lists_no_trusted_passkeys() {
+    let (_dir, db) = pin_db("hub_passkeys_unpaired");
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO hub_pinned_passkeys (credential_id, public_key, pinned_at)
+             VALUES ('cred-a', 'pk-a', 1760000000)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(db.listed().unwrap(), Vec::new());
+}
+
+#[test]
+fn trusted_passkeys_list_in_pairing_order_as_pinned_then_endorsed() {
+    let (_dir, db) = pin_db("hub_passkeys_listed");
+    let paired = pins(
+        "https://hub.example.com",
+        &[("cred-b", "pk-b"), ("cred-a", "pk-a")],
+    );
+    db.save(&paired).unwrap();
+    let endorsed_at = paired.paired_at + 3_600;
+    assert_eq!(
+        db.endorse("cred-b", 0, 1, "cred-0", "pk-0", endorsed_at)
+            .unwrap(),
+        TrustWrite::Applied
+    );
+
+    let listed: Vec<(String, u32, i64, PasskeyOrigin)> = db
+        .listed()
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.credential_id, p.sign_count, p.pinned_at, p.origin))
+        .collect();
+
+    assert_eq!(
+        listed,
+        [
+            (
+                "cred-b".to_owned(),
+                1,
+                paired.paired_at,
+                PasskeyOrigin::Pinned
+            ),
+            (
+                "cred-a".to_owned(),
+                0,
+                paired.paired_at,
+                PasskeyOrigin::Pinned
+            ),
+            ("cred-0".to_owned(), 0, endorsed_at, PasskeyOrigin::Endorsed),
+        ]
+    );
+}
+
+#[test]
+fn a_listed_passkey_serializes_without_its_public_key() {
+    let (_dir, db) = pin_db("hub_passkeys_json");
+    db.save(&pins("https://hub.example.com", &[("cred-a", "pk-a")]))
+        .unwrap();
+    let listed = db.listed().unwrap();
+    assert_eq!(
+        serde_json::to_value(&listed).unwrap(),
+        json!([{
+            "credential_id": "cred-a",
+            "sign_count": 0,
+            "pinned_at": 1_760_000_000,
+            "origin": "pinned",
+        }])
+    );
+}
+
 const STATE: &str = "the-state";
 
 /// The listener waiting on its own task, with the URI the Hub would redirect
@@ -1229,6 +1321,7 @@ impl Rig {
             pins(db.clone()),
             secrets.clone(),
             token.clone(),
+            db.clone(),
         ));
         Self {
             dir,
@@ -1438,6 +1531,33 @@ async fn the_authorize_url_carries_this_desktops_labels() {
 }
 
 #[tokio::test]
+async fn machine_core_reports_the_labels_pairing_sends() {
+    let rig = Rig::new("hub_machine_labels", Reply::Answer);
+    let before = machine_core(&rig.hub).unwrap();
+    rig.pair(HUB_URL).await.expect("a pairing");
+    let url = rig.authorize.lock().unwrap().clone().unwrap();
+    let param = |name| query_param(&url, name).unwrap();
+
+    let sent = HubMachine {
+        instance_name: param("instance_name"),
+        os: param("os"),
+        arch: param("arch"),
+        app_version: param("app_version"),
+    };
+    assert_eq!(before, sent);
+    assert_eq!(machine_core(&rig.hub).unwrap(), sent);
+    assert_eq!(
+        sent,
+        consent_machine(
+            &sent.instance_name,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            ""
+        )
+    );
+}
+
+#[tokio::test]
 async fn a_second_pairing_while_one_waits_is_refused() {
     let rig = Rig::new("hub_pair_in_flight", Reply::Answer);
     let held = Arc::new(HubRedirect {
@@ -1485,7 +1605,7 @@ async fn an_unavailable_keyring_refuses_before_writing_anything() {
         reply: Reply::Answer,
         verifiers: Mutex::default(),
     });
-    let hub = HubPairing::new(db.clone(), secrets.clone(), token.clone());
+    let hub = HubPairing::new(db.clone(), secrets.clone(), token.clone(), db.clone());
 
     let result = hub
         .pair(HUB_URL, &NeverOpened, Duration::from_secs(10))
@@ -1698,6 +1818,34 @@ fn consent_labels_satisfy_the_hubs_label_rule() {
 }
 
 #[test]
+fn consent_machine_labels_every_field_with_its_cap_and_fallback() {
+    assert_eq!(
+        consent_machine("", " ", "\u{feff}", "\n"),
+        HubMachine {
+            instance_name: "Demeteo desktop".into(),
+            os: "unknown".into(),
+            arch: "unknown".into(),
+            app_version: "unknown".into(),
+        }
+    );
+    let long = "x".repeat(100);
+    let capped = consent_machine(&long, &long, &long, &long);
+    assert_eq!(capped.instance_name, "x".repeat(64));
+    assert_eq!(capped.os, "x".repeat(32));
+    assert_eq!(capped.arch, "x".repeat(32));
+    assert_eq!(capped.app_version, "x".repeat(32));
+    assert_eq!(
+        consent_machine(" Ana's laptop\n", "linux", "x86_64", "1.4.0\u{200b}"),
+        HubMachine {
+            instance_name: "Ana's laptop".into(),
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            app_version: "1.4.0".into(),
+        }
+    );
+}
+
+#[test]
 fn check_pairing_origin_allows_only_the_paired_hub() {
     assert_eq!(check_pairing_origin(None, ORIGIN), Ok(()));
     assert_eq!(check_pairing_origin(Some(ORIGIN), ORIGIN), Ok(()));
@@ -1782,12 +1930,15 @@ async fn the_policy_and_log_cores_round_trip_through_one_database() {
         Ok(HubLocalPolicy::default())
     );
     let policy = HubLocalPolicy {
+        read_enabled: true,
         spend_enabled: true,
         gates_enabled: false,
         run_ceiling_cents: Some(500),
         daily_ceiling_cents: None,
     };
-    policy_set_core(writer.as_ref(), &policy).expect("save the policy");
+    policy_set_core(ctx.hub_policy.as_ref(), writer.as_ref(), None, &policy)
+        .await
+        .expect("save the policy");
     assert_eq!(policy_get_core(ctx.hub_policy.as_ref()), Ok(policy));
 
     for (request_id, at) in [("r-old", 1), ("r-new", 2)] {
@@ -1806,11 +1957,199 @@ async fn the_policy_and_log_cores_round_trip_through_one_database() {
     let log = request_log_core(ctx.hub_requests.as_ref(), 1).expect("read the log");
     assert_eq!(
         log.iter()
-            .map(|e| e.request_id.as_str())
+            .map(|row| row.entry.request_id.as_str())
             .collect::<Vec<_>>(),
         ["r-new"]
     );
+    let wire = serde_json::to_value(&log[0]).expect("serialize the row");
+    assert_eq!(wire["id"], serde_json::json!(log[0].id));
+    assert_eq!(wire["request_id"], "r-new");
+    assert_eq!(wire["outcome"], "deferred");
+    assert_eq!(wire["received_at_ms"], 2);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// No pairing needed: Settings lists the trusted set in every mode, and an
+/// unpaired desktop's is empty.
+#[tokio::test]
+async fn an_unpaired_context_lists_no_trusted_passkeys() {
+    let dir = demeteo_core::test_dir::scratch("demeteo-hub-cmd-passkeys");
+    let (ctx, _writer) = policy_context(&dir);
+    assert!(ctx.hub.is_none());
+    assert_eq!(
+        trusted_passkeys_core(ctx.hub_passkeys.as_ref()),
+        Ok(Vec::new())
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn trusted_passkeys_core_lists_in_pairing_order_without_public_keys() {
+    let (_dir, db) = pin_db("hub_passkeys_core");
+    let paired = pins(
+        "https://hub.example.com",
+        &[("cred-b", "pk-b"), ("cred-a", "pk-a")],
+    );
+    db.save(&paired).unwrap();
+    let endorsed_at = paired.paired_at + 60;
+    assert_eq!(
+        db.endorse("cred-a", 0, 2, "cred-0", "pk-0", endorsed_at)
+            .unwrap(),
+        TrustWrite::Applied
+    );
+
+    let listed = trusted_passkeys_core(&db).expect("list the trusted set");
+
+    assert_eq!(
+        serde_json::to_value(&listed).unwrap(),
+        json!([
+            {"credential_id": "cred-b", "sign_count": 0, "pinned_at": paired.paired_at, "origin": "pinned"},
+            {"credential_id": "cred-a", "sign_count": 2, "pinned_at": paired.paired_at, "origin": "pinned"},
+            {"credential_id": "cred-0", "sign_count": 0, "pinned_at": endorsed_at, "origin": "endorsed"},
+        ])
+    );
+}
+
+fn policy_context(dir: &Path) -> (AppContext, Arc<dyn crate::ports::hub::HubPolicyWriter>) {
+    build_core_context_with_policy_writer(
+        CoreConfig {
+            app_data_dir: dir.to_path_buf(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotificationAdapter),
+        tokio::runtime::Handle::current(),
+    )
+}
+
+/// Each round drops the context that saved before reading, so what is read
+/// can only have come back from disk.
+#[tokio::test]
+async fn the_spend_toggle_survives_an_app_restart_both_ways() {
+    let dir = demeteo_core::test_dir::scratch("demeteo-hub-cmd-policy-restart");
+    let base = HubLocalPolicy {
+        read_enabled: false,
+        spend_enabled: false,
+        gates_enabled: true,
+        run_ceiling_cents: Some(700),
+        daily_ceiling_cents: Some(9_000),
+    };
+    for (first, then) in [(false, true), (true, false)] {
+        let (ctx, writer) = policy_context(&dir);
+        for spend_enabled in [first, then] {
+            let policy = HubLocalPolicy {
+                spend_enabled,
+                ..base.clone()
+            };
+            policy_set_core(ctx.hub_policy.as_ref(), writer.as_ref(), None, &policy)
+                .await
+                .expect("save the policy");
+        }
+        drop((ctx, writer));
+
+        let (reopened, _writer) = policy_context(&dir);
+        assert_eq!(
+            policy_get_core(reopened.hub_policy.as_ref()),
+            Ok(HubLocalPolicy {
+                spend_enabled: then,
+                ..base.clone()
+            })
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn effective_scopes_drop_read_only_when_its_toggle_is_off() {
+    let pinned: Vec<_> = ["read", "spend", "gates"]
+        .into_iter()
+        .map(|s| parse_scope(s).expect("a protocol scope"))
+        .collect();
+    let all_on = HubLocalPolicy {
+        spend_enabled: true,
+        gates_enabled: true,
+        ..HubLocalPolicy::default()
+    };
+    let names = |policy: &HubLocalPolicy| -> Vec<&str> {
+        effective_scopes(&pinned, policy)
+            .into_iter()
+            .map(scope_as_str)
+            .collect()
+    };
+    assert_eq!(names(&all_on), ["read", "spend", "gates"]);
+    let read_off = HubLocalPolicy {
+        read_enabled: false,
+        ..all_on
+    };
+    assert_eq!(names(&read_off), ["spend", "gates"]);
+}
+
+/// The shape a V65 writer left behind: no `read_enabled` named, so the
+/// column's default is the only thing that can answer.
+#[test]
+fn a_policy_row_written_before_v67_reads_back_with_read_on() {
+    let (_dir, db) = pin_db("hub_v67_read_default");
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO hub_local_policy
+                 (id, spend_enabled, gates_enabled, run_ceiling_cents, daily_ceiling_cents)
+             VALUES (1, 1, 0, 500, NULL)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        policy_get_core(&db),
+        Ok(HubLocalPolicy {
+            read_enabled: true,
+            spend_enabled: true,
+            gates_enabled: false,
+            run_ceiling_cents: Some(500),
+            daily_ceiling_cents: None,
+        })
+    );
+}
+
+/// Only `read` is read once per socket; every other field is read per
+/// request, so a change to one of those restarts nothing.
+#[test]
+fn only_a_read_flip_or_an_unreadable_old_policy_counts_as_a_read_change() {
+    let on = HubLocalPolicy::default();
+    let off = HubLocalPolicy {
+        read_enabled: false,
+        ..on.clone()
+    };
+    let spend_on = HubLocalPolicy {
+        spend_enabled: true,
+        gates_enabled: true,
+        run_ceiling_cents: Some(500),
+        daily_ceiling_cents: Some(5_000),
+        ..on.clone()
+    };
+    let cases = [
+        (Some(&on), &off, true),
+        (Some(&off), &on, true),
+        (Some(&on), &on, false),
+        (Some(&on), &spend_on, false),
+        (None, &on, true),
+        (None, &off, true),
+    ];
+    for (old, new, changed) in cases {
+        assert_eq!(read_changed(old, new), changed, "{old:?} -> {new:?}");
+    }
+}
+
+#[test]
+fn a_policy_payload_without_read_enabled_means_read_on() {
+    let policy: HubLocalPolicy = serde_json::from_value(json!({
+        "spend_enabled": false,
+        "gates_enabled": false,
+        "run_ceiling_cents": null,
+        "daily_ceiling_cents": null,
+    }))
+    .expect("an older payload still parses");
+    assert!(policy.read_enabled);
+    assert_eq!(policy, HubLocalPolicy::default());
 }
 
 /// Records the `limit` each `list_log` is given; every other call errors.
@@ -1827,7 +2166,7 @@ impl HubRequestRepository for LimitSpy {
     fn append_log(&self, _: &HubRequestLogEntry) -> Result<(), AppError> {
         Err(AppError::internal("unexpected append_log"))
     }
-    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogEntry>, AppError> {
+    fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogRow>, AppError> {
         self.0.lock().expect("lock").push(limit);
         Ok(Vec::new())
     }
@@ -2339,13 +2678,138 @@ fn hello_announces_only_the_pinned_scopes_the_protocol_knows() {
 }
 
 #[test]
-fn events_are_sent_only_when_read_is_pinned() {
+fn events_are_sent_only_when_read_is_pinned_and_enabled() {
     let pins = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-    assert!(sends_events(&pins(&["read"])));
-    assert!(sends_events(&pins(&["spend", "read", "gates"])));
-    assert!(!sends_events(&pins(&["spend", "gates"])));
-    assert!(!sends_events(&pins(&["Read", "read ", "logs"])));
-    assert!(!sends_events(&[]));
+    let cases: [(&[&str], bool, bool); 10] = [
+        (&["read"], true, true),
+        (&["spend", "read", "gates"], true, true),
+        (&["read"], false, false),
+        (&["spend", "read", "gates"], false, false),
+        (&["spend", "gates"], true, false),
+        (&["spend", "gates"], false, false),
+        (&["Read", "read ", "logs"], true, false),
+        (&["Read", "read ", "logs"], false, false),
+        (&[], true, false),
+        (&[], false, false),
+    ];
+    for (pinned, read_enabled, sends) in cases {
+        assert_eq!(
+            sends_events(&pins(pinned), read_enabled),
+            sends,
+            "{pinned:?}, read_enabled {read_enabled}"
+        );
+    }
+}
+
+fn connected() -> ConnectionFacts {
+    ConnectionFacts {
+        state: ConnectionState::Connected,
+        relaying: true,
+        caught_up: true,
+        ..ConnectionFacts::default()
+    }
+}
+
+#[test]
+fn a_connected_relaying_session_is_in_sync_only_when_caught_up_with_nothing_in_flight() {
+    assert_eq!(sync_state(&connected()), SyncState::InSync);
+    for facts in [
+        ConnectionFacts {
+            caught_up: false,
+            ..connected()
+        },
+        ConnectionFacts {
+            in_flight: 1,
+            ..connected()
+        },
+    ] {
+        assert_eq!(sync_state(&facts), SyncState::CatchingUp, "{facts:?}");
+    }
+}
+
+#[test]
+fn a_connected_session_that_does_not_relay_is_not_reporting() {
+    let facts = ConnectionFacts {
+        relaying: false,
+        in_flight: 3,
+        ..connected()
+    };
+    assert_eq!(sync_state(&facts), SyncState::NotReporting);
+}
+
+#[test]
+fn every_state_but_connected_is_offline() {
+    for state in [
+        ConnectionState::NotRunning,
+        ConnectionState::Connecting,
+        ConnectionState::Reconnecting,
+        ConnectionState::Stopped,
+    ] {
+        let facts = ConnectionFacts {
+            state,
+            ..connected()
+        };
+        assert_eq!(sync_state(&facts), SyncState::Offline, "{state:?}");
+    }
+}
+
+#[test]
+fn the_view_withholds_latency_unless_connected() {
+    let facts = ConnectionFacts {
+        latency_ms: Some(42),
+        reported_through: Some(7),
+        last_heard_at_ms: Some(1_000),
+        ..connected()
+    };
+    assert_eq!(view(&facts).latency_ms, Some(42));
+    let ended = view(&ConnectionFacts {
+        state: ConnectionState::Reconnecting,
+        ..facts
+    });
+    assert_eq!(ended.latency_ms, None);
+    assert_eq!(ended.reported_through, Some(7));
+    assert_eq!(ended.last_heard_at_ms, Some(1_000));
+    assert_eq!(ended.sync, SyncState::Offline);
+}
+
+#[test]
+fn the_connection_view_serializes_in_snake_case() {
+    let stopped = ConnectionFacts {
+        state: ConnectionState::Stopped,
+        stop_reason: Some(StopReason::Displaced),
+        ..ConnectionFacts::default()
+    };
+    assert_eq!(
+        serde_json::to_value(view(&stopped)).unwrap(),
+        json!({
+            "state": "stopped",
+            "stop_reason": "displaced",
+            "latency_ms": null,
+            "reported_through": null,
+            "sync": "offline",
+            "last_heard_at_ms": null,
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(view(&ConnectionFacts::default())).unwrap()["state"],
+        "not_running"
+    );
+    let not_reporting = ConnectionFacts {
+        relaying: false,
+        ..connected()
+    };
+    assert_eq!(
+        serde_json::to_value(view(&not_reporting)).unwrap()["sync"],
+        "not_reporting"
+    );
+    for (reason, name) in [
+        (StopReason::ProtocolViolation, "protocol_violation"),
+        (StopReason::NeedsRepair, "needs_repair"),
+        (StopReason::RefreshUncertain, "refresh_uncertain"),
+        (StopReason::ClockSkew, "clock_skew"),
+    ] {
+        assert_eq!(serde_json::to_value(reason).unwrap(), name);
+    }
 }
 
 #[test]
@@ -2871,7 +3335,7 @@ impl RefreshRig {
             reply: Reply::Answer,
             verifiers: Mutex::default(),
         });
-        let hub = HubPairing::new(db.clone(), secrets.clone(), token)
+        let hub = HubPairing::new(db.clone(), secrets.clone(), token, db.clone())
             .with_refresh_endpoint(endpoint.clone());
         Self {
             dir,
@@ -2958,6 +3422,7 @@ async fn a_refresh_without_an_endpoint_a_pairing_or_a_token_sends_nothing() {
             reply: Reply::Answer,
             verifiers: Mutex::default(),
         }),
+        unconfigured.db.clone(),
     );
     let no_token = RefreshRig::new("hub_refresh_no_token", "dhr_r0");
     no_token
@@ -3152,7 +3617,8 @@ impl RefreshRig {
                 run_events.wake(),
                 Arc::new(ScriptedSnapshotSource::default()),
                 Arc::new(tokio::sync::Notify::new()),
-            ),
+            )
+            .with_relaying(true),
             sleeper: sleeper.clone(),
             jitter: Box::new(|| 1.0),
         };
@@ -3441,7 +3907,7 @@ impl Sleeper for ParkedSleeper {
 fn socket_config(
     db: &Arc<SqliteAdapter>,
     dialer: &Arc<ScriptedSocketDialer>,
-    sleeper: &Arc<ParkedSleeper>,
+    sleeper: &Arc<impl Sleeper + 'static>,
 ) -> SocketConfig {
     let run_events = Arc::new(WakingRunEvents::new(db.clone()));
     SocketConfig {
@@ -3467,8 +3933,13 @@ impl Rig {
         sleeper: &Arc<ParkedSleeper>,
     ) -> Self {
         let mut rig = Self::new(tag, reply);
-        let hub = HubPairing::new(rig.db.clone(), rig.secrets.clone(), rig.token.clone())
-            .with_socket(socket_config(&rig.db, dialer, sleeper));
+        let hub = HubPairing::new(
+            rig.db.clone(),
+            rig.secrets.clone(),
+            rig.token.clone(),
+            rig.db.clone(),
+        )
+        .with_socket(socket_config(&rig.db, dialer, sleeper));
         rig.hub = Arc::new(hub);
         rig
     }
@@ -3484,9 +3955,14 @@ impl RefreshRig {
             reply: Reply::Answer,
             verifiers: Mutex::default(),
         });
-        let hub = HubPairing::new(self.db.clone(), self.secrets.clone(), token)
-            .with_refresh_endpoint(self.endpoint.clone())
-            .with_socket(socket_config(&self.db, dialer, &ParkedSleeper::new()));
+        let hub = HubPairing::new(
+            self.db.clone(),
+            self.secrets.clone(),
+            token,
+            self.db.clone(),
+        )
+        .with_refresh_endpoint(self.endpoint.clone())
+        .with_socket(socket_config(&self.db, dialer, &ParkedSleeper::new()));
         Arc::new(hub)
     }
 }
@@ -3523,6 +3999,44 @@ async fn a_socket_without_pins_or_a_refresh_token_dials_nothing() {
         assert!(dialer.upgrades().is_empty(), "{case}");
         assert!(rig.endpoint.calls().is_empty(), "{case}");
     }
+}
+
+struct UnreadablePolicy;
+
+impl crate::ports::hub::HubPolicyReader for UnreadablePolicy {
+    fn load(&self) -> Result<HubLocalPolicy, AppError> {
+        Err(AppError::Internal {
+            message: "the local policy is unreadable".to_owned(),
+        })
+    }
+}
+
+/// A policy that cannot be read cannot say `read` is on, so the socket is
+/// not started rather than started relaying.
+#[tokio::test]
+async fn a_socket_whose_policy_cannot_be_read_dials_nothing() {
+    let rig = RefreshRig::new("hub_socket_unreadable_policy", "dhr_r0");
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let hub = HubPairing::new(
+        rig.db.clone(),
+        rig.secrets.clone(),
+        Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        }),
+        Arc::new(UnreadablePolicy),
+    )
+    .with_refresh_endpoint(rig.endpoint.clone())
+    .with_socket(socket_config(&rig.db, &dialer, &ParkedSleeper::new()));
+    let idle = Arc::strong_count(&dialer);
+
+    hub.start_socket();
+    assert_eq!(Arc::strong_count(&dialer), idle, "a socket task");
+    settle().await;
+
+    assert!(dialer.upgrades().is_empty());
+    assert!(rig.endpoint.calls().is_empty());
 }
 
 /// AC6.2: the socket dials with the access token the pairing was issued,
@@ -3797,10 +4311,214 @@ async fn a_re_pairing_replaces_the_running_socket_with_one_on_its_scopes() {
     assert_eq!(dialer.unscripted(), 0);
 }
 
+/// What a socket started on a pairing that pins `read`, under a local policy
+/// with `read_enabled`, sent before its second read, with how often it asked
+/// for a snapshot. Its run log holds one row and its snapshot source always
+/// has one, so anything withheld was withheld by the policy.
+async fn relayed_with_read(tag: &str, read_enabled: bool) -> (Vec<String>, usize, i64) {
+    let rig = RefreshRig::new(tag, "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let policy = HubLocalPolicy {
+        read_enabled,
+        ..HubLocalPolicy::default()
+    };
+    policy_set_core(rig.db.as_ref(), rig.db.as_ref(), None, &policy)
+        .await
+        .expect("save the policy");
+    let row = rig
+        .db
+        .append(
+            "f-0123456789abcdef",
+            "feature_status",
+            Some(r#"{"status":"running"}"#),
+            1_700_000_000_000,
+        )
+        .unwrap();
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let (conn, feed, mut traffic) = OpenConnection::new();
+    dialer.connect(conn);
+    feed.send(first_ack()).unwrap();
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(snapshot(&no_projects()));
+    let hub = HubPairing::new(
+        rig.db.clone(),
+        rig.secrets.clone(),
+        Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        }),
+        rig.db.clone(),
+    )
+    .with_refresh_endpoint(rig.endpoint.clone())
+    .with_socket(SocketConfig {
+        snapshots: snapshots.clone(),
+        ..socket_config(&rig.db, &dialer, &ParkedSleeper::new())
+    });
+
+    hub.start_socket();
+    let seen = traffic_until(&mut traffic, "the read past the ack", |t| t.reads >= 2).await;
+    hub.disconnect().await.expect("a disconnect");
+
+    assert_eq!(traffic.borrow().closed_with, Some(1001));
+    assert_eq!(dialer.unscripted(), 0);
+    assert_eq!(rig.endpoint.unscripted(), 0);
+    assert_eq!(snapshots.unscripted(), 0);
+    (seen.sent, snapshots.calls(), row)
+}
+
+fn no_projects() -> SnapshotInput {
+    SnapshotInput {
+        projects: Vec::new(),
+        workflows: Vec::new(),
+        providers: Vec::new(),
+    }
+}
+
+/// AC4(b): `read` turned off in the local policy withholds the run log and
+/// the snapshot while the `Hello` still announces the pinned `read`.
+#[tokio::test]
+async fn a_socket_with_read_turned_off_sends_only_its_hello() {
+    let (sent, snapshot_calls, _) = relayed_with_read("hub_socket_read_off", false).await;
+
+    let [hello] = &sent[..] else {
+        panic!("only the Hello: {sent:?}");
+    };
+    assert_eq!(announced_scopes(hello), json!(["read", "spend", "gates"]));
+    assert_eq!(snapshot_calls, 0);
+}
+
+/// AC4(b): the same pairing with `read` left on relays the snapshot and the
+/// run event after the `Hello`.
+#[tokio::test]
+async fn a_socket_with_read_turned_on_relays_the_snapshot_and_the_event() {
+    let (sent, snapshot_calls, row) = relayed_with_read("hub_socket_read_on", true).await;
+
+    let [hello, sent_snapshot, event] = &sent[..] else {
+        panic!("a Hello, a snapshot and an event: {sent:?}");
+    };
+    assert_eq!(announced_scopes(hello), json!(["read", "spend", "gates"]));
+    assert_eq!(
+        read_as(|| snapshot(&no_projects()), sent_snapshot),
+        snapshot(&no_projects())
+    );
+    let event = read_as(
+        || hub_event(&run_row("feature_status", Some(r#"{"status":"running"}"#))).unwrap(),
+        event,
+    );
+    assert_eq!(i64::try_from(event.offset).unwrap(), row);
+    assert_eq!(snapshot_calls, 1);
+}
+
 /// `pair` awaits the old socket while holding the refresh lock. A refresh
 /// that socket queued on the lock behind the pairing is dropped by the stop
 /// signal, so the pairing neither deadlocks on it nor lets it reach the
 /// endpoint with the refresh token the pairing just replaced.
+/// A socket started with `read` off, past its first ack, on a dialer
+/// scripted for a second connection that acks too.
+struct SavedOver {
+    rig: RefreshRig,
+    dialer: Arc<ScriptedSocketDialer>,
+    hub: Arc<HubPairing>,
+    first: tokio::sync::watch::Receiver<Traffic>,
+    second: tokio::sync::watch::Receiver<Traffic>,
+}
+
+impl SavedOver {
+    const BEFORE: HubLocalPolicy = HubLocalPolicy {
+        read_enabled: false,
+        spend_enabled: false,
+        gates_enabled: false,
+        run_ceiling_cents: None,
+        daily_ceiling_cents: None,
+    };
+
+    async fn running(tag: &str) -> Self {
+        let rig = RefreshRig::new(tag, "dhr_r0");
+        rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+        policy_set_core(rig.db.as_ref(), rig.db.as_ref(), None, &Self::BEFORE)
+            .await
+            .expect("save the policy");
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+        let (first_conn, first_feed, mut first) = OpenConnection::new();
+        let (second_conn, second_feed, second) = OpenConnection::new();
+        dialer.connect(first_conn);
+        dialer.connect(second_conn);
+        first_feed.send(first_ack()).unwrap();
+        second_feed.send(first_ack()).unwrap();
+        let hub = rig.socketed(&dialer);
+
+        hub.start_socket();
+        traffic_until(&mut first, "the first ack", |t| t.reads >= 2).await;
+        Self {
+            rig,
+            dialer,
+            hub,
+            first,
+            second,
+        }
+    }
+
+    async fn save(&self, policy: &HubLocalPolicy) {
+        policy_set_core(
+            self.rig.db.as_ref(),
+            self.rig.db.as_ref(),
+            Some(self.hub.as_ref()),
+            policy,
+        )
+        .await
+        .expect("save the policy");
+    }
+
+    async fn disconnect(self) {
+        self.hub.disconnect().await.expect("a disconnect");
+        assert_eq!(self.dialer.unscripted(), 0);
+        assert_eq!(self.rig.endpoint.unscripted(), 0);
+    }
+}
+
+/// A socket reads `read_enabled` only as it starts, so turning it on is in
+/// force at once only because the save replaces the running socket: the old
+/// one has ended by the time the save returns, and the new one relays.
+#[tokio::test]
+async fn saving_a_read_flip_redials_the_running_socket() {
+    let mut saved = SavedOver::running("hub_policy_read_flip").await;
+
+    saved
+        .save(&HubLocalPolicy {
+            read_enabled: true,
+            ..SavedOver::BEFORE
+        })
+        .await;
+
+    assert_eq!(saved.first.borrow().closed_with, Some(1001));
+    tokio::time::timeout(Duration::from_secs(5), saved.dialer.dialed_times(2))
+        .await
+        .expect("a second dial");
+    traffic_until(&mut saved.second, "the second ack", |t| t.reads >= 2).await;
+    assert_eq!(dialed_tokens(&saved.dialer), ["dha_a1", "dha_a1"]);
+    saved.disconnect().await;
+}
+
+#[tokio::test]
+async fn saving_a_spend_change_leaves_the_running_socket_alone() {
+    let saved = SavedOver::running("hub_policy_spend_only").await;
+
+    saved
+        .save(&HubLocalPolicy {
+            spend_enabled: true,
+            run_ceiling_cents: Some(500),
+            ..SavedOver::BEFORE
+        })
+        .await;
+    settle().await;
+
+    assert_eq!(saved.first.borrow().closed_with, None);
+    assert_eq!(saved.dialer.upgrades().len(), 1);
+    assert_eq!(saved.second.borrow().reads, 0);
+    saved.disconnect().await;
+}
+
 #[tokio::test]
 async fn a_re_pairing_drops_the_sockets_refresh_queued_behind_it() {
     let dialer = Arc::new(ScriptedSocketDialer::new());
@@ -3815,9 +4533,14 @@ async fn a_re_pairing_drops_the_sockets_refresh_queued_behind_it() {
         "hub_repair_queued_refresh",
         Reply::Scoped(&["read gates", "gates"]),
     );
-    let hub = HubPairing::new(rig.db.clone(), rig.secrets.clone(), rig.token.clone())
-        .with_refresh_endpoint(endpoint.clone())
-        .with_socket(socket_config(&rig.db, &dialer, &ParkedSleeper::new()));
+    let hub = HubPairing::new(
+        rig.db.clone(),
+        rig.secrets.clone(),
+        rig.token.clone(),
+        rig.db.clone(),
+    )
+    .with_refresh_endpoint(endpoint.clone())
+    .with_socket(socket_config(&rig.db, &dialer, &ParkedSleeper::new()));
     rig.hub = Arc::new(hub);
     let idle = Arc::strong_count(&dialer);
     rig.pair(HUB_URL).await.expect("a pairing");
@@ -3866,4 +4589,187 @@ async fn a_re_pairing_drops_the_sockets_refresh_queued_behind_it() {
     assert_eq!(dialed_tokens(&dialer), [ACCESS_TOKEN, ACCESS_TOKEN]);
     rig.hub.disconnect().await.expect("a disconnect");
     assert_eq!(dialer.unscripted(), 0);
+}
+
+/// Parks every wait until the test lets one through, so a backoff lasts
+/// exactly as long as the test needs to look at it.
+struct GatedSleeper {
+    parked: tokio::sync::watch::Sender<usize>,
+    gate: tokio::sync::Semaphore,
+}
+
+impl GatedSleeper {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            parked: tokio::sync::watch::Sender::new(0),
+            gate: tokio::sync::Semaphore::new(0),
+        })
+    }
+
+    async fn parked(&self) {
+        let mut parked = self.parked.subscribe();
+        tokio::time::timeout(Duration::from_secs(5), parked.wait_for(|n| *n > 0))
+            .await
+            .expect("the socket backs off")
+            .expect("the sender lives as long as self");
+    }
+
+    fn release(&self) {
+        self.gate.add_permits(1);
+    }
+}
+
+#[async_trait::async_trait]
+impl Sleeper for GatedSleeper {
+    async fn sleep(&self, _: Duration) {
+        self.parked.send_modify(|n| *n += 1);
+        if let Ok(permit) = self.gate.acquire().await {
+            permit.forget();
+        }
+    }
+}
+
+async fn connection_until(hub: &HubPairing, state: ConnectionState) -> HubConnection {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let seen = connection_core(hub).expect("a connection");
+            if seen.state == state {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the connection never read {state:?}"))
+}
+
+/// AC5: what the Settings tab is told follows the socket through a
+/// backoff, a connection whose first ack carries the Hub's cursor, and a
+/// displacing close, and reads as not running again once it is unpaired.
+#[tokio::test]
+async fn the_connection_follows_the_socket_from_backoff_to_displaced_to_unpaired() {
+    let rig = RefreshRig::new("hub_connection_states", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let (open, feed, _traffic) = OpenConnection::new();
+    dialer.refuse(DialFailure::Unreachable("connection refused".to_owned()));
+    dialer.connect(open);
+    let sleeper = GatedSleeper::new();
+    let hub = HubPairing::new(
+        rig.db.clone(),
+        rig.secrets.clone(),
+        Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        }),
+        rig.db.clone(),
+    )
+    .with_refresh_endpoint(rig.endpoint.clone())
+    .with_socket(socket_config(&rig.db, &dialer, &sleeper));
+
+    assert_eq!(
+        connection_core(&hub).unwrap(),
+        view(&ConnectionFacts::default())
+    );
+
+    hub.start_socket();
+    sleeper.parked().await;
+    let backing_off = connection_core(&hub).unwrap();
+    assert_eq!(backing_off.state, ConnectionState::Reconnecting);
+    assert_eq!(backing_off.sync, SyncState::Offline);
+
+    feed.send(SocketReceived::Text(r#"{"v":1,"offset":7}"#.to_owned()))
+        .unwrap();
+    sleeper.release();
+    let connected = connection_until(&hub, ConnectionState::Connected).await;
+    assert_eq!(connected.reported_through, Some(7));
+    assert!(connected.latency_ms.is_some());
+    assert_eq!(connected.stop_reason, None);
+    assert!(connected.last_heard_at_ms.is_some());
+
+    feed.send(SocketReceived::Closed(Some(4002))).unwrap();
+    let stopped = connection_until(&hub, ConnectionState::Stopped).await;
+    assert_eq!(stopped.stop_reason, Some(StopReason::Displaced));
+    assert_eq!(stopped.latency_ms, None);
+    assert_eq!(stopped.sync, SyncState::Offline);
+    assert_eq!(stopped.reported_through, Some(7));
+
+    disconnect_core(&hub).await.expect("a disconnect");
+    assert_eq!(
+        connection_core(&hub).unwrap(),
+        view(&ConnectionFacts::default())
+    );
+    assert_eq!(dialer.upgrades().len(), 2);
+    assert_eq!(dialer.unscripted(), 0);
+    assert_eq!(rig.endpoint.unscripted(), 0);
+}
+
+/// A policy restart is the desktop's own doing, not a stop: once it returns
+/// with no socket to replace the old one, the connection reads as not
+/// running, and still reports the cursor the old socket was acked up to.
+#[tokio::test]
+async fn a_restart_that_starts_no_socket_reads_not_running_and_keeps_the_cursor() {
+    let rig = RefreshRig::new("hub_connection_restart_declined", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let (open, feed, _traffic) = OpenConnection::new();
+    dialer.connect(open);
+    feed.send(SocketReceived::Text(r#"{"v":1,"offset":7}"#.to_owned()))
+        .unwrap();
+    let hub = rig.socketed(&dialer);
+    hub.start_socket();
+    connection_until(&hub, ConnectionState::Connected).await;
+
+    rig.secrets
+        .delete(&hub_keyring_account(
+            &rig.db.install_id().unwrap(),
+            HubSecret::RefreshToken,
+        ))
+        .unwrap();
+    hub.restart_socket().await;
+
+    let restarted = connection_core(&hub).unwrap();
+    assert_eq!(restarted.state, ConnectionState::NotRunning);
+    assert_eq!(restarted.stop_reason, None);
+    assert_eq!(restarted.reported_through, Some(7));
+    assert_eq!(restarted.latency_ms, None);
+    assert_eq!(restarted.sync, SyncState::Offline);
+    assert!(restarted.last_heard_at_ms.is_some());
+    assert_eq!(dialer.upgrades().len(), 1);
+    assert_eq!(dialer.unscripted(), 0);
+    assert_eq!(rig.endpoint.unscripted(), 0);
+}
+
+#[tokio::test]
+async fn a_restart_that_redials_never_reads_stopped_once_it_returns() {
+    let rig = RefreshRig::new("hub_connection_restart_redials", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    let (first, first_feed, _first) = OpenConnection::new();
+    let (second, second_feed, _second) = OpenConnection::new();
+    dialer.connect(first);
+    dialer.connect(second);
+    first_feed
+        .send(SocketReceived::Text(r#"{"v":1,"offset":7}"#.to_owned()))
+        .unwrap();
+    let hub = rig.socketed(&dialer);
+    hub.start_socket();
+    connection_until(&hub, ConnectionState::Connected).await;
+
+    hub.restart_socket().await;
+    let restarted = connection_core(&hub).unwrap();
+    assert_ne!(restarted.state, ConnectionState::Stopped);
+    assert_eq!(restarted.stop_reason, None);
+    assert_eq!(restarted.reported_through, Some(7));
+
+    second_feed
+        .send(SocketReceived::Text(r#"{"v":1,"offset":9}"#.to_owned()))
+        .unwrap();
+    let reconnected = connection_until(&hub, ConnectionState::Connected).await;
+    assert_eq!(reconnected.reported_through, Some(9));
+    hub.disconnect().await.expect("a disconnect");
+    assert_eq!(dialer.upgrades().len(), 2);
+    assert_eq!(dialer.unscripted(), 0);
+    assert_eq!(rig.endpoint.unscripted(), 0);
 }
