@@ -13,6 +13,11 @@
 //! The log is matched by structure, not by algorithm name: OpenSSH 10 logs
 //! `ED25519-CERT`, older releases log `ssh-ed25519-cert-v01@openssh.com`, and
 //! both are certificates. See [`parse_line`].
+//!
+//! Unix only: the harness is a shell script around a real sshd, and `ssh2`
+//! has no `userauth_pubkey_memory` on Windows, where libssh2 is built on
+//! WinCNG rather than OpenSSL.
+#![cfg(unix)]
 
 use std::fmt;
 use std::fs;
