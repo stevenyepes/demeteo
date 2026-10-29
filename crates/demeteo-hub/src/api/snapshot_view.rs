@@ -126,21 +126,39 @@ pub(super) fn run_shape(settings: Vec<RunShapeSettings>) -> Vec<RunShapeView> {
 }
 
 fn workflow(version: WorkflowVersionSnapshot) -> WorkflowView {
-    let definition = version
-        .definition_json
-        .as_deref()
-        .and_then(|text| serde_json::from_str::<Definition>(text).ok());
-    let name = definition
-        .as_ref()
-        .and_then(|definition| definition.name.clone())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| version.workflow_id.clone());
+    let definition = parsed(&version);
+    let name = name_of(definition.as_ref(), &version);
     WorkflowView {
         workflow_id: version.workflow_id,
         version: version.version,
         name,
         graph: definition.map(graph),
     }
+}
+
+/// The version's name and graph, by the rule [`workflow`] applies; `None`
+/// when it has no readable schema-v2 document.
+pub(super) fn definition_of(
+    version: &WorkflowVersionSnapshot,
+) -> Option<(String, WorkflowGraphView)> {
+    let definition = parsed(version)?;
+    let name = name_of(Some(&definition), version);
+    Some((name, graph(definition)))
+}
+
+fn parsed(version: &WorkflowVersionSnapshot) -> Option<Definition> {
+    version
+        .definition_json
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Definition>(text).ok())
+}
+
+/// The definition's `name`, or the `workflow_id` when it has none.
+fn name_of(definition: Option<&Definition>, version: &WorkflowVersionSnapshot) -> String {
+    definition
+        .and_then(|definition| definition.name.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| version.workflow_id.clone())
 }
 
 fn graph(definition: Definition) -> WorkflowGraphView {

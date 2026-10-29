@@ -30,9 +30,9 @@ use demeteo_hub::auth::testing::{answered, SoftAuthenticator};
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::protocol::{
-    CancelFeature, Decision, Effort, GateDecision, ProjectSnapshot, RefusalReason, RequestOutcome,
-    RequestPayload, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings, Scope,
-    SetStepAssignment, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
+    CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, ProjectSnapshot, RefusalReason,
+    RequestOutcome, RequestPayload, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings,
+    Scope, SetStepAssignment, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
     WorkflowVersionSnapshot,
 };
 use demeteo_hub::socket::connections::Connections;
@@ -136,6 +136,8 @@ fn with_project(id: &str) -> Snapshot {
         }],
         workflows: Vec::new(),
         run_shape: Vec::new(),
+        features: Vec::new(),
+        harnesses: None,
     }
 }
 
@@ -510,6 +512,8 @@ fn two_projects() -> Snapshot {
         ],
         workflows: Vec::new(),
         run_shape: Vec::new(),
+        features: Vec::new(),
+        harnesses: None,
     }
 }
 
@@ -545,9 +549,129 @@ async fn the_fleet_counts_live_runs_and_lists_the_one_gate_that_needs_you() {
                 "step_id": "s-gate",
                 "step_execution_id": "e1",
                 "since": NOW + 10,
+                "title": null,
+                "project_name": null,
+                "step_title": null,
             }],
+            "harnesses": null,
+            "project_count": null,
         }]})
     );
+}
+
+/// [`two_projects`] naming F1 on `p-1`, pinned to `wf-a` version 2, which
+/// the snapshot sends; F3 on a project it does not name; and two harnesses.
+fn labelled() -> Snapshot {
+    let graph = json!({
+        "name": "Ship",
+        "nodes": [
+            {"id": "s1", "type": "agent", "title": "Implement",
+             "config": {"prompt_template": "SENTINEL-PROMPT"}},
+            {"id": "s-gate", "type": "gate", "title": "Review gate"},
+        ],
+        "edges": [{"from": "s1", "to": "s-gate"}],
+    })
+    .to_string();
+    Snapshot {
+        workflows: vec![
+            workflow_version("wf-a", 2, Some(graph)),
+            workflow_version("wf-a", 3, None),
+        ],
+        features: vec![
+            FeatureSnapshot {
+                id: "F1".to_owned(),
+                project_id: "p-1".to_owned(),
+                title: "Retry failed webhooks".to_owned(),
+                workflow_id: Some("wf-a".to_owned()),
+                workflow_version: Some(2),
+            },
+            FeatureSnapshot {
+                id: "F3".to_owned(),
+                project_id: "p-gone".to_owned(),
+                title: "Orphan".to_owned(),
+                workflow_id: Some("wf-a".to_owned()),
+                workflow_version: Some(9),
+            },
+        ],
+        harnesses: Some(vec!["claude-code".to_owned(), "opencode".to_owned()]),
+        ..two_projects()
+    }
+}
+
+#[tokio::test]
+async fn a_snapshot_labels_the_fleet_its_runs_and_its_gates() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    three_features(&fleet, instance).await;
+    fleet.snapshot_sent(instance, labelled()).await;
+    let api = parts.over(&fleet);
+    let id = instance.0.to_string();
+
+    let view = fleet_json(&api, user).await;
+    let entry = &view["instances"][0];
+    assert_eq!(entry["harnesses"], json!(["claude-code", "opencode"]));
+    assert_eq!(entry["project_count"], json!(2));
+    assert_eq!(
+        entry["needs_you"][0]["title"],
+        json!("Retry failed webhooks")
+    );
+    assert_eq!(entry["needs_you"][0]["project_name"], json!("demeteo"));
+    assert_eq!(entry["needs_you"][0]["step_title"], json!("Review gate"));
+
+    let listed = runs(&api, user, filter(Some(instance), None), NOW)
+        .await
+        .unwrap();
+    let listed = serde_json::to_value(listed).unwrap();
+    let f1 = &listed["runs"][0];
+    assert_eq!(f1["feature_id"], json!("F1"));
+    assert_eq!(f1["title"], json!("Retry failed webhooks"));
+    assert_eq!(f1["project_id"], json!("p-1"));
+    assert_eq!(f1["project_name"], json!("demeteo"));
+    assert_eq!(f1["step_id"], json!("s1"));
+    assert_eq!(f1["step_title"], json!("Implement"));
+    let f3 = &listed["runs"][2];
+    assert_eq!(f3["title"], json!("Orphan"));
+    assert_eq!(
+        f3["project_name"],
+        Value::Null,
+        "a project the snapshot does not name"
+    );
+
+    let detail = run_detail(&api, user, &id, "F1", NOW).await.unwrap();
+    let detail = serde_json::to_value(detail).unwrap();
+    assert_eq!(detail["title"], json!("Retry failed webhooks"));
+    assert_eq!(
+        detail["workflow"],
+        json!({
+            "schema_version": 2,
+            "id": "wf-a",
+            "name": "Ship",
+            "nodes": [
+                {"id": "s1", "type": "agent", "title": "Implement", "position": null},
+                {"id": "s-gate", "type": "gate", "title": "Review gate", "position": null},
+            ],
+            "edges": [{"from": "s1", "to": "s-gate"}],
+        })
+    );
+    assert_eq!(detail["steps"][0]["title"], json!("Implement"));
+    assert_eq!(
+        detail["pending_gates"][0]["step_title"],
+        json!("Review gate")
+    );
+    assert!(!detail.to_string().contains("SENTINEL"), "{detail}");
+
+    let f3 = run_detail(&api, user, &id, "F3", NOW).await.unwrap();
+    let f3 = serde_json::to_value(f3).unwrap();
+    assert_eq!(
+        f3["workflow"],
+        Value::Null,
+        "a version the snapshot did not send"
+    );
+
+    let detail = detail_json(&api, user, &id).await;
+    assert_eq!(detail["harnesses"], json!(["claude-code", "opencode"]));
 }
 
 #[tokio::test]
@@ -574,9 +698,15 @@ async fn an_instance_shows_its_projects_and_live_runs_and_nothing_unreported() {
         detail["live_runs"],
         json!([
             {"instance_id": id, "feature_id": "F1", "status": "running",
-             "started_at": NOW + 1, "updated_at": NOW + 10, "cost_cents": null},
+             "started_at": NOW + 1, "updated_at": NOW + 10, "cost_cents": null,
+             "title": null, "project_id": null, "project_name": null,
+             "step_id": "s1", "step_title": null,
+             "tickets": {"completed": 1, "failed": 0, "running": 1}},
             {"instance_id": id, "feature_id": "F3", "status": "running",
-             "started_at": NOW + 5, "updated_at": NOW + 11, "cost_cents": null},
+             "started_at": NOW + 5, "updated_at": NOW + 11, "cost_cents": null,
+             "title": null, "project_id": null, "project_name": null,
+             "step_id": null, "step_title": null,
+             "tickets": {"completed": 0, "failed": 0, "running": 0}},
         ])
     );
     assert_eq!(detail["id"], json!(id));
@@ -933,7 +1063,10 @@ async fn runs_are_filtered_by_status_and_by_instance() {
     assert_eq!(
         serde_json::to_value(summary).unwrap(),
         json!({"runs": [{"instance_id": x, "feature_id": "F2", "status": "completed",
-            "started_at": NOW + 2, "updated_at": NOW + 7, "cost_cents": null}]})
+            "started_at": NOW + 2, "updated_at": NOW + 7, "cost_cents": null,
+            "title": null, "project_id": null, "project_name": null,
+            "step_id": null, "step_title": null,
+            "tickets": {"completed": 0, "failed": 0, "running": 0}}]})
     );
 }
 
@@ -975,10 +1108,13 @@ async fn a_run_shows_its_steps_tickets_pending_gates_and_events_in_offset_order(
             "feature_id": "F1",
             "status": "running",
             "workflow": null,
-            "steps": [{"step_id": "s1", "state": "running"}],
+            "title": null,
+            "project_id": null,
+            "project_name": null,
+            "steps": [{"step_id": "s1", "state": "running", "title": null}],
             "tickets": {"completed": 1, "failed": 0, "running": 1},
             "pending_gates": [{"feature_id": "F1", "step_execution_id": "e1",
-                "step_id": "s-gate", "since": at(10)}],
+                "step_id": "s-gate", "since": at(10), "step_title": null}],
             "events": [
                 {"offset": 1, "kind": "feature_started", "occurred_at": at(1),
                  "step_id": null, "step_execution_id": null, "ticket_id": null},
@@ -1076,7 +1212,10 @@ async fn another_tenants_run_reads_as_one_that_does_not_exist() {
     assert_eq!(
         everything,
         json!({"runs": [{"instance_id": a_instance, "feature_id": "f-a", "status": "running",
-            "started_at": NOW, "updated_at": NOW, "cost_cents": null}]})
+            "started_at": NOW, "updated_at": NOW, "cost_cents": null,
+            "title": null, "project_id": null, "project_name": null,
+            "step_id": null, "step_title": null,
+            "tickets": {"completed": 0, "failed": 0, "running": 0}}]})
     );
     assert!(!everything.to_string().contains(&b_instance));
     assert_eq!(t.fleet.requests(t.b_instance).len(), 1);
@@ -2291,6 +2430,8 @@ impl Populated {
                         }],
                         workflows: Vec::new(),
                         run_shape: Vec::new(),
+                        features: Vec::new(),
+                        harnesses: None,
                     },
                 )
                 .await;

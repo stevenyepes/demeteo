@@ -152,6 +152,8 @@ mod tests {
             projects: Vec::new(),
             workflows: Vec::new(),
             run_shape: Vec::new(),
+            features: Vec::new(),
+            harnesses: None,
         };
         let text = serde_json::to_string(&snapshot).unwrap();
         assert_eq!(

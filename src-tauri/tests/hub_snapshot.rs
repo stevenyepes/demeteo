@@ -13,11 +13,17 @@ use demeteo_core::adapters::hub::snapshot_source::RepoSnapshotSource;
 use demeteo_core::adapters::hub::socket::snapshot_wake::{WakingProjects, WakingWorkflows};
 use demeteo_core::adapters::hub::testing::ScriptedSnapshotSource;
 use demeteo_core::domain::git_push::without_userinfo;
-use demeteo_core::domain::hub_socket::{snapshot, ProjectInput, SnapshotInput};
-use demeteo_core::domain::models::{
-    EffortLevel, Project, ProjectSettings, ProviderInstance, Repository, Workflow, WorkflowVersion,
+use demeteo_core::domain::hub_socket::{
+    snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
+    MAX_REPORTED_FEATURES, MAX_TITLE_CHARS,
 };
-use demeteo_core::ports::db::{AppSettingsRepository, ProjectRepository, WorkflowRepository};
+use demeteo_core::domain::models::{
+    EffortLevel, Feature, Project, ProjectSettings, ProviderInstance, Repository, Workflow,
+    WorkflowVersion,
+};
+use demeteo_core::ports::db::{
+    AppSettingsRepository, FeatureRepository, ProjectRepository, WorkflowRepository,
+};
 use demeteo_core::ports::hub::HubSnapshotSource;
 use tokio::sync::Notify;
 
@@ -140,6 +146,9 @@ fn one_project_on(host: &str) -> SnapshotInput {
         }],
         workflows: Vec::new(),
         providers: vec![provider("gh", host)],
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     }
 }
 
@@ -155,6 +164,9 @@ fn budget_cents(usd: f64) -> Option<u64> {
         }],
         workflows: Vec::new(),
         providers: Vec::new(),
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     let mut shot = snapshot(&input);
     let row = shot.run_shape.pop().expect("one run-shape row");
@@ -186,6 +198,9 @@ fn a_missing_repository_or_provider_reports_no_remote_url() {
         projects: vec![bare("p1", "App")],
         workflows: Vec::new(),
         providers: vec![provider("gh", "github.com")],
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     assert_eq!(snapshot(&no_repo).projects[0].remote_url, None);
 
@@ -210,6 +225,9 @@ fn the_first_repository_is_the_one_reported() {
         }],
         workflows: Vec::new(),
         providers: vec![provider("gh", "github.com"), provider("gl", "gitlab.com")],
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     assert_eq!(
         snapshot(&input).projects[0].remote_url.as_deref(),
@@ -244,6 +262,9 @@ fn every_effort_level_maps_to_its_wire_effort() {
             }],
             workflows: Vec::new(),
             providers: Vec::new(),
+            features: Vec::new(),
+            harnesses: Vec::new(),
+            workflow_names: Vec::new(),
         };
         let shot = snapshot(&input);
         assert_eq!(
@@ -271,6 +292,9 @@ fn run_shape_carries_its_fields_verbatim() {
         }],
         workflows: Vec::new(),
         providers: Vec::new(),
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     let row = &snapshot(&input).run_shape[0];
     assert_eq!(row.project_id, "p1");
@@ -288,6 +312,9 @@ fn a_nul_in_a_project_name_drops_only_that_project() {
         projects: vec![bare("p1", "Fine"), bare("p2", "Bro\0ken")],
         workflows: Vec::new(),
         providers: Vec::new(),
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     let shot = snapshot(&input);
     let ids: Vec<&str> = shot.projects.iter().map(|p| p.id.as_str()).collect();
@@ -312,6 +339,9 @@ fn a_nul_in_a_run_shape_field_drops_only_that_row() {
         ],
         workflows: Vec::new(),
         providers: Vec::new(),
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     let shot = snapshot(&input);
     assert_eq!(shot.projects.len(), 2);
@@ -336,6 +366,9 @@ fn inputs_in_a_different_order_give_equal_snapshots() {
             .collect(),
         workflows: Vec::new(),
         providers: vec![provider("gl", "gitlab.com"), provider("gh", "github.com")],
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
     let forward = snapshot(&build(["a", "b", "c"]));
     let mut reversed = build(["c", "b", "a"]);
@@ -362,6 +395,9 @@ fn only(workflows: Vec<WorkflowVersion>) -> SnapshotInput {
         projects: Vec::new(),
         workflows,
         providers: Vec::new(),
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     }
 }
 
@@ -402,6 +438,9 @@ fn a_local_path_appears_nowhere_in_the_serialised_snapshot() {
         }],
         workflows: vec![workflow],
         providers: Vec::new(),
+        features: Vec::new(),
+        harnesses: Vec::new(),
+        workflow_names: Vec::new(),
     };
 
     let shot = snapshot(&input);
@@ -498,7 +537,47 @@ fn a_version_is_reported_verbatim_and_sorted_by_workflow_id() {
     assert_eq!(shot[1].id, "wf-b-v1");
     assert_eq!(shot[1].version, 7);
     assert_eq!(shot[1].note.as_deref(), Some("tightened gates"));
-    assert_eq!(shot[1].definition_json, None);
+}
+
+#[test]
+fn a_version_stored_without_a_definition_reports_the_one_it_migrates_to() {
+    let steps = serde_json::json!([
+        { "id": "s-spec", "kind": "agent", "title": "Write the spec" },
+        { "id": "s-gate-review", "kind": "gate", "title": "Review gate" },
+    ]);
+    let shot = snapshot(&SnapshotInput {
+        workflow_names: vec![("wf-a".into(), "Standard pipeline".to_owned())],
+        ..only(vec![version("wf-a", steps)])
+    })
+    .workflows;
+    let definition: serde_json::Value = serde_json::from_str(
+        shot[0]
+            .definition_json
+            .as_deref()
+            .expect("a definition crosses"),
+    )
+    .expect("the definition is JSON");
+    assert_eq!(definition["name"], "Standard pipeline");
+    let titles: Vec<&str> = definition["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|node| node["title"].as_str())
+        .collect();
+    assert_eq!(titles, ["Write the spec", "Review gate"]);
+}
+
+#[test]
+fn a_workflow_with_no_reported_name_is_named_by_its_id() {
+    let shot = snapshot(&only(vec![version("wf-a", serde_json::json!([]))])).workflows;
+    let definition: serde_json::Value = serde_json::from_str(
+        shot[0]
+            .definition_json
+            .as_deref()
+            .expect("a definition crosses"),
+    )
+    .expect("the definition is JSON");
+    assert_eq!(definition["name"], "wf-a");
 }
 
 #[test]
@@ -524,7 +603,7 @@ fn the_repository_source_reports_a_bare_remote_and_only_the_latest_version() {
     );
     db.add_provider_instance(provider("gh", "octo:ghp_secret@github.com"))
         .expect("provider saved");
-    db.add(project("p1", "App")).expect("project saved");
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
     db.add_repository(repository("p1", "gh", "acme/app"))
         .expect("repository saved");
     db.save_settings(settings(
@@ -554,7 +633,7 @@ fn the_repository_source_reports_a_bare_remote_and_only_the_latest_version() {
         .expect("version saved");
     }
 
-    let shot = RepoSnapshotSource::new(db.clone(), db.clone(), db)
+    let shot = RepoSnapshotSource::new(db.clone(), db.clone(), db.clone(), db, Vec::new())
         .snapshot()
         .expect("snapshot built");
 
@@ -646,7 +725,7 @@ async fn a_saved_workflow_version_wakes_the_snapshot() {
 #[tokio::test]
 async fn saved_project_settings_wake_the_snapshot() {
     let db = scratch_db();
-    db.add(project("p1", "App")).expect("project saved");
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
     let projects = WakingProjects::new(db);
     let wake = projects.wake();
 
@@ -660,7 +739,7 @@ async fn saved_project_settings_wake_the_snapshot() {
 #[tokio::test]
 async fn a_project_status_change_does_not_wake_the_snapshot() {
     let db = scratch_db();
-    db.add(project("p1", "App")).expect("project saved");
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
     let projects = WakingProjects::new(db);
     let wake = projects.wake();
 
@@ -674,7 +753,7 @@ async fn a_project_status_change_does_not_wake_the_snapshot() {
 #[tokio::test]
 async fn a_failed_write_does_not_wake_the_snapshot() {
     let db = scratch_db();
-    db.add(project("p1", "App")).expect("project saved");
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
     WorkflowRepository::create(&*db, workflow("wf-1")).expect("workflow saved");
     db.save_version(version("wf-1", serde_json::json!([])))
         .expect("version saved");
@@ -689,4 +768,194 @@ async fn a_failed_write_does_not_wake_the_snapshot() {
 
     assert!(!woke(&project_wake).await);
     assert!(!woke(&workflow_wake).await);
+}
+
+fn feature(id: &str, project_id: &str, title: &str, created_at: i64) -> Feature {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "project_id": project_id,
+        "workflow_id": null,
+        "title": title,
+        "status": "running",
+        "total_cost": 0.0,
+        "duration": "",
+        "created_at": created_at,
+        "mr_state": "none",
+    }))
+    .expect("feature fixture parses")
+}
+
+fn unpinned(feature: Feature) -> FeatureInput {
+    FeatureInput {
+        feature,
+        pinned: None,
+    }
+}
+
+fn with_features(features: Vec<FeatureInput>) -> SnapshotInput {
+    SnapshotInput {
+        features,
+        ..only(Vec::new())
+    }
+}
+
+#[test]
+fn a_feature_reports_its_title_project_and_pinned_version_and_nothing_else() {
+    let mut f = feature("f-1", "p1", "Retry webhooks", 5);
+    f.workflow_id = Some("wf-1".into());
+    f.description = "the whole launch prompt".to_owned();
+    let pinned = WorkflowVersion {
+        version: 4,
+        ..version("wf-1", serde_json::json!([]))
+    };
+    let shot = snapshot(&with_features(vec![FeatureInput {
+        feature: f,
+        pinned: Some(pinned),
+    }]));
+
+    let reported = serde_json::to_value(&shot.features).unwrap();
+    assert_eq!(
+        reported,
+        serde_json::json!([{
+            "id": "f-1",
+            "project_id": "p1",
+            "title": "Retry webhooks",
+            "workflow_id": "wf-1",
+            "workflow_version": 4,
+        }])
+    );
+    assert!(!serde_json::to_string(&shot)
+        .unwrap()
+        .contains("launch prompt"));
+}
+
+#[test]
+fn a_long_title_is_cut_on_a_character_boundary() {
+    let title = "é".repeat(MAX_TITLE_CHARS + 5);
+    let shot = snapshot(&with_features(vec![unpinned(feature(
+        "f-1", "p1", &title, 0,
+    ))]));
+    assert_eq!(shot.features[0].title.chars().count(), MAX_TITLE_CHARS);
+}
+
+#[test]
+fn a_token_in_a_title_is_masked() {
+    let title = "rotate ghp_abcdefghijklmnopqrstuvwxyz0123456789 today";
+    let shot = snapshot(&with_features(vec![unpinned(feature(
+        "f-1", "p1", title, 0,
+    ))]));
+    assert!(
+        !shot.features[0].title.contains("ghp_abcdef"),
+        "{:?}",
+        shot.features[0].title
+    );
+}
+
+#[test]
+fn a_nul_in_a_title_drops_only_that_feature() {
+    let shot = snapshot(&with_features(vec![
+        unpinned(feature("f-1", "p1", "a\0b", 0)),
+        unpinned(feature("f-2", "p1", "fine", 0)),
+    ]));
+    let ids: Vec<&str> = shot.features.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, ["f-2"]);
+}
+
+#[test]
+fn only_the_newest_features_are_reported_sorted_by_id() {
+    let features = (0..MAX_REPORTED_FEATURES + 3)
+        .map(|n| unpinned(feature(&format!("f-{n:04}"), "p1", "t", n as i64)))
+        .collect();
+    let shot = snapshot(&with_features(features));
+    assert_eq!(shot.features.len(), MAX_REPORTED_FEATURES);
+    assert_eq!(shot.features[0].id, "f-0003");
+    assert!(shot.features.windows(2).all(|w| w[0].id < w[1].id));
+}
+
+#[test]
+fn a_pinned_version_the_latest_does_not_hold_is_sent_up_to_the_cap() {
+    let latest = WorkflowVersion {
+        id: "wf-1-latest".into(),
+        version: 99,
+        ..version("wf-1", serde_json::json!([]))
+    };
+    let features: Vec<FeatureInput> = (0..MAX_PINNED_VERSIONS + 2)
+        .map(|n| FeatureInput {
+            feature: feature(&format!("f-{n:02}"), "p1", "t", n as i64),
+            pinned: Some(WorkflowVersion {
+                id: format!("wf-1-v{n}").as_str().into(),
+                version: n as u32,
+                ..version("wf-1", serde_json::json!([]))
+            }),
+        })
+        .chain(std::iter::once(FeatureInput {
+            feature: feature("f-latest", "p1", "t", 1_000),
+            pinned: Some(latest.clone()),
+        }))
+        .collect();
+    let shot = snapshot(&SnapshotInput {
+        features,
+        ..only(vec![latest])
+    });
+
+    let ids: Vec<&str> = shot.workflows.iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(ids.len(), MAX_PINNED_VERSIONS + 1, "{ids:?}");
+    assert_eq!(ids.iter().filter(|id| **id == "wf-1-latest").count(), 1);
+    assert!(
+        !ids.contains(&"wf-1-v0") && !ids.contains(&"wf-1-v1"),
+        "{ids:?}"
+    );
+    let oldest = shot.features.iter().find(|f| f.id == "f-00").unwrap();
+    assert_eq!(oldest.workflow_version, Some(0));
+}
+
+#[test]
+fn harnesses_are_reported_sorted_and_once_each() {
+    let shot = snapshot(&SnapshotInput {
+        harnesses: vec!["opencode".into(), "claude-code".into(), "opencode".into()],
+        ..only(Vec::new())
+    });
+    assert_eq!(
+        shot.harnesses,
+        Some(vec!["claude-code".to_owned(), "opencode".to_owned()])
+    );
+}
+
+#[test]
+fn the_repository_source_reports_active_features_with_their_pinned_version() {
+    let db = scratch_db();
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
+    WorkflowRepository::create(&*db, workflow("wf-1")).expect("workflow saved");
+    for n in [1, 2] {
+        db.save_version(WorkflowVersion {
+            id: format!("wf-1-v{n}").as_str().into(),
+            version: n,
+            ..version("wf-1", serde_json::json!([]))
+        })
+        .expect("version saved");
+    }
+    let mut pinned = feature("f-pinned", "p1", "Pinned", 1);
+    pinned.workflow_id = Some("wf-1".into());
+    pinned.workflow_version_id = Some("wf-1-v1".into());
+    FeatureRepository::add(&*db, pinned).expect("feature saved");
+    let mut archived = feature("f-archived", "p1", "Gone", 2);
+    archived.status = "archived".to_owned();
+    FeatureRepository::add(&*db, archived).expect("feature saved");
+
+    let shot = RepoSnapshotSource::new(
+        db.clone(),
+        db.clone(),
+        db.clone(),
+        db,
+        vec!["opencode".to_owned()],
+    )
+    .snapshot()
+    .expect("snapshot built");
+
+    let ids: Vec<&str> = shot.features.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, ["f-pinned"]);
+    assert_eq!(shot.features[0].workflow_version, Some(1));
+    let versions: Vec<u32> = shot.workflows.iter().map(|w| w.version).collect();
+    assert_eq!(versions, [1, 2]);
+    assert_eq!(shot.harnesses, Some(vec!["opencode".to_owned()]));
 }

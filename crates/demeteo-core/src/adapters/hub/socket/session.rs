@@ -14,7 +14,7 @@
 //! sent: a start can take as long as a launch and an attachment fetch, and
 //! the loop that reads the Hub's pings cannot wait that out.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::ready;
 use std::sync::{Arc, OnceLock};
@@ -293,7 +293,9 @@ impl Session {
                 facts.in_flight = outbox.in_flight.len();
             });
             if outbox.pending.is_empty() && !outbox.caught_up {
-                outbox.read(&ctx.run_events).await?;
+                if outbox.read(&ctx.run_events).await? {
+                    snapshots.woken(ctx.snapshot_debounce);
+                }
                 continue;
             }
             let sendable =
@@ -439,6 +441,11 @@ struct Outbox {
     in_flight: VecDeque<u64>,
     /// The last page came back short. Cleared by the wake.
     caught_up: bool,
+    /// The Features this connection has read an event of. A Feature's
+    /// title reaches the Hub in the snapshot (decision 70), and no write a
+    /// snapshot decorator watches happens when a run starts, so the first
+    /// event of a Feature is what wakes the rebuild that names it.
+    seen: HashSet<String>,
 }
 
 impl Outbox {
@@ -448,12 +455,15 @@ impl Outbox {
             pending: VecDeque::new(),
             in_flight: VecDeque::new(),
             caught_up: false,
+            seen: HashSet::new(),
         }
     }
 
     /// One page, read off the runtime: every repository shares one SQLite
     /// lock, which `list_after` takes and releases inside the blocking task.
-    async fn read(&mut self, run_events: &Arc<dyn RunEventsPort>) -> Result<(), Exit> {
+    /// `true` when the page held an event of a Feature not
+    /// [`seen`](Self::seen) before.
+    async fn read(&mut self, run_events: &Arc<dyn RunEventsPort>) -> Result<bool, Exit> {
         let run_events = Arc::clone(run_events);
         let after = self.read_through;
         let page = tokio::task::spawn_blocking(move || run_events.list_after(after, PAGE_SIZE))
@@ -468,12 +478,17 @@ impl Outbox {
         if let Some(last) = rows.last() {
             self.read_through = last.offset;
         }
+        let mut unseen = false;
         for event in rows.iter().filter_map(hub_event) {
+            if !self.seen.contains(&event.feature_id) {
+                unseen = true;
+                self.seen.insert(event.feature_id.clone());
+            }
             if let Some(text) = encoded(&event) {
                 self.pending.push_back((event.offset, text));
             }
         }
-        Ok(())
+        Ok(unseen)
     }
 
     fn acked(&mut self, offset: u64) {

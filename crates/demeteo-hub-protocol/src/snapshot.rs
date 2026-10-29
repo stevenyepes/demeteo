@@ -72,8 +72,34 @@ pub struct RunShapeSettings {
     pub default_max_budget_cents: Option<u64>,
 }
 
+/// A Feature as the Hub may name it in a view: what the user called it,
+/// which Project it belongs to and which Workflow version it runs
+/// (decision 70, HUB.md §5).
+///
+/// `title` is user-authored text, the one such field a snapshot carries. The
+/// desktop snapshot builder caps and scrubs it; the description the user
+/// typed at launch is not a title and has no field here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureSnapshot {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// The pinned version's number, which names one of
+    /// [`Snapshot::workflows`] when the builder sent it.
+    #[serde(default)]
+    pub workflow_version: Option<u32>,
+}
+
 /// Everything the Hub knows about an instance's Projects. A snapshot replaces
 /// the previous one wholesale; the Hub never merges.
+///
+/// `features` and `harnesses` were added after the first Hub shipped and
+/// default when absent, so a newer Hub reads an older desktop's snapshot. The
+/// reverse does not hold: `deny_unknown_fields` makes an older Hub refuse a
+/// snapshot carrying either, so the Hub ships first (HUB.md §11 item 8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
@@ -81,4 +107,12 @@ pub struct Snapshot {
     pub projects: Vec<ProjectSnapshot>,
     pub workflows: Vec<WorkflowVersionSnapshot>,
     pub run_shape: Vec<RunShapeSettings>,
+    #[serde(default)]
+    pub features: Vec<FeatureSnapshot>,
+    /// The harness kinds the instance has registered (`claude-code`,
+    /// `opencode`, …) and nothing about any of them: not whether it is
+    /// installed, signed in or on `PATH`. `None` from a desktop that predates
+    /// the field, which is not the same as one with none registered.
+    #[serde(default)]
+    pub harnesses: Option<Vec<String>>,
 }

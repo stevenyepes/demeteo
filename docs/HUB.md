@@ -42,7 +42,7 @@ full.
 | Part | State |
 |---|---|
 | `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On the desktop*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
-| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
+| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots (Features and harness kinds included, decision 70), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first |
@@ -93,7 +93,8 @@ judged by what that attacker cannot do.
 | Refresh-token hashes, access-token metadata | the plaintext leaves once, in `/token`'s response (the same rule as [MCP §5](MCP_INTEGRATION.md#5-authorization)) |
 | Events and snapshots an instance chose to send | status-level; §5 |
 | Queued requests | until delivery or expiry |
-| **Attachments**, briefly | the one piece of user-authored content on the Hub: a file the user attached in the browser to a Feature. Encrypted at rest, deleted after the instance fetches it — §6.3 |
+| **Attachments**, briefly | user-authored content the browser sent: a file the user attached to a Feature. Encrypted at rest, deleted after the instance fetches it — §6.3 |
+| Feature titles and harness kinds | the other user-authored content on the Hub: the title of each of an instance's newest Features, scrubbed and cut to 200 characters, in its snapshot, and the kinds of harness it registered. Sent only with `read` on, replaced by the next snapshot ([decision 70](DECISIONS.md#1-the-locked-decisions), §5). A Feature's description, prompts and PR text have no field |
 | Its own server secrets | in OpenBao, or encrypted under Transit — §9 |
 
 ### What a compromised Hub can and cannot do
@@ -632,6 +633,31 @@ are carried defaults (§11 *The desktop socket's carried defaults*). The builder
 what one connection sends of it is
 [`adapters/hub/socket/snapshot_send.rs`](../crates/demeteo-core/src/adapters/hub/socket/snapshot_send.rs).
 
+**Features and harnesses ride the snapshot** ([decision 70](DECISIONS.md#1-the-locked-decisions)).
+`features` names the instance's newest 100 Features that are neither archived
+nor deleted, each as `{id, project_id, title, workflow_id, workflow_version}`:
+the title scrubbed of secrets as a step document is and cut to 200 characters,
+the version the number of the one the Feature pins. Beside each Workflow's
+latest version, `workflows` then carries the versions those Features pin, at
+most 20 of them, newest Feature first, so the Hub can name a run's steps from
+the graph that run actually follows. `harnesses` is the sorted list of the
+agent registry's kinds and nothing else about them. Both are `#[serde(default)]`,
+so a Hub reads an older desktop's snapshot; an older Hub refuses a newer one,
+so the Hub ships first (§11 item 8).
+
+A snapshot carrying them was chosen over a per-Feature frame on the event
+stream: the snapshot is already replaced wholesale, already gated on `read`,
+and already rebuilt on a wake, where a new frame would be a second channel the
+Hub merged with no cursor. Starting a run writes nothing the snapshot
+decorators watch, so the session wakes the rebuild itself on the **first event
+of a Feature it has not read before on that connection**. A new run's events
+therefore reach the Hub up to one debounce window before its title does, and
+its views show it untitled meanwhile. A Feature's title edited after its first
+event is sent with the next snapshot something else wakes.
+[`domain/hub_socket/snapshot.rs`](../crates/demeteo-core/src/domain/hub_socket/snapshot.rs)
+holds the caps; the Hub's lookups are
+[`api/run_labels.rs`](../crates/demeteo-hub/src/api/run_labels.rs).
+
 These are what a Hub-authored `start_feature` names (§6) and what the
 future runner dispatch would build a `RunSpec` from (§10). The Hub never authors a
 Project or a Workflow: **rejected, because it is a second editor and a second copy
@@ -1009,10 +1035,10 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 
 | Method and path | Scope | Answer |
 |---|---|---|
-| `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs` and `needs_you` |
-| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url}`, its `workflows` (graph-only, below), its `run_shape` and its live runs |
+| `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs`, `needs_you`, `harnesses` and `project_count` |
+| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url}`, its `workflows` (graph-only, below), its `run_shape`, its `harnesses` and its live runs |
 | `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
-| `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, steps, ticket progress, pending gates and events in offset order |
+| `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, title, project, the pinned `workflow` graph, steps, ticket progress, pending gates and events in offset order |
 | `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
 | `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/cancel` | `spend` | `202`, a `cancel_feature` queued |
@@ -1136,11 +1162,22 @@ seconds at most, lost on a restart, and seen by one replica only (§11 item 14).
 Its request's `expires_at` is fixed at step 1, so a decision submitted late has
 less than the full 600 seconds left to be delivered.
 
-**What the views cannot show yet.** `cost_cents` on a run, `harnesses` on an
-instance and `workflow` on a run detail are always `null`, and a run carries no
-title. No protocol message reports a cost, a harness, the Workflow version a
-Feature runs or its title (§5). Each field fills in when a protocol change
-reports it; until then nothing is inferred.
+**What a run is called.** A run summary, a `needs_you` entry and a run detail
+carry `title`, `project_name` (and, on a summary and a detail, `project_id`),
+read from the instance's last snapshot (§5, *Features and harnesses*). A
+summary adds `step_id`, the Step of the latest `step_started`, and its
+`tickets`; a summary's `step_id`, a pending gate and a detail's steps carry a
+`step_title`. A Step is titled only from the graph of the Workflow version the
+Feature pins, and a detail's `workflow` is that graph as a schema-v2 document
+cut to `{schema_version, id, name, nodes: [{id, type, title, position}],
+edges: [{from, to}]}` by the graph-only rule above. Each is `null` when the
+snapshot gives none — a Feature older than the newest 100, a Project it does
+not name, a pinned version it did not send — and nothing is read from another
+version or inferred from ids.
+
+**What the views cannot show yet.** `cost_cents` on a run is always `null`:
+no protocol message reports a cost (§5). It fills in when one does; until then
+nothing is inferred.
 
 ---
 

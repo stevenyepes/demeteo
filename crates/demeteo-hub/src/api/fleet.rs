@@ -4,7 +4,8 @@
 //! What either withholds without `read`, and why a missing scope is not an
 //! error here, is the [module's read-scope rule](super).
 
-use super::run_state::{by_feature, fold, FeatureStatus, PendingGate};
+use super::run_labels::RunLabels;
+use super::run_state::{by_feature, fold, FeatureStatus, PendingGate, TicketProgress};
 use super::scope::read_verdict;
 use super::snapshot_view::{run_shape, workflows};
 use super::{ApiContext, PostgresApi, SnapshotRead};
@@ -16,7 +17,7 @@ use crate::store::instances::Instance;
 use crate::store::{InstanceId, UserId};
 use axum::extract::{Path, State};
 use axum::Json;
-use demeteo_hub_protocol::{RunEvent, RunEventKind, Scope};
+use demeteo_hub_protocol::{RunEvent, RunEventKind, Scope, Snapshot};
 use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -47,10 +48,16 @@ pub struct FleetInstanceView {
     pub live_runs: Option<u32>,
     /// `None` without `read`.
     pub needs_you: Option<Vec<NeedsYou>>,
+    /// The harness kinds the instance registered. `None` without `read`,
+    /// before a snapshot, and from a desktop that does not report them.
+    pub harnesses: Option<Vec<String>>,
+    /// `None` without `read` and before a readable snapshot.
+    pub project_count: Option<u32>,
 }
 
 /// A Gate of a running Feature waiting on a decision. `since` is when it
-/// began waiting, in Unix seconds.
+/// began waiting, in Unix seconds. The three labels are
+/// [`RunLabels`]' and `None` when the snapshot gives none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NeedsYou {
     pub instance_id: String,
@@ -58,6 +65,9 @@ pub struct NeedsYou {
     pub step_id: Option<String>,
     pub step_execution_id: String,
     pub since: u64,
+    pub title: Option<String>,
+    pub project_name: Option<String>,
+    pub step_title: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,9 +92,8 @@ pub struct InstanceDetailView {
     pub run_shape: Option<Vec<RunShapeView>>,
     /// `None` without `read`.
     pub live_runs: Option<Vec<RunSummary>>,
-    /// Always `null`: no protocol message reports an instance's harnesses
-    /// (`docs/HUB.md` §5), and the field is held for the one that will.
-    pub harnesses: (),
+    /// As [`FleetInstanceView::harnesses`].
+    pub harnesses: Option<Vec<String>>,
 }
 
 /// A project as the snapshot names it. Built field by field: the snapshot is
@@ -96,8 +105,10 @@ pub struct ProjectView {
     pub remote_url: Option<String>,
 }
 
-/// One Feature of one instance, from its mirrored events. Times are Unix
-/// seconds; `started_at` is `None` while no `feature_started` was mirrored.
+/// One Feature of one instance, from its mirrored events and the labels of
+/// its instance's snapshot. Times are Unix seconds; `started_at` is `None`
+/// while no `feature_started` was mirrored. `step_id` is the Step the run
+/// last entered ([`RunState::current_step`](super::run_state::RunState)).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunSummary {
     pub instance_id: String,
@@ -107,31 +118,52 @@ pub struct RunSummary {
     pub updated_at: u64,
     /// Always `null`: the Hub stores nothing about cost (`docs/HUB.md` §5).
     pub cost_cents: (),
+    pub title: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub step_id: Option<String>,
+    pub step_title: Option<String>,
+    pub tickets: TicketProgress,
 }
 
 impl RunSummary {
     /// `None` for a Feature with no event, which has nothing to summarize.
-    pub fn of(instance: InstanceId, feature_id: &str, events: &[RunEvent]) -> Option<Self> {
+    pub fn of(
+        instance: InstanceId,
+        feature_id: &str,
+        events: &[RunEvent],
+        labels: &RunLabels,
+    ) -> Option<Self> {
         let last = events.last()?;
         let started_at = events
             .iter()
             .find(|event| event.kind == RunEventKind::FeatureStarted)
             .map(|event| event.occurred_at);
+        let state = fold(events);
         Some(Self {
             instance_id: instance.0.to_string(),
             feature_id: feature_id.to_owned(),
-            status: fold(events).status,
+            status: state.status,
             started_at,
             updated_at: last.occurred_at,
             cost_cents: (),
+            title: labels.title(feature_id),
+            project_id: labels.project_id(feature_id),
+            project_name: labels.project_name(feature_id),
+            step_title: labels.step_title(feature_id, state.current_step.as_deref()),
+            step_id: state.current_step,
+            tickets: state.tickets,
         })
     }
 }
 
 impl NeedsYou {
-    fn of(instance: InstanceId, gate: PendingGate) -> Self {
+    fn of(instance: InstanceId, gate: PendingGate, labels: &RunLabels) -> Self {
         Self {
             instance_id: instance.0.to_string(),
+            title: labels.title(&gate.feature_id),
+            project_name: labels.project_name(&gate.feature_id),
+            step_title: labels.step_title(&gate.feature_id, gate.step_id.as_deref()),
             feature_id: gate.feature_id,
             step_id: gate.step_id,
             step_execution_id: gate.step_execution_id,
@@ -148,11 +180,18 @@ pub async fn fleet(api: &ApiContext<'_>, user: UserId, _now: u64) -> Result<Flee
     for row in rows {
         let scopes = granted(&row);
         let read_granted = read_verdict(&scopes).is_ok();
-        let (live_runs, needs_you) = if read_granted {
-            let runs = runs_of(api, user, row.id).await?;
-            (Some(count(runs.live.len())), Some(runs.needs_you))
+        let (live_runs, needs_you, harnesses, project_count) = if read_granted {
+            let snapshot = snapshot_of(api, user, row.id).await?;
+            let labels = RunLabels::of(snapshot.as_ref());
+            let runs = runs_of(api, user, row.id, &labels).await?;
+            (
+                Some(count(runs.live.len())),
+                Some(runs.needs_you),
+                snapshot.as_ref().and_then(|s| s.harnesses.clone()),
+                snapshot.as_ref().map(|s| count(s.projects.len())),
+            )
         } else {
-            (None, None)
+            (None, None, None, None)
         };
         instances.push(FleetInstanceView {
             id: row.id.0.to_string(),
@@ -166,6 +205,8 @@ pub async fn fleet(api: &ApiContext<'_>, user: UserId, _now: u64) -> Result<Flee
             last_seen: row.last_seen.and_then(unix_seconds),
             live_runs,
             needs_you,
+            harnesses,
+            project_count,
         });
     }
     Ok(FleetView { instances })
@@ -189,18 +230,21 @@ pub async fn instance_detail(
     let scopes = granted(&row);
     let read_granted = read_verdict(&scopes).is_ok();
     let (reported, live_runs) = if read_granted {
-        let reported = reported_of(api, user, id).await?;
-        (Some(reported), Some(runs_of(api, user, id).await?.live))
+        let snapshot = snapshot_of(api, user, id).await?;
+        let labels = RunLabels::of(snapshot.as_ref());
+        let live = runs_of(api, user, id, &labels).await?.live;
+        (Some(reported_of(snapshot)), Some(live))
     } else {
         (None, None)
     };
-    let (projects, workflows, run_shape) = match reported {
+    let (projects, workflows, run_shape, harnesses) = match reported {
         Some(reported) => (
             Some(reported.projects),
             Some(reported.workflows),
             Some(reported.run_shape),
+            reported.harnesses,
         ),
-        None => (None, None, None),
+        None => (None, None, None, None),
     };
     Ok(InstanceDetailView {
         id: row.id.0.to_string(),
@@ -217,7 +261,7 @@ pub async fn instance_detail(
         workflows,
         run_shape,
         live_runs,
-        harnesses: (),
+        harnesses,
     })
 }
 
@@ -251,7 +295,12 @@ struct Runs {
     needs_you: Vec<NeedsYou>,
 }
 
-async fn runs_of(api: &ApiContext<'_>, user: UserId, id: InstanceId) -> Result<Runs, ApiError> {
+async fn runs_of(
+    api: &ApiContext<'_>,
+    user: UserId,
+    id: InstanceId,
+    labels: &RunLabels,
+) -> Result<Runs, ApiError> {
     let mirror = api
         .store
         .mirror(user, id, None)
@@ -270,9 +319,10 @@ async fn runs_of(api: &ApiContext<'_>, user: UserId, id: InstanceId) -> Result<R
             state
                 .pending_gates
                 .into_iter()
-                .map(|gate| NeedsYou::of(id, gate)),
+                .map(|gate| NeedsYou::of(id, gate, labels)),
         );
-        runs.live.extend(RunSummary::of(id, &feature_id, &events));
+        runs.live
+            .extend(RunSummary::of(id, &feature_id, &events, labels));
     }
     Ok(runs)
 }
@@ -282,34 +332,45 @@ struct Reported {
     projects: Vec<ProjectView>,
     workflows: Vec<WorkflowView>,
     run_shape: Vec<RunShapeView>,
+    harnesses: Option<Vec<String>>,
 }
 
-async fn reported_of(
+/// The instance's snapshot, or `None` before one and while the one it sent
+/// is unreadable: both show nothing it reported.
+pub(super) async fn snapshot_of(
     api: &ApiContext<'_>,
     user: UserId,
     id: InstanceId,
-) -> Result<Reported, ApiError> {
+) -> Result<Option<Snapshot>, ApiError> {
     let snapshot = api.store.snapshot(user, id).await.map_err(store_failed)?;
     Ok(match snapshot {
-        Some(SnapshotRead::Readable(snapshot)) => Reported {
-            projects: snapshot
-                .projects
-                .into_iter()
-                .map(|project| ProjectView {
-                    id: project.id,
-                    name: project.name,
-                    remote_url: project.remote_url,
-                })
-                .collect(),
-            workflows: workflows(snapshot.workflows),
-            run_shape: run_shape(snapshot.run_shape),
-        },
+        Some(SnapshotRead::Readable(snapshot)) => Some(*snapshot),
         Some(SnapshotRead::Unreadable) => {
             tracing::warn!(instance = %id.0, "a stored snapshot is unreadable");
-            Reported::default()
+            None
         }
-        None => Reported::default(),
+        None => None,
     })
+}
+
+fn reported_of(snapshot: Option<Snapshot>) -> Reported {
+    let Some(snapshot) = snapshot else {
+        return Reported::default();
+    };
+    Reported {
+        projects: snapshot
+            .projects
+            .into_iter()
+            .map(|project| ProjectView {
+                id: project.id,
+                name: project.name,
+                remote_url: project.remote_url,
+            })
+            .collect(),
+        workflows: workflows(snapshot.workflows),
+        run_shape: run_shape(snapshot.run_shape),
+        harnesses: snapshot.harnesses,
+    }
 }
 
 /// The row's `connection_id` alone outlives a restart that dropped every

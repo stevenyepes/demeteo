@@ -19,6 +19,9 @@ pub struct RunState {
     pub tickets: TicketProgress,
     /// In the order the Gates began waiting.
     pub pending_gates: Vec<PendingGate>,
+    /// The Step of the latest `step_started`: the one the run last entered,
+    /// whether or not it has finished since.
+    pub current_step: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +84,7 @@ pub fn fold(events: &[RunEvent]) -> RunState {
     let mut steps = BTreeMap::new();
     let mut tickets = BTreeMap::new();
     let mut pending_gates: Vec<PendingGate> = Vec::new();
+    let mut current_step = None;
 
     for event in events {
         let payload = &event.payload;
@@ -90,7 +94,10 @@ pub fn fold(events: &[RunEvent]) -> RunState {
             RunEventKind::FeatureFailed => status = FeatureStatus::Failed,
             RunEventKind::FeatureCancelled => status = FeatureStatus::Cancelled,
             RunEventKind::StepStarted => {
-                step(&mut steps, payload.step_id.as_ref(), StepState::Running)
+                step(&mut steps, payload.step_id.as_ref(), StepState::Running);
+                if payload.step_id.is_some() {
+                    current_step.clone_from(&payload.step_id);
+                }
             }
             RunEventKind::StepCompleted => {
                 step(&mut steps, payload.step_id.as_ref(), StepState::Completed);
@@ -146,6 +153,7 @@ pub fn fold(events: &[RunEvent]) -> RunState {
         steps,
         tickets: progress(tickets.values()),
         pending_gates,
+        current_step,
     }
 }
 
@@ -316,6 +324,19 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_current_step_is_the_latest_one_started() {
+        let events = log([
+            (RunEventKind::StepStarted, step_id("s1")),
+            (RunEventKind::StepStarted, step_id("s2")),
+            (RunEventKind::StepCompleted, step_id("s2")),
+            (RunEventKind::StepCompleted, step_id("s1")),
+            (RunEventKind::StepStarted, Ids::default()),
+        ]);
+        assert_eq!(fold(&events).current_step.as_deref(), Some("s2"));
+        assert_eq!(fold(&[]).current_step, None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use demeteo_hub_protocol::{ProjectSnapshot, Snapshot, WorkflowVersionSnapshot};
+use demeteo_hub_protocol::{FeatureSnapshot, ProjectSnapshot, Snapshot, WorkflowVersionSnapshot};
 use serde_json::{json, Value};
 
 const SNAPSHOT: &str = include_str!("fixtures/snapshot.json");
@@ -41,6 +41,48 @@ fn fixture_covers_the_shapes_the_ticket_names() {
     assert!(r.default_agent_kind.is_some() && r.default_model.is_some());
     assert!(r.default_effort.is_some() && r.default_workflow_id.is_some());
     assert!(r.default_loop_iterations.is_some() && r.default_max_budget_cents.is_some());
+    assert!(s.features.iter().any(|f| f.workflow_version.is_some()));
+    assert!(s.features.iter().any(|f| f.workflow_id.is_none()));
+    assert!(s.harnesses.as_ref().is_some_and(|h| !h.is_empty()));
+}
+
+#[test]
+fn each_feature_has_exactly_its_five_keys() {
+    let value = serde_json::to_value(parsed()).unwrap();
+    for f in value["features"].as_array().unwrap() {
+        let keys: BTreeSet<&str> = f.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "id",
+                "project_id",
+                "title",
+                "workflow_id",
+                "workflow_version"
+            ])
+        );
+    }
+}
+
+/// The description a user typed at launch is the run's prompt body, not a
+/// label, and has no field to cross in.
+#[test]
+fn a_feature_with_a_description_does_not_parse() {
+    let with_description = json!({
+        "id": "f", "project_id": "p", "title": "t",
+        "description": "the whole prompt",
+    });
+    assert!(serde_json::from_value::<FeatureSnapshot>(with_description).is_err());
+}
+
+/// A desktop that predates `features` and `harnesses` still reports, and
+/// its silence on harnesses stays distinct from an empty list.
+#[test]
+fn a_snapshot_without_features_or_harnesses_reads_as_none_reported() {
+    let older = json!({"v": 1, "projects": [], "workflows": [], "run_shape": []});
+    let parsed: Snapshot = serde_json::from_value(older).unwrap();
+    assert!(parsed.features.is_empty());
+    assert_eq!(parsed.harnesses, None);
 }
 
 #[test]

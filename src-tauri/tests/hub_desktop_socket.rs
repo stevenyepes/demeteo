@@ -1540,6 +1540,8 @@ fn one_project(name: &str) -> Snapshot {
         }],
         workflows: Vec::new(),
         run_shape: Vec::new(),
+        features: Vec::new(),
+        harnesses: None,
     }
 }
 
@@ -1595,6 +1597,60 @@ async fn a_snapshot_follows_the_first_cursor_ack() {
     assert_eq!(end, (SessionEnd::Stopped, true));
     assert_eq!(log.unscripted(), 0);
     assert_eq!(snapshots.unscripted(), 0);
+}
+
+/// A Feature's title rides the snapshot (decision 70), and starting a run
+/// writes nothing a snapshot decorator watches: the Feature's first event on
+/// the connection is what wakes the rebuild. A later event of the same
+/// Feature does not wake another.
+#[tokio::test]
+async fn a_features_first_event_wakes_the_snapshot_and_its_next_does_not() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
+        .with_snapshot_debounce(DEBOUNCE);
+    let (conn, _release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+    timeout(BOUND, log.sent_times(2))
+        .await
+        .expect("a first snapshot sent");
+
+    snapshots.set(one_project("beta"));
+    let (feature, kind, payload) = progress();
+    run_events
+        .append(feature, kind, Some(&payload.to_string()), WRITTEN_AT_MS)
+        .expect("an appended row");
+    timeout(BOUND, log.sent_times(4))
+        .await
+        .expect("the event and a second snapshot sent");
+    assert_eq!(
+        snapshots_in(&log.sent()),
+        [one_project("alpha"), one_project("beta")]
+    );
+    let built = snapshots.calls();
+
+    run_events
+        .append(feature, kind, Some(&payload.to_string()), WRITTEN_AT_MS)
+        .expect("an appended row");
+    timeout(BOUND, log.sent_times(5))
+        .await
+        .expect("the second event sent");
+    tokio::time::sleep(DEBOUNCE + SETTLE).await;
+    assert_eq!(
+        snapshots.calls(),
+        built,
+        "no rebuild for a Feature already seen"
+    );
+
+    stop.send_replace(true);
+    let end = timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+    assert_eq!(end, (SessionEnd::Stopped, true));
 }
 
 /// AC4: without `read` nothing is built, acked or woken, even by an edit
@@ -1792,7 +1848,13 @@ impl Edited {
         let (run_events, _) = progress_log(0);
         let mut ctx = scripted_context(run_events.clone(), run_events.wake())
             .with_snapshot_debounce(DEBOUNCE);
-        ctx.snapshots = Arc::new(RepoSnapshotSource::new(db.clone(), db.clone(), db));
+        ctx.snapshots = Arc::new(RepoSnapshotSource::new(
+            db.clone(),
+            db.clone(),
+            db.clone(),
+            db,
+            Vec::new(),
+        ));
         ctx.snapshot_wake = workflows.wake();
         let (conn, release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
         let log = conn.log();

@@ -37,7 +37,9 @@ pub use request::{
     WebAuthnAssertion,
 };
 pub use scope::{Decision, Effort, Scope};
-pub use snapshot::{ProjectSnapshot, RunShapeSettings, Snapshot, WorkflowVersionSnapshot};
+pub use snapshot::{
+    FeatureSnapshot, ProjectSnapshot, RunShapeSettings, Snapshot, WorkflowVersionSnapshot,
+};
 
 /// Carried as `v` on every top-level message. Deserialisation never rejects a
 /// different value; the mismatch policy belongs to the consumers.

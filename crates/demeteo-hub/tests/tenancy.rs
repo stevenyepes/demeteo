@@ -2258,6 +2258,8 @@ async fn a_socket_store_of_one_user_bound_to_another_users_instance_writes_nothi
             projects: Vec::new(),
             workflows: Vec::new(),
             run_shape: Vec::new(),
+            features: Vec::new(),
+            harnesses: None,
         };
         let id = [7; 16];
 

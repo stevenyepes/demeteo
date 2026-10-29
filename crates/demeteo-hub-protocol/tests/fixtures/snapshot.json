@@ -33,5 +33,22 @@
       "default_loop_iterations": 2,
       "default_max_budget_cents": 1250
     }
-  ]
+  ],
+  "features": [
+    {
+      "id": "f-1790213900000",
+      "project_id": "p-1790213898404",
+      "title": "Retry failed webhooks with backoff",
+      "workflow_id": "wf-feature",
+      "workflow_version": 3
+    },
+    {
+      "id": "f-1790213900001",
+      "project_id": "p-1790213898999",
+      "title": "Legacy run",
+      "workflow_id": null,
+      "workflow_version": null
+    }
+  ],
+  "harnesses": ["claude-code", "opencode"]
 }

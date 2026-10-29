@@ -19,7 +19,8 @@ mod verdict;
 
 pub use projection::{hub_event, MAX_FEATURE_ID_BYTES};
 pub use snapshot::{
-    snapshot, ProjectInput, SnapshotInput, MAX_SNAPSHOT_BYTES, SNAPSHOT_DEBOUNCE_SECS,
+    snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
+    MAX_REPORTED_FEATURES, MAX_SNAPSHOT_BYTES, MAX_TITLE_CHARS, SNAPSHOT_DEBOUNCE_SECS,
 };
 pub use verdict::{
     after, after_close, after_refresh, backoff, refresh_refusal, resets_backoff, Reconnect,

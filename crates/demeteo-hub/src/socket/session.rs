@@ -681,6 +681,8 @@ mod tests {
             projects: Vec::new(),
             workflows: Vec::new(),
             run_shape: Vec::new(),
+            features: Vec::new(),
+            harnesses: None,
         };
         assert_eq!(
             next(Phase::Unannounced, text(&snapshot)),

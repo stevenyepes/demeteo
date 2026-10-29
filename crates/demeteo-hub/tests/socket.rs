@@ -168,6 +168,8 @@ fn snapshot(project_names: &[&str]) -> Snapshot {
             .collect(),
         workflows: Vec::new(),
         run_shape: Vec::new(),
+        features: Vec::new(),
+        harnesses: None,
     }
 }
 

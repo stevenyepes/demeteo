@@ -408,6 +408,12 @@ fn build_core_context_parts(
                     db_adapter.clone(),
                     db_adapter.clone(),
                     db_adapter.clone(),
+                    db_adapter.clone(),
+                    agent_registry
+                        .runtimes()
+                        .iter()
+                        .map(|runtime| runtime.kind().to_owned())
+                        .collect(),
                 )),
                 snapshot_wake,
                 runtime.clone(),

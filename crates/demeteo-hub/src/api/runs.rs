@@ -5,8 +5,9 @@
 //! [module's read-scope rule](super): an instance named without `read` is
 //! refused by name, and one the unfiltered list would read is passed over.
 
-use super::fleet::{granted, parsed_instance, RunSummary};
-use super::run_state::{by_feature, fold, FeatureStatus, PendingGate, StepState, TicketProgress};
+use super::fleet::{granted, parsed_instance, snapshot_of, RunSummary};
+use super::run_labels::{RunLabels, RunWorkflowView};
+use super::run_state::{by_feature, fold, FeatureStatus, StepState, TicketProgress};
 use super::scope::read_verdict;
 use super::{ApiContext, PostgresApi};
 use crate::attachments::postgres::PostgresAttachments;
@@ -40,13 +41,16 @@ pub struct RunDetailView {
     pub instance_id: String,
     pub feature_id: String,
     pub status: FeatureStatus,
-    /// Always `null`: no mirrored event names the Workflow version a Feature
-    /// runs (`docs/HUB.md` §5), and the field is held for the one that will.
-    pub workflow: (),
+    /// The graph of the Workflow version the Feature pins, when the
+    /// instance's snapshot sent that version ([`RunLabels::workflow`]).
+    pub workflow: Option<RunWorkflowView>,
+    pub title: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
     /// Ordered by `step_id`.
     pub steps: Vec<StepView>,
     pub tickets: TicketProgress,
-    pub pending_gates: Vec<PendingGate>,
+    pub pending_gates: Vec<PendingGateView>,
     /// The readable events, in offset order. An unreadable row is left out
     /// for the reason [`by_feature`] gives.
     pub events: Vec<EventView>,
@@ -56,6 +60,17 @@ pub struct RunDetailView {
 pub struct StepView {
     pub step_id: String,
     pub state: StepState,
+    pub title: Option<String>,
+}
+
+/// A [`PendingGate`](super::run_state::PendingGate) with its Step's title, when the snapshot gives one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingGateView {
+    pub feature_id: String,
+    pub step_execution_id: String,
+    pub step_id: Option<String>,
+    pub since: u64,
+    pub step_title: Option<String>,
 }
 
 /// A mirrored event, field by field. `occurred_at` is Unix seconds.
@@ -104,10 +119,13 @@ pub async fn runs(
             .mirror(user, row.id, None)
             .await
             .map_err(store_failed)?;
+        let labels = RunLabels::of(snapshot_of(api, user, row.id).await?.as_ref());
         runs.extend(
             by_feature(&mirror)
                 .iter()
-                .filter_map(|(feature_id, events)| RunSummary::of(row.id, feature_id, events))
+                .filter_map(|(feature_id, events)| {
+                    RunSummary::of(row.id, feature_id, events, &labels)
+                })
                 .filter(|run| status.is_none_or(|status| run.status == status)),
         );
     }
@@ -134,7 +152,8 @@ pub async fn run_detail(
     let events = by_feature(&mirror)
         .remove(feature_id)
         .ok_or(ApiError::NOT_FOUND)?;
-    Ok(detail(&row, feature_id, &events))
+    let labels = RunLabels::of(snapshot_of(api, user, row.id).await?.as_ref());
+    Ok(detail(&row, feature_id, &events, &labels))
 }
 
 pub async fn get_runs(
@@ -185,20 +204,42 @@ fn status_named(name: &str) -> Option<FeatureStatus> {
     FeatureStatus::deserialize(text).ok()
 }
 
-fn detail(row: &Instance, feature_id: &str, events: &[RunEvent]) -> RunDetailView {
+fn detail(
+    row: &Instance,
+    feature_id: &str,
+    events: &[RunEvent],
+    labels: &RunLabels,
+) -> RunDetailView {
     let state = fold(events);
     RunDetailView {
         instance_id: row.id.0.to_string(),
         feature_id: feature_id.to_owned(),
         status: state.status,
-        workflow: (),
+        workflow: labels.workflow(feature_id).cloned(),
+        title: labels.title(feature_id),
+        project_id: labels.project_id(feature_id),
+        project_name: labels.project_name(feature_id),
         steps: state
             .steps
             .into_iter()
-            .map(|(step_id, state)| StepView { step_id, state })
+            .map(|(step_id, state)| StepView {
+                title: labels.step_title(feature_id, Some(&step_id)),
+                step_id,
+                state,
+            })
             .collect(),
         tickets: state.tickets,
-        pending_gates: state.pending_gates,
+        pending_gates: state
+            .pending_gates
+            .into_iter()
+            .map(|gate| PendingGateView {
+                step_title: labels.step_title(feature_id, gate.step_id.as_deref()),
+                feature_id: gate.feature_id,
+                step_execution_id: gate.step_execution_id,
+                step_id: gate.step_id,
+                since: gate.since,
+            })
+            .collect(),
         events: events
             .iter()
             .map(|event| EventView {
