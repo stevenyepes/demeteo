@@ -96,6 +96,7 @@ impl DagStepExecutor {
                                 let _ = self.notif.emit(&DomainEvent::GateRequired {
                                     feature_id: f.id.clone(),
                                     step_execution_id: s.id.clone(),
+                                    step_id: s.step_id.0.clone(),
                                 });
                             }
                             let _ = self.features.update(

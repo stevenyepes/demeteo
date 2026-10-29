@@ -326,6 +326,7 @@ async fn the_ticket_features_mirror_row_is_exposed_without_moving_the_lane() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .expect("the feature is stored");
     t.state = TicketState::Started;
@@ -409,6 +410,7 @@ fn start_stored(ctx: &AppContext, t: &mut Ticket, placement: Option<&RunPlacemen
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .expect("the feature is stored");
     let feature_id = FeatureId::from("f-started".to_string());

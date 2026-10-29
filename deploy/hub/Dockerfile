@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1
+# Build context is the repository root (compose sets `context: ../..`). Run
+# from the root:
+#   docker build -f deploy/hub/Dockerfile -t demeteo-hub .
+#
+# The COPYs below are an allow-list, not `COPY . .`: the context root holds
+# `deploy/hub/.env` with the live database password and OpenBao token, and a
+# whole-context copy bakes them into the builder layer and the build cache.
+# Cargo resolves the whole workspace, so every member's manifest and targets
+# must be present (`src-tauri/` included) even though only `demeteo-hub` is
+# compiled. `Dockerfile.dockerignore` excludes `.env` files and `deploy/` as
+# the second fence.
+#
+# The builder tag tracks `rust-toolchain.toml`; bump them together. The suffix
+# pins the Debian release so the binary links against the glibc and the libssl
+# of the runtime stage below — change both or neither.
+# The browser bundle the Hub serves from DEMETEO_HUB_WEB_DIR. hub-web imports
+# the desktop's components and stylesheet from `src/`, so the root manifest
+# and `src/` come along; the build writes to `hub-web/dist`
+# (vite.hub-web.config.ts).
+FROM node:24-bookworm-slim AS web
+
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+COPY tsconfig.json tsconfig.node.json vite.hub-web.config.ts ./
+COPY src ./src
+COPY hub-web ./hub-web
+RUN npm run build:hub-web
+
+FROM rust:1.97.0-bookworm AS builder
+
+# aws-lc-sys (rustls' crypto provider) compiles C and wants cmake.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# The root `.cargo/config.toml` points `target-dir` at `src-tauri/target`, a
+# path that is excluded from this context and meaningless here. The env var
+# outranks the config file, so the build lands in the cache mount below.
+ENV CARGO_TARGET_DIR=/build/target
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY .cargo ./.cargo
+COPY crates ./crates
+COPY src-tauri ./src-tauri
+
+# A cache mount is not part of the layer, so the binary is copied out of it
+# here; the runtime stage must copy from /usr/local/bin, never /build/target.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --locked --release -p demeteo-hub \
+    && cp /build/target/release/demeteo-hub /usr/local/bin/demeteo-hub
+
+FROM debian:bookworm-slim AS runtime
+
+# libssl3: webauthn-rs links the system OpenSSL dynamically through openssl-sys
+# (nothing in this build turns on its `vendored` feature), against the
+# libssl-dev the builder's base image carries. The `hub` CI job builds this
+# image and never starts it, so leaving the library out passes CI and yields a
+# container that exits at launch.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --uid 10001 hub
+
+COPY --from=builder /usr/local/bin/demeteo-hub /usr/local/bin/demeteo-hub
+COPY --from=web /src/hub-web/dist /srv/hub-web
+
+USER hub
+ENTRYPOINT ["/usr/local/bin/demeteo-hub"]

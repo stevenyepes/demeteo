@@ -12,7 +12,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "hub-web/src/**/*.test.{ts,tsx}"],
     // Monaco and xterm both reach for canvas/WebGL APIs jsdom doesn't implement.
     // Components under test stub them (see src/test/setup.ts); this keeps a
     // stray real import from taking the whole suite down.

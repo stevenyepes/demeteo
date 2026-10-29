@@ -192,7 +192,7 @@ pub(crate) fn resolve_attached_artifacts(
 /// prepended to the prompt as a path-manifest block pointing at the
 /// on-disk file under `<attachments_root>/<feature_id>/<sha256>.<ext>`.
 /// The companion `spawn` step copies each matched file into the
-/// per-step worktree's `artifacts/_context/attachments/` directory
+/// per-step worktree's `artifacts/_context/attachments` directory
 /// so the agent's `external_directory: deny` fence accepts the file
 /// when it calls `Read`.
 ///

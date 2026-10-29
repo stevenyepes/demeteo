@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "feature_id": "f-1791043410984",
+  "offset": 4812,
+  "kind": "step_failed",
+  "occurred_at": 1790213898,
+  "payload": {
+    "step_id": "s-implement",
+    "step_execution_id": "se-1791043500123",
+    "ticket_id": "t-3"
+  }
+}

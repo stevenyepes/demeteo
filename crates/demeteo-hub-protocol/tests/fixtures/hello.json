@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "install_id": "inst-7f3a9c",
+  "app_version": "1.4.0",
+  "os": "linux",
+  "arch": "x86_64",
+  "scopes": ["read", "gates"]
+}

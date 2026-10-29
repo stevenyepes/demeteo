@@ -41,6 +41,7 @@ proceed; that distinguishes them from the Gate items in §6.
 - Secrets live in the OS keyring only — never write credentials, tokens, or secrets to SQLite or any file
 - `demeteo-runner` ships as a Linux x86_64 musl static binary — build it with `npm run build:runner`, never a bare `cargo build` → [docs/RUNNER_DEV.md](docs/RUNNER_DEV.md)
 - Never mutate a harness's own persisted config (`~/.codex/config.toml`, `$HERMES_HOME/config.yaml`, `~/.claude`, shell rc files). What Demeteo tells a harness is **per-invocation** — CLI flags or child-process env, never written to disk. Run shape persists only in Demeteo's own SQLite (`ProjectSettings.default_effort`, `Feature.effort`). If a harness exposes a setting *only* through its config file (as Hermes does for reasoning effort), declare the capability unsupported and degrade honestly rather than reaching into that file.
+- The Hub server holds no instance secrets — provider API keys, git tokens, harness sign-ins, local paths, transcripts and diffs never leave an instance. The custody it does hold (OpenBao: its own server secrets and the wrapped keys of attachments) never widens to any of those → [docs/HUB.md](docs/HUB.md)
 
 ---
 
@@ -320,11 +321,12 @@ element just inherits, so a heading renders in `body`'s Inter and only an eye
 catches it. §4 has the mechanism that makes it silent.
 
 - **`scripts/check-classes.mjs`** (inside `npm run checks`) compiles the
-  stylesheet and fails on a design-system class `src/` uses that resolves to no
-  rule. It matches a class *selector*, not a bare token — `font-display: block`
-  is a real property in the `@font-face` rule of `src/App.css`, so a substring
-  grep "finds" a `font-display` utility that has never existed. Check by hand the
-  same way, and never blind-replace one of these names across the tree.
+  stylesheet and fails on a design-system class `src/` or `hub-web/src` uses
+  that resolves to no rule. It matches a class *selector*, not a bare token —
+  `font-display: block` is a real property in the `@font-face` rule of
+  `src/App.css`, so a substring grep "finds" a `font-display` utility that has
+  never existed. Check by hand the same way, and never blind-replace one of
+  these names across the tree.
 
 ### The parity gates are not in `npm run checks`
 
@@ -419,7 +421,8 @@ Read the relevant doc before modifying that area.
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
 | Visual design system as shipped, and its drift from §4 | [DESIGN.md](DESIGN.md) · product context, audience, voice in [PRODUCT.md](PRODUCT.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
-| Demeteo Hub design mockup (designed, not built) | [docs/hub-design/](docs/hub-design/README.md) |
+| Demeteo Hub: trust model, pairing, socket, requests, gate decisions (passkey auth and the Hub's half of pairing built in `crates/demeteo-hub`, the approval page in `hub-web/`; the server side of the socket and the request queue built in `crates/demeteo-hub/src/socket`; the session JSON API that reads the fleet and queues requests, gate decisions included, built in `crates/demeteo-hub/src/api`; the desktop client built in `crates/demeteo-core`, verifying gate decisions and passkey changes against its pinned passkeys, with its Settings › Hub tab in `src/components/settings/`) | [docs/HUB.md](docs/HUB.md) |
+| Demeteo Hub design mockup (decided, not built; parts superseded) | [docs/hub-design/](docs/hub-design/README.md) |
 | Pipeline/project view redesign plan | [docs/UI_REDESIGN_PLAN.md](docs/UI_REDESIGN_PLAN.md) |
 | Product roadmap & agent-ready stories | [docs/roadmap/](docs/roadmap/README.md) |
 | Known platform issues | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |

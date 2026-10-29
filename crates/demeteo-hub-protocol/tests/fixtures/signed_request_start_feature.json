@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "request_id": "req-a01",
+  "instance_id": "inst-7f3a9c",
+  "issued_at": 1790000000,
+  "expires_at": 1790000300,
+  "payload": {
+    "kind": "start_feature",
+    "body": {
+      "project_id": "p1790213898404",
+      "workflow_id": "wf-feature-default",
+      "title": "Add export to CSV",
+      "description": "Let the user export the report table as CSV.",
+      "agent_kind": "claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "step_overrides": [
+        { "step_id": "s-review", "agent_kind": "opencode", "model": "gpt-5", "effort": "low" },
+        { "step_id": "s-docs", "agent_kind": null, "model": null, "effort": null }
+      ],
+      "max_budget_cents": 1250,
+      "max_wall_clock_secs": 3600,
+      "attachments": [
+        { "id": "att-01", "size": 20480, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }
+      ]
+    }
+  },
+  "signature": "c2lnbmVkLWJ5LWh1Yg"
+}

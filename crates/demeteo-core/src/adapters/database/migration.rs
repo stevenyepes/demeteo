@@ -211,6 +211,28 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
 
+    // Who launched a run (V65). Nullable, and NULL reads as the desktop — see
+    // the migration's header.
+    add_column_if_missing(conn, "features", "launched_by", "TEXT")?;
+
+    // The signature counter last accepted per passkey (V66) — see the
+    // migration's header.
+    add_column_if_missing(
+        conn,
+        "hub_pinned_passkeys",
+        "sign_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+
+    // The local `read` toggle (V67), on by default — see the migration's
+    // header.
+    add_column_if_missing(
+        conn,
+        "hub_local_policy",
+        "read_enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+
     Ok(())
 }
 

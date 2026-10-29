@@ -128,6 +128,7 @@ fn shadow_feature(id: &FeatureId) -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     }
 }
 

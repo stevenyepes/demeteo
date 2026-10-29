@@ -87,6 +87,7 @@ pub enum DomainEvent {
     GateRequired {
         feature_id: FeatureId,
         step_execution_id: StepExecutionId,
+        step_id: String,
     },
 
     /// Emitted ahead of [`GateRequired`](DomainEvent::GateRequired) when the

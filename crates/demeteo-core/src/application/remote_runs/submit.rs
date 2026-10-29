@@ -183,6 +183,7 @@ impl ResolvedSubmit {
             origin: launch.origin.clone(),
             diff_base_branch: launch.diff_base_branch.clone(),
             resolved_branch: None,
+            launched_by: launch.launched_by,
         }
     }
 

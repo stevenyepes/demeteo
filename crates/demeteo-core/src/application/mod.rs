@@ -7,6 +7,8 @@ pub mod bootstrap;
 pub mod cache_reclaim;
 pub mod cache_sweep;
 pub mod discovery;
+pub mod hub_requests;
+pub mod hub_settings;
 pub mod launch;
 pub mod lifecycle;
 pub mod memory;

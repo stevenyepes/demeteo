@@ -14,7 +14,8 @@
 # Usage:
 #   scripts/checks.sh                 # run every gate, including commitlint
 #   scripts/checks.sh --skip-commitlint
-#   scripts/checks.sh frontend        # tsc, biome, class names, vitest — no Rust
+#   scripts/checks.sh frontend        # tsc, biome, class names (src/ + hub-web/src),
+#                                     # vitest, hub-web build — no Rust
 #   scripts/checks.sh rust            # fmt, clippy, doc, doc-refs, tests — no Node gates
 #   npm run checks:code               # every gate EXCEPT commitlint — see below
 #   CHECKS_SKIP_COMMITLINT=1 ...      # same, via env
@@ -90,6 +91,7 @@ if [ "$RUN_FRONTEND" = "1" ]; then
   need_node_bin tsc
   need_node_bin biome
   need_node_bin vitest
+  need_node_bin vite
 fi
 if [ "$RUN_RUST" = "1" ]; then
   need_host_bin cargo "install Rust via rustup"
@@ -129,8 +131,21 @@ step "Frontend lint (biome check)"
 step "Frontend class names (used vs defined)"
 node scripts/check-classes.mjs
 
+# A second run rather than a wider one: the gate judges a tree against the
+# sheet its own `App.css` compiles to, and hub-web's entry stylesheet is not
+# the desktop's.
+step "hub-web class names (used vs defined)"
+node scripts/check-classes.mjs hub-web/src
+
 step "Frontend tests (vitest run)"
 "$BIN/vitest" run
+
+# Here because nothing else builds it: `npm run build` and the Tauri bundle
+# only ever build the desktop entry, and tsc, Biome and Vitest all pass on an
+# entry Vite cannot bundle. Without this step a broken hub-web is found by
+# whoever deploys the Hub.
+step "hub-web build (vite build --config vite.hub-web.config.ts)"
+"$BIN/vite" build --config vite.hub-web.config.ts
 
 fi
 
@@ -145,7 +160,8 @@ fi
 step "Rust format check (cargo fmt --all -- --check)"
 ( cd src-tauri && cargo fmt --all -- --check )
 
-# `--workspace` is load-bearing, and matches the `cross-os` job verbatim. Run
+# `--workspace` is load-bearing, and matches the `cross-os` job (whose Windows
+# leg alone also leaves out demeteo-hub). Run
 # from src-tauri without it and cargo selects only the `demeteo` package, so
 # demeteo-core's own test targets are linted as a dependency's lib and never as
 # tests -- a lint in crates/demeteo-core/tests/ was green here and failed the
@@ -155,6 +171,13 @@ step "Rust format check (cargo fmt --all -- --check)"
 step "Rust clippy (--workspace --all-targets -D warnings)"
 ( cd src-tauri && cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings )
 
+# demeteo-runner links core with default features off, but every other step
+# here selects core beside a crate that turns them on, and features unify. So
+# this is the only step that compiles the `cfg(not(feature = ...))` side of
+# `keyring` and `hub-socket` — the shape the runner ships.
+step "Core without default features (cargo clippy -p demeteo-core --no-default-features)"
+cargo clippy -p demeteo-core --no-default-features -- -D warnings
+
 # Comment rot, in the two forms a machine can see. `cargo doc` resolves every
 # `[`Foo`]` intra-doc link (denied via `[workspace.lints.rustdoc]`), catching a
 # rename the prose was not revisited for; check-doc-refs.sh resolves the file
@@ -163,9 +186,9 @@ step "Rust clippy (--workspace --all-targets -D warnings)"
 # lint reads a `//` comment at all.
 step "Rust doc links (cargo doc --no-deps)"
 if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
-  cargo doc --no-deps -p demeteo-core -p demeteo-runner
+  cargo doc --no-deps -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol -p demeteo-runner
 else
-  cargo doc --no-deps -p demeteo-core
+  cargo doc --no-deps -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol
   step "Runner docs — skipped (Linux-only binary; host: $HOST_TRIPLE)"
 fi
 
@@ -178,14 +201,15 @@ scripts/check-test-temp-dirs.sh
 step "Rust tests (cargo test)"
 ( cd src-tauri && cargo test )
 
-# Core + runner live in the workspace but `cargo test` from src-tauri only runs
-# the demeteo package (cargo scopes to the cwd's package). Test them explicitly
-# so a change to either crate is actually exercised locally.
-step "Core + runner tests"
+# Core, hub, hub-protocol and runner live in the workspace but `cargo test` from
+# src-tauri only runs the demeteo package (cargo scopes to the cwd's package).
+# Test them explicitly so a change to any of them is actually exercised locally;
+# clippy's `--all-targets` compiles these tests but never runs them.
+step "Core + hub + hub-protocol + runner tests"
 if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
-  cargo test -p demeteo-core -p demeteo-runner
+  cargo test -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol -p demeteo-runner
 else
-  cargo test -p demeteo-core
+  cargo test -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol
   step "Runner tests — skipped (Linux-only binary; host: $HOST_TRIPLE)"
 fi
 

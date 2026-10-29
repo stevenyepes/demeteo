@@ -135,6 +135,7 @@ fn seed_feature_row(
             origin,
             diff_base_branch: diff_base_branch.map(str::to_string),
             resolved_branch: Some(format!("demeteo/features/{feature_id}")),
+            launched_by: Default::default(),
         })
         .expect("add feature");
 

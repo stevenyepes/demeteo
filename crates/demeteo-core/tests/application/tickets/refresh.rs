@@ -184,6 +184,7 @@ fn attempt(id: &str, url: Option<&str>, mr_state: Option<&str>) -> Feature {
         origin: FeatureOrigin::DefaultBranch,
         diff_base_branch: None,
         resolved_branch: None,
+        launched_by: Default::default(),
     }
 }
 

@@ -1,0 +1,58 @@
+[package]
+name = "demeteo-hub"
+version.workspace = true
+description = "Hosted Hub: tenant-scoped Postgres storage, Transit key service and static web serving"
+license = "MIT"
+edition = "2021"
+
+[features]
+# Test-only API for test builds outside this crate's unit tests: its own
+# `tests/` and `src-tauri/tests`. Never enabled by a production build.
+test-support = []
+
+[dependencies]
+async-trait = "0.1"
+# Already built for rustls (via reqwest) with exactly this feature set. The
+# default features add `untrusted 0.7`, which is not in Cargo.lock.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
+# `ws` is the instance socket (src/socket). It is the one feature here that
+# grows Cargo.lock: tokio-tungstenite, tungstenite, and a second sha1 (0.10,
+# for the handshake's accept key) beside the 0.11 that sqlx-mysql locks. The
+# rest of what it turns on (hyper, base64, tokio) was already in the build.
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+demeteo-hub-protocol = { path = "../demeteo-hub-protocol" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# Postgres only. Turning features off does not decouple this from SQLite:
+# Cargo checks `links` uniqueness at resolution time, optional dependencies
+# included, so sqlx-sqlite's libsqlite3-sys is in the graph regardless and must
+# equal the one `demeteo-core`'s rusqlite pins. Bump sqlx here and rusqlite in
+# crates/demeteo-core/Cargo.toml together. TLS is the aws-lc rustls backend
+# and never `tls-rustls` (ring): a second rustls provider next to reqwest's
+# panics at first use. It is what `sslmode=require` in `DATABASE_URL` needs
+# against a Postgres that refuses plaintext, as Zalando/Spilo does by default.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "uuid", "time", "tls-rustls-aws-lc-rs"] }
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+# `conditional-ui` is the only gate on the discoverable (usernameless) sign-in
+# calls; the default `attestation` feature adds an API this crate does not use.
+# Never `danger-allow-state-serialisation`: ceremony state stays in process
+# memory. Its core links the system OpenSSL through openssl-sys, which is why
+# deploy/hub/Dockerfile installs libssl3 and the Windows leg of `cross-os`
+# (.github/workflows/pr-checks.yml) leaves this crate out.
+webauthn-rs = { version = "0.5", default-features = false, features = ["conditional-ui"] }
+
+[dev-dependencies]
+# Turns `test-support` on for this crate's integration tests without a flag.
+demeteo-hub = { path = ".", features = ["test-support"] }
+
+[lints]
+workspace = true

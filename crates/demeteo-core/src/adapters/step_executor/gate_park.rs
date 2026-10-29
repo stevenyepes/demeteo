@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::domain::ids::{FeatureId, GateDecisionId, StepExecutionId};
+use crate::domain::ids::{FeatureId, GateDecisionId, StepExecutionId, StepId};
 use crate::domain::models::GateDecision;
 use crate::paths;
 use crate::ports::db::GateRepository;
@@ -57,6 +57,7 @@ pub(crate) struct SyntheticGate<'a> {
     pub notif: &'a dyn NotificationPort,
     pub waiters: &'a Arc<Mutex<HashMap<String, Arc<GateWaiter>>>>,
     pub f_id: &'a FeatureId,
+    pub step_id: &'a StepId,
 }
 
 fn park_question_id(step_exec_id: &StepExecutionId) -> GateDecisionId {
@@ -170,6 +171,7 @@ pub(crate) async fn park_for_human(
     let _ = g.notif.emit(&DomainEvent::GateRequired {
         feature_id: g.f_id.clone(),
         step_execution_id: step_exec_id.clone(),
+        step_id: g.step_id.0.clone(),
     });
     let waiter = GateWaiter::new();
     g.waiters

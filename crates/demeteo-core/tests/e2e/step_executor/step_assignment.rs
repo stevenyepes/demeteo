@@ -112,6 +112,7 @@ fn seed_kind(
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
 

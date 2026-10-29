@@ -70,6 +70,15 @@
 | 59 | MCP acts on a started run | **Three `spend` tools:** `retry_step` (failed, interrupted or never-started steps only), `set_step_assignment` (the per-step pin of [decision 54](#54--mid-run-assignment-detail), identifiers fenced as `RunShapePatch`'s are), and `rework_from_critic`, which redirects the Standard pipeline's final gate. **The client supplies no feedback text**: Demeteo composes it from a fixed preamble and the stored critic review, so [decision 51](#1-the-locked-decisions)'s objection does not arise. **Refused** for any other workflow or gate, for a Standard pipeline edited out of shape, on a `PASS` verdict, and after two reworks of one run — a gate redirect has no loop budget of its own. **Approval stays excluded** ([decision 50](#1-the-locked-decisions)); a redirect sends work back and grants nothing. Local or detached is resolved in `application/step_control.rs`, not by the caller. **Rejected:** client-authored redirect feedback; a caller-set rework limit (a client would raise its own); replay (takes a completed step and kills a live run); `configure` for the pin (it changes one run's cost, not later runs' shape). Detail: [MCP_INTEGRATION.md §7.3](MCP_INTEGRATION.md#73-acting-on-a-started-run). | 2026-10-11 |
 | 60 | Shipping on a clean review | **A fourth gate-autonomy level, `clean`**, between `review` and `full` ([decision 57](#1-the-locked-decisions)): as `review`, and a `dangerous` gate approves itself too when the review step before it reports no critical and no major issue. **A review is a step field** — `StepConfig.review_artifact` names the declared artifact — and the engine appends the format to that step's prompt, so a workflow built on the canvas is covered without its author writing the format. **The counts decide**: the review ends with `{"review": {"critical", "major", "minor"}}`; minor issues never hold the gate; a written `## Verdict` that disagrees on whether the review blocks makes it unreadable. **Every unreadable case asks a person** — no counts, no verdict, a review step that has not completed, an artifact missing from the store, a review file the step's turn found at its path and did not write, or any step other than a gate that could run after the review and before the gate. That last is decided on the graph, not on list order: the review must be upstream of the gate, and every other non-gate step that is not downstream of the gate must be upstream of the review. Still approval only: a blocking review parks the gate, it is never turned into a redirect. Unrelated to [decision 50](#1-the-locked-decisions): the approval is the project's own policy, and no MCP client can grant or trigger it. **Rejected:** trusting the verdict alone (the Standard critic prompt never defined `PASS_WITH_NOTES`, so it could sit over major issues); counting bullets under the headings; a separate toggle beside the level; a per-finding list for now. Policy: `crates/demeteo-core/src/domain/gate/review_contract.rs`. | 2026-10-11 |
 | 61 | Visual direction | **A quiet instrument** ([AGENTS.md §4](../AGENTS.md#4-visual-design)): solid surfaces at three depths with hairline borders, blur only on overlays, colour spent only on meaning, no glow, gradients or decorative effects, WCAG 2.2 AA. The accent is indigo **"Signal"**, not stock violet-500: fill `#5a60c2` (white label 5.40:1), hover `#6269cc`, text `#838ef4`, focus ring `#6e78db`, selected border `#6972c0`, selected tint `rgba(90,96,194,.16)`. Stock violet failed AA for white text (4.23:1) and its focus and selection borders measured under 2:1. Status hues stay separate and resolve through `runStatus.ts`; no status uses the accent hue. ⚠️ **Supersedes the "dark neon glassmorphism" language** formerly in AGENTS.md §4 and `UX_JOURNEYS.md` §2, retired because it is the look AI generators default to and its mandate made every agent rebuild it. | 2026-10-20 design audit |
+| 62 | Web companion is in scope | **A browser control plane, the Demeteo Hub, is in scope** over many Demeteo instances. This **reverses** the position in [OPEN_QUESTIONS.md §17](OPEN_QUESTIONS.md#17-other-captured-items) ("Mobile / web companion — explicitly out of scope"). **Rejected:** keeping it out of scope — the design in [hub-design/](hub-design/README.md) answers a need the desktop cannot (one view over a fleet, a gate decided away from the machine), and the invariants it must not break are recorded below instead. Detail: [HUB.md §1](HUB.md#1-summary). | 2026-10-02 |
+| 63 | Hub tenancy | **A hosted, multi-tenant service where a tenant is one person with one fleet.** **Rejected:** self-hosted single-tenant — the user wants a hosted service; and teams in v1 — the passkey endorsement chain of [decision 66](#66--hub-gate-decisions-detail) has no notion of membership, so a second person in a tenant would have no defined way to be trusted or revoked. Detail: [HUB.md §1](HUB.md#1-summary). | 2026-10-02 |
+| 64 | Hub instances | **Desktops (macOS, Linux, Windows) pair with the Hub and hold one outbound `wss`; the Hub never dials a desktop.** Desktops keep their own provider keys and git tokens. **`demeteo-runner` hosts are not paired.** **Rejected:** the runner dialing out to the Hub — it would need a Hub token at rest on a host with no keyring, and a second transport to the runner; and the Hub storing PATs or long-lived SSH keys. Detail: [64](#64--hub-instances-detail). | 2026-10-02 |
+| 65 | Run source for future runner runs | **Paired desktops report Project and Workflow snapshots with local paths stripped, and the Hub builds a `RunSpec` from the last reported snapshot.** **Rejected:** Hub-side authoring of Projects and Workflows — a second editor, plus drift from the desktop's copy; and Workflows read from repo files — a new concept. Detail: [HUB.md §5](HUB.md#5-the-socket). | 2026-10-02 |
+| 66 | Gate decisions from the Hub are allowed | **A Gate may be decided from the Hub, but only by a WebAuthn assertion the desktop verifies itself** against passkey public keys it has pinned; the Hub relays and cannot forge an approval, and **no token can approve**. [Decision 50](#1-the-locked-decisions) is unchanged for MCP. **Rejected:** a Hub session plus a passkey step-up only for merge-to-default and over-budget gates (a compromised Hub or hijacked session could approve ordinary gates); read-only gates on the Hub; accepting each new passkey by hand on every desktop. Detail: [66](#66--hub-gate-decisions-detail). | 2026-10-02 |
+| 67 | Hub scopes | **Three scopes — `read`, `spend`, `gates` — toggled and enforced on the instance; no Hub action can turn one on.** Hub-started runs are bounded by **local ceilings** set on the desktop. **Rejected:** a `logs` scope — transcripts and diffs never leave an instance; MCP's `configure` — not offered; toggle-only scopes — they trust Hub-supplied caps. Detail: [67](#67--hub-scopes-and-ceilings-detail). | 2026-10-02 |
+| 68 | Hub storage and custody | **Postgres, plus OpenBao (MPL-2.0, the Linux Foundation fork of Vault) with its Transit engine for envelope encryption, shipped as Docker Compose: `hub`, `postgres`, `openbao`, `caddy`.** Hub server secrets live in OpenBao or are encrypted under Transit, never plaintext in Postgres. **Rejected:** HashiCorp Vault — BSL, not open source; Cosmian/Eviden KMS — source-available licensing. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
+| 69 | Hub code layout | **`crates/demeteo-hub` (axum server), `crates/demeteo-hub-protocol` (serde-only wire types shared by the desktop client and the Hub), and `hub-web/` (a second Vite entry in this repo reusing `src/components/canvas` and the `src/App.css` tokens).** **Rejected:** the Hub linking `demeteo-core` in v1 — it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
+| 70 | Feature labels on the Hub | **A paired desktop's snapshot names its newest Features — id, Project, the Workflow version pinned, and the title the user gave it, scrubbed and cut to 200 characters — and its registered harness kinds, behind `read` like the rest of the snapshot.** The title is the second piece of user-authored content on the Hub after attachments, and unlike them it is kept until the next snapshot replaces it. The launch description, the PR title and body, prompts, transcripts and diffs still never leave an instance. **Rejected:** a per-Feature frame on the event stream — a second cursor-less channel the Hub would have to merge, where the snapshot is already replaced wholesale and already gated on `read`; ids alone — the fleet and runs views were unreadable as `f-1793…` and `s-gate-review`; carrying the description — it is the run's prompt body, not a label. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-10-29 |
 
 ### 44 — Harness baseline (detail)
 
@@ -397,6 +406,112 @@ step is now told to phrase criteria against `{{test_command}}` / `{{build_comman
 and the validator returns a third verdict — `environment` — which routes to
 `VerifierError::Environment` and terminates once with remediation instead of
 opening a rework loop no agent can close.
+
+### 64 — Hub instances (detail)
+
+What is rejected here is what a later reader would reach for first.
+
+**Desktops dial out; the Hub never dials in.** A desktop sits behind NAT and a
+firewall and owns the keyring, so the one connection that can exist is the one it
+opens. One outbound `wss` carries everything — events up, requests down — which
+is why [HUB.md §5](HUB.md#5-the-socket) has no second channel. Desktops keep using
+their own provider keys and git tokens; the Hub is never a place those live.
+
+**A runner is not a paired instance.** `demeteo-runner` runs on a host with no
+keyring: the `keyring` feature of `crates/demeteo-core/Cargo.toml` is off for it,
+and `crates/demeteo-runner/src/credentials.rs` is the file-backed substitute.
+**Rejected: the runner dialing out to the Hub**, because the Hub refresh token
+would sit at rest on exactly the machine that cannot protect it, and the runner
+would need a second transport beside the SSH one it already has, so
+[EXECUTION_PARITY.md](EXECUTION_PARITY.md)'s "one behavioural contract" would
+have two doors to keep identical.
+
+**What comes later, and is not decided here.** A separate discovery will have the
+Hub drive runners over SSH the way a desktop does, using per-run GitHub App
+installation tokens and GitLab OAuth short-lived access tokens, and per-tenant SSH
+CAs held in the KMS that mint short-lived user certificates. It is gated on the
+SSH-certificate spike (ticket `hub-ssh-cert-spike`) and is not part of the ticket
+set this decision belongs to. **Rejected: the Hub storing PATs or long-lived SSH
+keys** — a hosted multi-tenant service holding standing credentials for every
+tenant's repositories and hosts is the breach that matters most, and a short-lived
+credential minted per run has nothing to steal afterwards.
+
+### 66 — Hub gate decisions (detail)
+
+**How this differs from decision 50.** [Decision 50](#1-the-locked-decisions)
+excludes gate approval over MCP *permanently*, on the reasoning that an approval
+the gated party can grant is not one: an MCP bearer token is held by an
+agent-reachable client, so a token that could approve would let the agent approve
+its own work. That reasoning stands and decision 50 is unchanged. The Hub does
+not carry a token that approves. It relays a **WebAuthn assertion** — a signature
+made on the user's authenticator, per decision — and the **desktop verifies it
+itself** against passkey public keys it pinned. The Hub cannot mint an assertion
+and cannot widen what one covers, so a compromised Hub can withhold or replay a
+decision but cannot make one. That holds per ceremony: the Hub serves the page
+that runs the ceremony, and can spend one on a decision the user did not mean
+([HUB.md §3](HUB.md#what-a-compromised-hub-can-and-cannot-do)). The desktop
+refuses every endorsement, so a substituted ceremony cannot get a key the Hub
+holds trusted ([HUB.md §11 item 20](HUB.md#11-what-is-not-decided)). What decision 50 protects, a human at the
+checkpoint, is what the assertion proves. It is a separate surface, not a
+reopening: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently).
+
+**What an assertion binds.** The WebAuthn challenge commits to (instance id,
+feature id, step execution id, decision, request id, expiry). An assertion for one
+Gate cannot be replayed on another, on another instance, with another decision, or
+after it expires, and the request id is single-use on the desktop. The byte-level
+canonicalisation is in [HUB.md §8](HUB.md#8-gate-decisions).
+
+**The pinned set and how it changes.** It starts from the passkeys the Hub returns
+at pairing — **trust on first pair**. A new passkey is trusted only once an
+already-trusted passkey has endorsed it, by an assertion over the new credential's
+id and public key. A revocation must likewise be signed by another trusted
+passkey, and **the last trusted key cannot be revoked**, so the set can never be
+emptied by a request the Hub relays.
+
+**Rejected, and why.**
+
+- **A Hub session plus a passkey step-up only for merge-to-default and over-budget
+  gates.** It looks proportionate, and it is the design's original shape. It fails
+  because the desktop would be trusting the Hub's word that a session is the user:
+  a compromised Hub or a hijacked session could approve every gate the step-up did
+  not cover. Every Hub gate decision carries an assertion, or none can be trusted.
+- **Read-only gates on the Hub.** Safe, and refused: the point of the surface is
+  deciding a Gate away from the machine.
+- **Accepting each new passkey manually on every desktop.** It would restore the
+  property by hand and put a trip to every machine behind adding a phone. The
+  endorsement chain extends trust from a key the desktop already trusts, with no
+  visit.
+
+### 67 — Hub scopes and ceilings (detail)
+
+**The instance owns the toggle.** `read`, `spend` and `gates` are switched on in
+the desktop's Settings and checked on the desktop for every request. A request
+for a scope that is off is refused locally, and **no Hub action can turn one
+on** — pairing records what the user approved, and the instance's own toggle is
+the later word.
+
+**`logs` is dropped; `configure` is not offered.** The design's `logs` scope would
+send transcripts and diffs to the Hub. They never leave an instance, so there is
+nothing for it to grant. MCP's `configure` ([decision 48](#1-the-locked-decisions))
+changes how runs are shaped; the Hub starts and steers runs but does not edit a
+Project's settings.
+
+**Assignment needs `spend`.** Re-pointing a step mid-run
+([decision 54](#54--mid-run-assignment-detail)) changes which model a run bills
+against, so `set_step_assignment` requires `spend`, not `gates`.
+
+**Local ceilings.** A Hub-started run is bounded by two numbers set on the desktop:
+a **per-run maximum cost** and a **rolling 24-hour total**. A request over either
+is refused locally. **Rejected: toggle-only scopes**, because a `spend` toggle
+alone leaves the cap to the request, and a cap supplied by the Hub is a cap the Hub
+can raise.
+
+**The ceilings fail closed and count commitments.** Both are integer cents. The
+24-hour total sums the caps of the Hub-started Features created in that window,
+whatever they went on to cost. A start with no cap is refused, and so is any start
+while either ceiling is unset. The per-run ceiling bounds
+the cap a start declares, which is a per-turn budget, so a run's actual spend stays
+unbounded; that remainder is open. Detail: [HUB.md §7](HUB.md#local-ceilings).
 
 ## 2. Superseded decisions
 

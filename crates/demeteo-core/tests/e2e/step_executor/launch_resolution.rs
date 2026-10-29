@@ -345,6 +345,7 @@ async fn test_feature_start_pins_workflow_version() {
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
     let resolved = executor

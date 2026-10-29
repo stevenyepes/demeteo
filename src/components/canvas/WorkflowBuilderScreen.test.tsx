@@ -15,7 +15,8 @@ import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
 import { NavigationProvider } from '../../context/NavigationContext';
 import { WorkflowBuilderScreen } from './WorkflowBuilderScreen';
 import catalogFixture from './__fixtures__/node_catalog.json';
-import { resetNodeTypeCache, type NodeTypeInfo } from './nodeCatalog';
+import type { NodeTypeInfo } from './nodeCatalog';
+import { resetNodeTypeCache } from './useNodeTypes';
 import { WORKFLOW_TEMPLATES, templateById } from './templates';
 import type { WorkflowDefinitionV2 } from './types';
 

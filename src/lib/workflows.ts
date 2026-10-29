@@ -88,7 +88,7 @@ export async function importWorkflow(json: string): Promise<WorkflowWithSteps> {
 }
 
 /** The builder's palette entries, projected from the Rust `NodeTypeRegistry`.
- *  Static for a given build — {@link ../components/canvas/nodeCatalog} is what
+ *  Static for a given build — {@link ../components/canvas/useNodeTypes} is what
  *  caches it; this is the bare round-trip. */
 export async function listNodeTypes(): Promise<NodeTypeInfo[]> {
   return invoke<NodeTypeInfo[]>("node_types_list");

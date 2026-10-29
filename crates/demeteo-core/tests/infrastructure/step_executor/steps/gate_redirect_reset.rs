@@ -82,6 +82,7 @@ fn seed_parent_rows(
             origin: FeatureOrigin::DefaultBranch,
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         })
         .unwrap();
     FeatureId::from("f-1".to_string())

@@ -277,6 +277,21 @@ pub struct AppContext {
 
     /// Set only by the desktop app; see [`AppVersion`].
     pub app_version: AppVersion,
+
+    /// Desktop pairing with the Demeteo Hub. `None` outside
+    /// `ExecutionMode::Router`, and in a build without the `keyring` feature:
+    /// its secrets have nowhere else they may go (AGENTS.md §2).
+    pub hub: Option<Arc<crate::adapters::hub::HubPairing>>,
+    /// Consumed Hub request ids and the Hub activity log.
+    pub hub_requests: Arc<dyn crate::ports::hub::HubRequestRepository>,
+    /// The Hub local policy, read side only. Its writer is deliberately not a
+    /// field: the Hub request handler is built over this struct; see
+    /// [`crate::composition::build_core_context_with_policy_writer`].
+    pub hub_policy: Arc<dyn crate::ports::hub::HubPolicyReader>,
+    /// The trusted passkey list, read side only, and present unpaired. Like
+    /// the policy writer, `HubPasskeyTrust` is not a field: it is what the
+    /// Hub request handler commits trust changes through.
+    pub hub_passkeys: Arc<dyn crate::ports::hub::HubPasskeyReader>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

@@ -15,7 +15,8 @@ use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::{bootstrap, projects, workflows};
 use demeteo_core::domain::ids::{FeatureId, ProjectId, ProviderId};
 use demeteo_core::domain::models::{
-    GateDecision, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, WorktreeStrategy,
+    GateDecision, LaunchedBy, MrInfo, ProjectSettings, ProviderInstance, PublishOptions,
+    WorktreeStrategy,
 };
 use demeteo_core::domain::push_lease;
 use demeteo_core::domain::run_spec::RunSpec;
@@ -387,6 +388,7 @@ async fn execute_run_inner(
             staged_attachments: staged,
             origin,
             diff_base_branch: spec.diff_base_branch.clone(),
+            launched_by: LaunchedBy::Desktop,
         })
         .await
         .map_err(|e| format!("feature_start failed: {}", e))?;

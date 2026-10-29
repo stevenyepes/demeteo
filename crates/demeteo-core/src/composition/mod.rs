@@ -68,7 +68,20 @@ pub fn build_core_context(
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
 ) -> AppContext {
-    build_core_context_with_credentials(
+    build_core_context_with_policy_writer(cfg, notif, runtime).0
+}
+
+/// [`build_core_context`], plus the one [`ports::hub::HubPolicyWriter`] over
+/// the same database. It is returned beside the context rather than inside
+/// it because the Hub request handler is built over the context, and nothing
+/// the handler can reach may write the policy it is judged by (docs/HUB.md
+/// §7). Only the desktop's Settings command should hold it.
+pub fn build_core_context_with_policy_writer(
+    cfg: CoreConfig,
+    notif: Arc<dyn NotificationPort>,
+    runtime: tokio::runtime::Handle,
+) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
+    build_core_context_parts(
         cfg,
         notif,
         runtime,
@@ -85,6 +98,15 @@ pub fn build_core_context_with_credentials(
     runtime: tokio::runtime::Handle,
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
 ) -> AppContext {
+    build_core_context_parts(cfg, notif, runtime, git_credentials).0
+}
+
+fn build_core_context_parts(
+    cfg: CoreConfig,
+    notif: Arc<dyn NotificationPort>,
+    runtime: tokio::runtime::Handle,
+    git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
+) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
     let CoreConfig {
         app_data_dir,
         execution_mode,
@@ -96,10 +118,23 @@ pub fn build_core_context_with_credentials(
             .expect("Failed to initialize database adapter"),
     );
     let machines_repo: Arc<dyn ports::db::MachineRepository> = db_adapter.clone();
-    let projects_repo: Arc<dyn ports::db::ProjectRepository> = db_adapter.clone();
+    // Wrapped here, before the first clone: a clone of the bare repo hands
+    // its holder writes the snapshot never hears about (docs/HUB.md §5).
+    let snapshot_wake = Arc::new(tokio::sync::Notify::new());
+    let projects_repo: Arc<dyn ports::db::ProjectRepository> = Arc::new(
+        adapters::hub::socket::snapshot_wake::WakingProjects::with_wake(
+            db_adapter.clone(),
+            snapshot_wake.clone(),
+        ),
+    );
+    let workflows_repo: Arc<dyn ports::db::WorkflowRepository> = Arc::new(
+        adapters::hub::socket::snapshot_wake::WakingWorkflows::with_wake(
+            db_adapter.clone(),
+            snapshot_wake.clone(),
+        ),
+    );
     let features_repo: Arc<dyn ports::db::FeatureRepository> = db_adapter.clone();
     let sequence_resume_repo: Arc<dyn ports::db::SequenceResumeRepository> = db_adapter.clone();
-    let workflows_repo: Arc<dyn ports::db::WorkflowRepository> = db_adapter.clone();
     let gates_repo: Arc<dyn ports::db::GateRepository> = db_adapter.clone();
     let app_settings_repo: Arc<dyn ports::db::AppSettingsRepository> = db_adapter.clone();
     let memory_repo: Arc<dyn ports::memory::ProjectMemoryPort> = db_adapter.clone();
@@ -108,7 +143,11 @@ pub fn build_core_context_with_credentials(
     let merge_audit_repo: Arc<dyn ports::db::MergeAuditRepository> = db_adapter.clone();
     let notifications_repo: Arc<dyn ports::db::NotificationRepository> = db_adapter.clone();
     let runner_runs_repo: Arc<dyn ports::runner_run::RunnerRunPort> = db_adapter.clone();
-    let run_events_repo: Arc<dyn ports::run_events::RunEventsPort> = db_adapter.clone();
+    // `RunEventRecorder` appends through `ctx.run_events`; handed the bare
+    // repo instead, every row would wait for the socket's next connection.
+    let waking_run_events = adapters::hub::socket::wake::WakingRunEvents::new(db_adapter.clone());
+    let run_events_wake = waking_run_events.wake();
+    let run_events_repo: Arc<dyn ports::run_events::RunEventsPort> = Arc::new(waking_run_events);
     let remote_run_mirror_repo: Arc<dyn ports::remote_run_mirror::RemoteRunMirrorPort> =
         db_adapter.clone();
     let sync_sessions_repo: Arc<dyn ports::sync_session::SyncSessionPort> = db_adapter.clone();
@@ -349,6 +388,40 @@ pub fn build_core_context_with_credentials(
         exec_inner.clone(),
     ));
 
+    let hub_requests_repo: Arc<dyn ports::hub::HubRequestRepository> = db_adapter.clone();
+    let hub_policy_reader: Arc<dyn ports::hub::HubPolicyReader> = db_adapter.clone();
+    let hub_policy_writer: Arc<dyn ports::hub::HubPolicyWriter> = db_adapter.clone();
+    let hub_pins: Arc<dyn ports::hub::HubPinRepository> = db_adapter.clone();
+    let hub_passkeys: Arc<dyn ports::hub::HubPasskeyTrust> = db_adapter.clone();
+    let hub_passkey_reader: Arc<dyn ports::hub::HubPasskeyReader> = db_adapter.clone();
+
+    let app_version = AppVersion::default();
+    let hub = match execution_mode {
+        ExecutionMode::Router => hub_pairing(
+            hub_pins.clone(),
+            hub_policy_reader.clone(),
+            app_version.clone(),
+            hub_socket(
+                run_events_repo.clone(),
+                run_events_wake,
+                Arc::new(adapters::hub::snapshot_source::RepoSnapshotSource::new(
+                    db_adapter.clone(),
+                    db_adapter.clone(),
+                    db_adapter.clone(),
+                    db_adapter.clone(),
+                    agent_registry
+                        .runtimes()
+                        .iter()
+                        .map(|runtime| runtime.kind().to_owned())
+                        .collect(),
+                )),
+                snapshot_wake,
+                runtime.clone(),
+            ),
+        ),
+        ExecutionMode::LocalOnly => None,
+    };
+
     let ctx = AppContext {
         machines: machines_repo,
         threads: threads_repo,
@@ -395,7 +468,11 @@ pub fn build_core_context_with_credentials(
         oauth_clients,
         oauth_grants,
         mcp_consent,
-        app_version: AppVersion::default(),
+        app_version,
+        hub,
+        hub_requests: hub_requests_repo,
+        hub_policy: hub_policy_reader,
+        hub_passkeys: hub_passkey_reader,
     };
 
     // The MCP listener is the first background task that needs the *whole*
@@ -414,7 +491,112 @@ pub fn build_core_context_with_credentials(
     cache_reclaim.bind(ctx.clone());
     application::cache_sweep::start_cache_sweep(ctx.clone(), &runtime);
 
-    ctx
+    // Before `start_socket`, which `src-tauri/src/lib.rs` calls once this
+    // returns, so the first connection already answers what it is sent.
+    if let Some(hub) = &ctx.hub {
+        hub.bind_requests(Arc::new(application::hub_requests::HubRequests::new(
+            Arc::new(ctx.clone()),
+            application::hub_requests::HubRequestPorts {
+                requests: ctx.hub_requests.clone(),
+                policy: ctx.hub_policy.clone(),
+                pins: hub_pins,
+                passkeys: hub_passkeys,
+                attachments: hub.attachments(),
+                now_ms: Arc::new(crate::shared::time::now_ms),
+            },
+        )));
+    }
+
+    (ctx, hub_policy_writer)
+}
+
+/// Shares `app_version` with the context, so the version the desktop sets
+/// after this returns is the one the Hub's consent page shows.
+///
+/// The socket is attached here but not started: its `Hello` announces that
+/// same version, which is still unset until this returns, so the desktop
+/// starts it (`src-tauri/src/lib.rs`) once the version is set.
+#[cfg(feature = "keyring")]
+fn hub_pairing(
+    pins: Arc<dyn ports::hub::HubPinRepository>,
+    policy: Arc<dyn ports::hub::HubPolicyReader>,
+    app_version: AppVersion,
+    socket: Option<adapters::hub::socket::SocketConfig>,
+) -> Option<Arc<adapters::hub::HubPairing>> {
+    let token = match adapters::hub::token_client::ReqwestTokenEndpoint::new() {
+        Ok(token) => Arc::new(token),
+        Err(e) => {
+            tracing::warn!(error = %e, "Hub pairing is off: no HTTP client for /token");
+            return None;
+        }
+    };
+    let pairing = adapters::hub::HubPairing::new(
+        pins,
+        Arc::new(adapters::hub::keyring_store::KeyringSecretStore),
+        token.clone(),
+        policy,
+    )
+    .with_refresh_endpoint(token)
+    .with_app_version(app_version);
+    Some(Arc::new(match socket {
+        Some(socket) => pairing.with_socket(socket),
+        None => pairing,
+    }))
+}
+
+/// No keyring, no pairing: a file in its place is what AGENTS.md §2 forbids.
+#[cfg(not(feature = "keyring"))]
+fn hub_pairing(
+    _pins: Arc<dyn ports::hub::HubPinRepository>,
+    _policy: Arc<dyn ports::hub::HubPolicyReader>,
+    _app_version: AppVersion,
+    _socket: Option<adapters::hub::socket::SocketConfig>,
+) -> Option<Arc<adapters::hub::HubPairing>> {
+    None
+}
+
+/// `run_events` and `wake` have to come from one
+/// [`WakingRunEvents`](adapters::hub::socket::wake::WakingRunEvents), and
+/// `snapshot_wake` has to be the one `ctx.projects` and `ctx.workflows` wake
+/// through. With no dialer the desktop still pairs; it just never dials.
+#[cfg(feature = "hub-socket")]
+fn hub_socket(
+    run_events: Arc<dyn ports::run_events::RunEventsPort>,
+    wake: Arc<tokio::sync::Notify>,
+    snapshots: Arc<dyn ports::hub::HubSnapshotSource>,
+    snapshot_wake: Arc<tokio::sync::Notify>,
+    runtime: tokio::runtime::Handle,
+) -> Option<adapters::hub::socket::SocketConfig> {
+    match adapters::hub::socket::ws_transport::WsSocketDialer::new() {
+        Ok(dialer) => Some(adapters::hub::socket::SocketConfig {
+            dialer: Arc::new(dialer),
+            run_events,
+            wake,
+            snapshots,
+            snapshot_wake,
+            snapshot_debounce: std::time::Duration::from_secs(
+                crate::domain::hub_socket::SNAPSHOT_DEBOUNCE_SECS,
+            ),
+            runtime,
+            sleeper: Arc::new(adapters::hub::socket::TokioSleeper),
+            jitter: adapters::hub::socket::os_jitter,
+        }),
+        Err(e) => {
+            tracing::warn!(error = %e, "the Hub socket is off: no WebSocket client");
+            None
+        }
+    }
+}
+
+#[cfg(not(feature = "hub-socket"))]
+fn hub_socket(
+    _run_events: Arc<dyn ports::run_events::RunEventsPort>,
+    _wake: Arc<tokio::sync::Notify>,
+    _snapshots: Arc<dyn ports::hub::HubSnapshotSource>,
+    _snapshot_wake: Arc<tokio::sync::Notify>,
+    _runtime: tokio::runtime::Handle,
+) -> Option<adapters::hub::socket::SocketConfig> {
+    None
 }
 
 #[cfg(test)]

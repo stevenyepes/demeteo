@@ -7,7 +7,15 @@
     // second config inside the project as a nested root and refuses to run at
     // all, so without this the gate fails for anyone with a worktree open —
     // and this repo orchestrates worktrees for a living.
-    "includes": ["src/**/*.ts", "src/**/*.tsx", "*.ts", "!**/*.d.ts", "!.claude/**"]
+    "includes": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "hub-web/**/*.ts",
+      "hub-web/**/*.tsx",
+      "*.ts",
+      "!**/*.d.ts",
+      "!.claude/**"
+    ]
   },
   // Off, not absent: the tree is genuinely mixed (roughly 2:1 single-to-double
   // quotes, lines past 100 columns throughout), so turning the formatter on
@@ -73,6 +81,9 @@
       // Tests are exempt: they mock the transport with
       // `vi.mock('@tauri-apps/api/core')` and import the mocked `invoke`, which
       // is the transport boundary doing its job, not a component bypassing it.
+      //
+      // The `hub-web` pattern is the one-way rule of the next entry, which
+      // explains why it has to be repeated here rather than stated once.
       "includes": [
         "src/components/**",
         "src/hooks/**",
@@ -90,6 +101,144 @@
               "options": {
                 "paths": {
                   "@tauri-apps/api/core": "AGENTS.md §3: reach a Tauri command through its typed wrapper in src/lib/ — never invoke() from a component, hook, or context."
+                },
+                "patterns": [
+                  {
+                    "group": ["**/hub-web/**"],
+                    "message": "hub-web/ may import from src/; nothing under src/ imports from hub-web/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      // The dependency between the two trees runs one way: `hub-web/` may
+      // import from `src/`, and nothing under `src/` imports from `hub-web/`.
+      // They share one `tsconfig` program, so the reverse import type-checks
+      // and bundles; this is the only thing that refuses it. `import type` is
+      // refused with the rest — the rule is about imports, not bundle edges.
+      //
+      // The pattern is spelled twice, here and in the entry above, because
+      // `noRestrictedImports` options are replaced, not merged: when two
+      // overrides (or the base config and an override) set this rule for one
+      // file, the last one matching supplies the whole option set and the
+      // other is dropped. A single `src/**` entry carrying the pattern, placed
+      // after the entry above, therefore switches off the
+      // `@tauri-apps/api/core` gate for components, hooks and contexts; placed
+      // before it, or set in the base config, it is itself dropped for those
+      // files. Either way one of the two gates goes and nothing reports it.
+      //
+      // So the includes are the exact complement of the entry above within
+      // `src/`: its directories are negated, and the trailing globs re-include
+      // the test files it exempts. Every file under `src/` matches one of the
+      // two and none matches both — a change to either list is a change to
+      // the other.
+      "includes": [
+        "src/**",
+        "!src/components/**",
+        "!src/hooks/**",
+        "!src/context/**",
+        "!src/App.tsx",
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/hub-web/**"],
+                    "message": "hub-web/ may import from src/; nothing under src/ imports from hub-web/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      // `hub-web/` is the Hub's browser UI: it is served by `demeteo-hub`, not
+      // loaded in a Tauri webview, so there is no IPC bridge behind any
+      // `@tauri-apps` package — an import type-checks, bundles, and fails only
+      // when a browser runs it. The pattern covers the whole scope rather than
+      // the packages `package.json` lists today, so a plugin added later is
+      // refused without an edit here.
+      //
+      // No exemption, tests and `hub-web/src/lib/` included: the desktop
+      // override above exempts both because that is where the transport is
+      // wrapped and mocked, and hub-web has no Tauri transport to wrap. This
+      // sees a file's own imports only; the transitive case — hub-web reaching
+      // Tauri through a module under `src/` — is the import-graph test's.
+      //
+      // `noExplicitAny` is `warn` in the base config for a `src/` backlog.
+      // hub-web starts at zero, so AGENTS.md §3's "no `any`" is an error here
+      // from the first file instead of a ratchet to promote later.
+      "includes": ["hub-web/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "hub-web runs in a browser, not a Tauri webview: no @tauri-apps package has a backend there."
+                  }
+                ]
+              }
+            }
+          },
+          "suspicious": { "noExplicitAny": "error" }
+        }
+      }
+    },
+    {
+      // AGENTS.md §3's typed-wrapper rule with `fetch` standing where
+      // `invoke()` stands on the desktop: `hub-web/src/lib/` is the one place
+      // a response is narrowed from `unknown`, so it is the whole of the
+      // exception. A separate entry from the one above only because its
+      // include list differs — that one has no exemptions.
+      //
+      // Tests are exempt for the reason they are above: stubbing the global is
+      // the boundary doing its job, not a view bypassing it.
+      //
+      // Two mechanisms, one message. `noRestrictedGlobals` refuses the bare
+      // `fetch(…)` and sees nothing but a reference to the global, so the
+      // plugin refuses the function reached as a property of any object —
+      // `window.fetch`, `globalThis?.fetch`, `self["fetch"]`, a
+      // template-literal key — and destructured off one, aliased or not
+      // (`const { fetch: f } = window`). Its header says why the object is not
+      // restricted to the three globals.
+      //
+      // Still open, each probed and passing both: a key that is not a literal
+      // (`window[key]`, `window['fe' + 'tch']`), `Reflect.get(window,
+      // 'fetch')`, the `value` of `Object.getOwnPropertyDescriptor(window,
+      // 'fetch')`, and an imported binding that is itself a fetch. Neither
+      // mechanism resolves a value, so none of these can be closed here.
+      "includes": [
+        "hub-web/**",
+        "!hub-web/src/lib/**",
+        "!**/*.test.ts",
+        "!**/*.test.tsx",
+        "!hub-web/src/test/**"
+      ],
+      "plugins": ["./scripts/biome-no-member-fetch.grit"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "fetch": "AGENTS.md §3: reach the Hub through a typed wrapper in hub-web/src/lib/ — never fetch() from a view or component."
                 }
               }
             }

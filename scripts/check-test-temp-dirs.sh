@@ -16,6 +16,10 @@
 # path resolves, say — opts out on the same line or the line above with
 #     // temp-dir-ok: <why>
 # and the reason is what a reviewer reads.
+#
+# Not covered, deliberately: `crates/demeteo-hub`. The hub must not depend on
+# `demeteo-core` (`src-tauri/tests/hub_layout.rs` enforces it), so it cannot
+# reach `test_dir`; its few `temp_dir()` uses remove what they create.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -1,0 +1,3 @@
+{$DEMETEO_HUB_DOMAIN} {
+	reverse_proxy {$DEMETEO_HUB_UPSTREAM}
+}

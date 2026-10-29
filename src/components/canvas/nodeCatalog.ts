@@ -1,6 +1,6 @@
 /**
- * The builder's node-type catalog: a thin client over the `node_types_list`
- * Tauri command, which projects the Rust `NodeTypeRegistry` (task P3.1).
+ * The builder's node-type catalog: the wire shape of one entry of the Rust
+ * `NodeTypeRegistry` (task P3.1), and the lookup the canvas rules do over it.
  *
  * PRD §6.3 requires the palette to *derive* from the registry so a new node
  * type — P3.5's `command`, later `subworkflow` — appears with zero frontend
@@ -8,11 +8,13 @@
  * frontend keeps is the lucide icon in `types.ts`, which already falls back
  * gracefully for a type it hasn't been taught about.
  *
- * The catalog is static for a given build, so it is fetched once and shared
- * by every canvas via a module-level promise.
+ * This module imports nothing from `src/lib/`, and must not re-export from
+ * `./useNodeTypes`. The Hub's browser UI (hub-web) reaches it through
+ * `WorkflowCanvas`, and a browser has no Tauri IPC: any value import that
+ * leads to `@tauri-apps/api` — a re-export counts — puts the desktop bridge
+ * in the Hub's bundle. Whatever fetches the catalog belongs in
+ * `./useNodeTypes`; code in this module is handed the entries.
  */
-import { useEffect, useState } from 'react';
-import { listNodeTypes } from '../../lib/workflows';
 
 /** Coarse port type (mirrors Rust `PortType`, serde snake_case). */
 export type PortType = 'text' | 'file' | 'task_list' | 'verdict' | 'approval' | 'any';
@@ -30,56 +32,6 @@ export interface NodeTypeInfo {
   outputs: PortType[];
   /** Cap on instances per workflow; null = unbounded. */
   max_instances?: number | null;
-}
-
-/** Shared in-flight/settled fetch — the catalog can't change within a build. */
-let cached: Promise<NodeTypeInfo[]> | null = null;
-
-export function loadNodeTypes(): Promise<NodeTypeInfo[]> {
-  cached ??= listNodeTypes().catch((err) => {
-    // Let a later mount retry rather than caching the failure forever.
-    cached = null;
-    throw err;
-  });
-  return cached;
-}
-
-/** Test seam: drop the memoized catalog between cases. */
-export function resetNodeTypeCache(): void {
-  cached = null;
-}
-
-export interface NodeTypesState {
-  nodeTypes: NodeTypeInfo[];
-  loading: boolean;
-  error: string | null;
-}
-
-/** Fetch the catalog once per app run; every canvas shares the result. */
-export function useNodeTypes(): NodeTypesState {
-  const [state, setState] = useState<NodeTypesState>({
-    nodeTypes: [],
-    loading: true,
-    error: null,
-  });
-
-  useEffect(() => {
-    let alive = true;
-    loadNodeTypes()
-      .then((nodeTypes) => {
-        if (alive) setState({ nodeTypes, loading: false, error: null });
-      })
-      .catch((err) => {
-        if (alive) {
-          setState({ nodeTypes: [], loading: false, error: String(err) });
-        }
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  return state;
 }
 
 /** Index the catalog by kind for the per-node lookups the rules do. */

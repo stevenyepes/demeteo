@@ -117,6 +117,7 @@ fn translation_maps_narrative_events() {
             DomainEvent::GateRequired {
                 feature_id: feature(),
                 step_execution_id: StepExecutionId::new("se-2"),
+                step_id: "s-gate".into(),
             },
             "gate_required",
         ),

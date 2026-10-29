@@ -745,6 +745,27 @@ can grant is not one. Only the discovery-interview row is a statement about
 *now*. The design conversation recorded the ticket-creation and interview
 boundaries without a longer rationale than the one in the table.
 
+### The Hub's gate decision is a separate surface
+
+The [Demeteo Hub](HUB.md) lets a Gate be decided from a browser. That does not
+reopen decision 50, which **is unchanged for MCP**: no MCP tool approves a Gate
+or merges a worktree, and nothing in the table above moves.
+
+The two differ in mechanism, not in how much the Gate is respected. An MCP caller
+holds a bearer token, and the client holding it is reachable by an agent; a token
+that could approve would let an agent approve its own work, which is the argument
+above. A Hub gate decision is authorised by a **WebAuthn assertion** made by a
+human on an authenticator, and the desktop **verifies it itself** against passkey
+public keys it pinned. The Hub only relays it and cannot produce one, so **no token
+can approve**. That the Hub cannot produce one holds per ceremony: it serves the
+page that runs each ceremony, so one it substitutes can decide one gate the user
+did not mean ([`HUB.md` §3](HUB.md#what-a-compromised-hub-can-and-cannot-do)).
+The desktop refuses every endorsement, so a substituted ceremony cannot get a key
+the Hub holds trusted ([`HUB.md` §11 item 20](HUB.md#11-what-is-not-decided)). If a future change would let a
+token do what the assertion does, it reopens this section; one that leaves the assertion in place does not. Mechanism:
+[`HUB.md` §8](HUB.md#8-gate-decisions); decision:
+[decision 66](DECISIONS.md#66--hub-gate-decisions-detail).
+
 **A redirect is not an approval.** `rework_from_critic` (§7.3) sends one gate
 back; it lets nothing through, so it is not the operation the first row
 excludes. What would be the same kind of problem as `ticket_force_start`,

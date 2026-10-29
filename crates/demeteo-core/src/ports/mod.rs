@@ -9,6 +9,7 @@ pub mod db;
 pub mod discovery;
 pub mod execution;
 pub mod git_credentials;
+pub mod hub;
 pub mod memory;
 pub mod memory_llm;
 pub mod memory_signals;

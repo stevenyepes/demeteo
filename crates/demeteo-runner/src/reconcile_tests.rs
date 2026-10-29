@@ -77,6 +77,7 @@ fn run_at_a_gate(label: &str, resume_count: i64) -> SqliteAdapter {
             origin: FeatureOrigin::default(),
             diff_base_branch: None,
             resolved_branch: None,
+            launched_by: Default::default(),
         },
     )
     .expect("seed the feature");

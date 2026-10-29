@@ -125,6 +125,9 @@ active. On 2.54.1 it brings the runaway straight back, so test it under a
 memory cap (`systemd-run --user --scope -p MemoryMax=3G -p
 MemorySwapMax=0 env WEBKIT_DISABLE_DMABUF_RENDERER=0 demeteo`). Without
 `MemorySwapMax=0` the cap only moves the growth into swap.
+`npm run dev:tauri` opts back in by default (`scripts/dev-tauri.mjs`),
+since the dev database is too small to trigger it; the installed app
+does not, and `npm run dev:tauri:sw` still forces the CPU path.
 
 **What was ruled out** on 2.54.1, each with the DMA-BUF renderer left on:
 `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` (GPU compositing, CPU painting),

@@ -354,6 +354,18 @@ pub trait FeatureRepository: Send + Sync {
     /// without re-fetching.
     fn list_with_open_mr(&self) -> Result<Vec<Feature>, String>;
 
+    /// What Hub-started runs created at or after `since_ms` (unix ms) have
+    /// committed, in whole cents: the sum of their `max_budget_usd` caps, a
+    /// run with no cap counting as zero. The committed cap rather than the
+    /// spend so far is what the daily ceiling bounds (docs/HUB.md §11).
+    ///
+    /// Defaults to an error for the reason
+    /// [`get_all_for_project`](Self::get_all_for_project) does: a double
+    /// answering zero would let every Hub start under the ceiling.
+    fn hub_committed_cents_since(&self, _since_ms: i64) -> Result<u64, String> {
+        Err("summing Hub-committed budgets is not implemented by this repository".into())
+    }
+
     fn step_create(&self, step: StepExecution) -> Result<(), String>;
     fn step_get(&self, id: &StepExecutionId) -> Result<Option<StepExecution>, String>;
     /// Apply a [`StepExecutionPatch`] (replaces the 6-arg `step_execution_update_status`).

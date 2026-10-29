@@ -1,5 +1,5 @@
 use crate::application::attachments::StagedAttachmentInput;
-use crate::domain::models::{EffortLevel, Feature, GateDecision, StepExecution};
+use crate::domain::models::{EffortLevel, Feature, GateDecision, LaunchedBy, StepExecution};
 use crate::error::AppError;
 use async_trait::async_trait;
 use serde::Serialize;
@@ -59,6 +59,9 @@ pub struct FeatureLaunch {
     /// it started. `None` = the project's default branch. See migration V41
     /// and [`FeatureOrigin::base_branch`](crate::domain::feature_origin::FeatureOrigin::base_branch).
     pub diff_base_branch: Option<String>,
+    /// Who asked for this run. [`LaunchedBy::Desktop`] unless the Hub relayed
+    /// the request.
+    pub launched_by: LaunchedBy,
 }
 
 /// Step executor — the DAG engine that drives a `Feature` through its

@@ -29,7 +29,8 @@ import { NavigationProvider } from '../../context/NavigationContext';
 import { WorkflowBuilderScreen } from './WorkflowBuilderScreen';
 import catalogFixture from './__fixtures__/node_catalog.json';
 import bugfixFixture from './__fixtures__/bugfix-pipeline.v2.json';
-import { resetNodeTypeCache, type NodeTypeInfo } from './nodeCatalog';
+import type { NodeTypeInfo } from './nodeCatalog';
+import { resetNodeTypeCache } from './useNodeTypes';
 import { addNode, connectNodes } from './graphEdits';
 import type { WorkflowDefinitionV2 } from './types';
 

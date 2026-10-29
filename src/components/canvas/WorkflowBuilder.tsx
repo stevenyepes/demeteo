@@ -64,7 +64,7 @@ import {
 import { diffGraphs, diffSummary, mergeForDiff } from './graphDiff';
 import { useGraphHistory } from './graphHistory';
 import { describeFinding, lintSummary } from './lint';
-import { useNodeTypes } from './nodeCatalog';
+import { useNodeTypes } from './useNodeTypes';
 import { useWorkflowLint } from './useWorkflowLint';
 import {
   clearDraft,
