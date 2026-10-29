@@ -1,0 +1,80 @@
+name: Publish Hub image
+
+# The Hub's container image, public at ghcr.io/<owner>/demeteo-hub. Deployments
+# pull it; nothing here reaches into a cluster (deploy/hub/README.md, Kubernetes).
+#   tag vX.Y.Z  → X.Y.Z and X.Y, the tags a semver image policy follows
+#   master push → edge and sha-<short>, for pinning a build ahead of a release
+#   manual run  → sha-<short> of whatever ref it was started on
+#
+# No untagged-version cleanup: the provenance and SBOM attestations are
+# untagged manifests referenced by the tagged index, and deleting "untagged"
+# versions breaks every image that carries them.
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*.*.*"]
+    paths:
+      - crates/demeteo-hub/**
+      - crates/demeteo-hub-protocol/**
+      - hub-web/**
+      - src/**
+      - deploy/hub/Dockerfile
+      - deploy/hub/Dockerfile.dockerignore
+      - Cargo.lock
+      - package-lock.json
+      - rust-toolchain.toml
+      - .github/workflows/publish-hub.yml
+  workflow_dispatch:
+
+concurrency:
+  group: publish-hub-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/demeteo-hub
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=demeteo-hub
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/hub/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=hub
+          cache-to: type=gha,scope=hub,mode=max

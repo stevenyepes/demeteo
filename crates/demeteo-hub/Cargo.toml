@@ -30,10 +30,11 @@ sha2 = "0.10"
 # Cargo checks `links` uniqueness at resolution time, optional dependencies
 # included, so sqlx-sqlite's libsqlite3-sys is in the graph regardless and must
 # equal the one `demeteo-core`'s rusqlite pins. Bump sqlx here and rusqlite in
-# crates/demeteo-core/Cargo.toml together. No TLS feature:
-# Postgres sits on the compose-internal network, and a second rustls provider
-# next to reqwest's panics at first use.
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "uuid", "time"] }
+# crates/demeteo-core/Cargo.toml together. TLS is the aws-lc rustls backend
+# and never `tls-rustls` (ring): a second rustls provider next to reqwest's
+# panics at first use. It is what `sslmode=require` in `DATABASE_URL` needs
+# against a Postgres that refuses plaintext, as Zalando/Spilo does by default.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "uuid", "time", "tls-rustls-aws-lc-rs"] }
 thiserror = "2"
 time = "0.3"
 tokio = { version = "1", features = ["full"] }

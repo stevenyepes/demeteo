@@ -270,11 +270,11 @@ in the `postgres-data` volume, and the passkey stays on the authenticator under 
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `DATABASE_URL` | hub | Postgres connection URL. Compose builds it from the `POSTGRES_*` values |
+| `DATABASE_URL` | hub | Postgres connection URL. Compose builds it from the `POSTGRES_*` values. Append `?sslmode=require` for a Postgres that refuses plaintext (Zalando/Spilo does by default); `require` encrypts without verifying the server certificate |
 | `DEMETEO_HUB_BIND` | hub | listen address inside the container |
 | `DEMETEO_HUB_PUBLIC_URL` | hub | the externally visible `https://` URL. Its origin is the one every passkey ceremony and every state-changing request is checked against |
 | `DEMETEO_HUB_RP_ID` | hub | WebAuthn RP ID; see above |
-| `DEMETEO_HUB_WEB_DIR` | hub | directory of static files to serve, default `/srv/hub-web`. Neither the image nor compose ships a bundle there, so in this deployment every static request is 404 and the sign-in page is not served; [A local passkey sign-in](#a-local-passkey-sign-in) points it at a built `hub-web/dist` |
+| `DEMETEO_HUB_WEB_DIR` | hub | directory of static files to serve, default `/srv/hub-web`, where the image's `web` stage puts the built `hub-web` bundle. [A local passkey sign-in](#a-local-passkey-sign-in) points a host-run Hub at `hub-web/dist` instead |
 | `OPENBAO_ADDR` | hub | OpenBao address (compose network only) |
 | `OPENBAO_TOKEN` | hub | the least-privilege Transit token |
 | `OPENBAO_TOKEN_FILE` | hub | path to a file holding that token, as an alternative to `OPENBAO_TOKEN` |
@@ -409,6 +409,22 @@ pairing is started again from the desktop. The DPoP replay window starts empty, 
 accepted before the restart is no longer remembered for what is left of its
 `DPOP_MAX_AGE_SECS` (60 seconds). Instances already paired, and their tokens, are in Postgres
 and survive.
+
+## Kubernetes
+
+Compose is the reference deployment; nothing here ships manifests for a cluster. The image is
+published to `ghcr.io/stevenyepes/demeteo-hub` by `.github/workflows/publish-hub.yml`: `X.Y.Z`
+and `X.Y` on a release tag, `edge` and `sha-<short>` from master. A cluster pulls it — GitOps
+(Flux, Argo CD) keeps the deploy credentials inside the cluster, so CI never needs a route in.
+Whatever chart or manifests you write must keep what this guide establishes:
+
+- **one replica, `Recreate`** — [Run exactly one `hub`](#run-exactly-one-hub); a rolling
+  update runs two for its length;
+- `/healthz` for both probes, which is safe because it stays 200 beside a sealed OpenBao;
+- `OPENBAO_TOKEN_FILE` from a mounted Secret, and a CronJob for
+  [the renewal](#renew-the-token-inside-every-period);
+- a private ingress, or one with a per-client rate limit
+  ([No per-client limit](#no-per-client-limit-one-replica)).
 
 ## What this deployment does not protect
 
