@@ -14,6 +14,20 @@
 # The builder tag tracks `rust-toolchain.toml`; bump them together. The suffix
 # pins the Debian release so the binary links against the glibc and the libssl
 # of the runtime stage below — change both or neither.
+# The browser bundle the Hub serves from DEMETEO_HUB_WEB_DIR. hub-web imports
+# the desktop's components and stylesheet from `src/`, so the root manifest
+# and `src/` come along; the build writes to `hub-web/dist`
+# (vite.hub-web.config.ts).
+FROM node:24-bookworm-slim AS web
+
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+COPY tsconfig.json tsconfig.node.json vite.hub-web.config.ts ./
+COPY src ./src
+COPY hub-web ./hub-web
+RUN npm run build:hub-web
+
 FROM rust:1.97.0-bookworm AS builder
 
 # aws-lc-sys (rustls' crypto provider) compiles C and wants cmake.
@@ -52,6 +66,7 @@ RUN apt-get update \
     && useradd --system --no-create-home --uid 10001 hub
 
 COPY --from=builder /usr/local/bin/demeteo-hub /usr/local/bin/demeteo-hub
+COPY --from=web /src/hub-web/dist /srv/hub-web
 
 USER hub
 ENTRYPOINT ["/usr/local/bin/demeteo-hub"]
