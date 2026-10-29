@@ -121,14 +121,17 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
     status: 'running',
     workflow: WORKFLOW,
     steps: [
-      { step_id: 'plan', state: 'completed' },
-      { step_id: 'implement', state: 'running' },
-      { step_id: 'verify', state: 'failed' },
-      { step_id: 'approve', state: 'running' },
+      { step_id: 'plan', state: 'completed', title: null },
+      { step_id: 'implement', state: 'running', title: null },
+      { step_id: 'verify', state: 'failed', title: null },
+      { step_id: 'approve', state: 'running', title: null },
     ],
     tickets: { completed: 0, failed: 0, running: 0 },
-    pending_gates: [{ feature_id: FEATURE, step_execution_id: 'se-approve', step_id: 'approve', since: 1_700_000_000 }],
+    pending_gates: [{ feature_id: FEATURE, step_execution_id: 'se-approve', step_id: 'approve', since: 1_700_000_000, step_title: null }],
     events: [],
+    title: null,
+    project_id: null,
+    project_name: null,
     ...overrides,
   };
 }
@@ -210,8 +213,8 @@ describe('Run', () => {
     const tickets = await screen.findByRole('region', { name: 'Tickets' });
     expect(within(tickets).getByText('Running', { selector: 'dt' }).nextElementSibling).toHaveTextContent('2');
     expect(within(tickets).getByRole('list', { name: 'Tickets' })).toHaveTextContent('t-9ticket_started');
-    const events = screen.getByRole('region', { name: 'Events' });
-    expect(within(events).getByRole('listitem')).toHaveTextContent('#7ticket_startedticket t-9');
+    const events = screen.getByRole('region', { name: 'Activity' });
+    expect(within(events).getByRole('listitem')).toHaveTextContent('#7Ticket started · t-9');
     expect(screen.queryByTestId('workflow-canvas') === null).toBe(workflow === null);
   });
 
@@ -220,6 +223,52 @@ describe('Run', () => {
     render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
 
     expect(await screen.findByText(runStatusMeta('cancelled').label)).toBeInTheDocument();
+  });
+
+  it("heads the page with the run's title, its place in the fleet and its workflow", async () => {
+    stubFetch(json(detail({ title: 'Index search by tenant', project_name: 'search-svc' })));
+    render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Index search by tenant' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Runs' })).toHaveAttribute('href', '#/runs');
+    expect(screen.getByRole('link', { name: INSTANCE })).toHaveAttribute('href', `#/instances/${INSTANCE}`);
+    expect(screen.getByText('search-svc')).toBeInTheDocument();
+    expect(screen.getByText(FEATURE)).toBeInTheDocument();
+    expect(screen.getByText('Run fixture')).toBeInTheDocument();
+    // A gate is pending, so the run reads as waiting on a human rather than as running.
+    expect(within(screen.getByRole('banner')).getByText(runStatusMeta('awaiting_gate').label)).toBeInTheDocument();
+  });
+
+  it('falls back to the feature id for a run with no reported title', async () => {
+    stubFetch(json(detail({ workflow: null })));
+    render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: FEATURE })).toBeInTheDocument();
+  });
+
+  it('lists the waiting gates by step title until a step is chosen, and opens one to decide it', async () => {
+    stubFetch(
+      json(
+        detail({
+          workflow: null,
+          pending_gates: [
+            { feature_id: FEATURE, step_execution_id: 'se-approve', step_id: 'approve', since: 1_700_000_000, step_title: 'Approve merge' },
+          ],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+
+    const waiting = await screen.findByRole('list', { name: 'Gates waiting' });
+    expect(waiting).toHaveTextContent('Approve merge');
+    expect(screen.queryByRole('region', { name: 'Step' })).toBeNull();
+
+    await user.click(within(waiting).getByRole('button', { name: 'Review Approve merge' }));
+
+    const inspector = screen.getByRole('region', { name: 'Step' });
+    expect(within(inspector).getByRole('region', { name: 'Gate' })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Gates waiting' })).toBeNull();
   });
 
   it('does not ask again for a run that has finished', async () => {
@@ -237,7 +286,7 @@ describe('Run', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     stubFetch(
       json(detail({ workflow: null })),
-      json(detail({ workflow: null, steps: [{ step_id: 'plan', state: 'failed' }], pending_gates: [] })),
+      json(detail({ workflow: null, steps: [{ step_id: 'plan', state: 'failed', title: null }], pending_gates: [] })),
       json({ error: 'unauthenticated' }, 401),
     );
     render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
@@ -346,9 +395,9 @@ describe('Run', () => {
         json(
           detail({
             workflow: null,
-            steps: [{ step_id: 'plan', state: 'completed' }],
+            steps: [{ step_id: 'plan', state: 'completed', title: null }],
             pending_gates: [
-              { feature_id: FEATURE, step_execution_id: 'se-review', step_id: 'review', since: 1_700_000_000 },
+              { feature_id: FEATURE, step_execution_id: 'se-review', step_id: 'review', since: 1_700_000_000, step_title: null },
             ],
           }),
         ),
@@ -390,7 +439,7 @@ describe('Run', () => {
         json(
           detail({
             pending_gates: [
-              { feature_id: FEATURE, step_execution_id: 'se-hotfix', step_id: 'hotfix-review', since: 1_700_000_000 },
+              { feature_id: FEATURE, step_execution_id: 'se-hotfix', step_id: 'hotfix-review', since: 1_700_000_000, step_title: null },
             ],
           }),
         ),
@@ -738,7 +787,7 @@ describe('Run, end to end on the real wrappers', () => {
         json(
           detail({
             workflow: null,
-            pending_gates: [{ feature_id: FEATURE, step_execution_id: 'se-approve-2', step_id: 'approve', since: 1_700_000_005 }],
+            pending_gates: [{ feature_id: FEATURE, step_execution_id: 'se-approve-2', step_id: 'approve', since: 1_700_000_005, step_title: null }],
           }),
         ),
       ],

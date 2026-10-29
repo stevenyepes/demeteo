@@ -18,6 +18,7 @@ import {
   parseWallClockSecs,
   prefillFor,
   type StepOverrideDraft,
+  toStepOverrides,
 } from '../lib/dispatchForm';
 import type { InstanceDetail } from '../lib/fleet';
 import { useStagedAttachments } from '../lib/useStagedAttachments';
@@ -41,7 +42,7 @@ type Send = { state: 'editing' } | { state: 'sending' } | { state: 'sent'; enque
 const AGENT_KINDS = Object.keys(EFFORT_SUPPORT);
 
 const FIELD_CLASS =
-  'input-field focus:border-cyan-400! focus:shadow-none! focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40';
+  'input-field disabled:cursor-not-allowed disabled:opacity-40';
 
 const LABEL_CLASS = 'text-xs font-medium text-slate-300';
 
@@ -53,7 +54,14 @@ const UNFILLED: Prefill = { agentKind: '', model: '', effort: '', workflowId: ''
  * `unknown_project` / `unknown_workflow` after a round trip through the queue.
  */
 export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
-  const ids = { project: useId(), workflow: useId(), title: useId(), description: useId() };
+  const ids = {
+    project: useId(),
+    workflow: useId(),
+    title: useId(),
+    description: useId(),
+    what: useId(),
+    how: useId(),
+  };
   const agentIds = { agent: useId(), model: useId(), effort: useId() };
   const projects = instance.projects ?? [];
   const workflows = instance.workflows ?? [];
@@ -149,176 +157,202 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
   }
 
   const sending = send.state === 'sending';
+  const overrideCount = toStepOverrides(overrides).length;
 
   return (
-    <form noValidate onSubmit={submit} className="flex flex-col gap-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={ids.project} className={LABEL_CLASS}>
-            Project
-          </label>
-          <select
-            id={ids.project}
-            value={projectId}
-            onChange={(event) => changeProject(event.target.value)}
-            className={FIELD_CLASS}
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={ids.workflow} className={LABEL_CLASS}>
-            Workflow
-          </label>
-          <select
-            id={ids.workflow}
-            value={workflowId}
-            onChange={(event) => {
-              edit('workflowId');
-              changeWorkflow(event.target.value);
+    <form noValidate onSubmit={submit} className="panel flex flex-col">
+      <div className="grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+        <section
+          aria-labelledby={ids.what}
+          className="flex min-w-0 flex-col gap-4 border-hairline p-5 xl:border-r"
+        >
+          <h2 id={ids.what} className="font-heading text-sm font-semibold text-slate-200">
+            What
+          </h2>
+          <AttachmentPicker files={attachments.files} onChange={attachments.setFiles} disabled={sending} />
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={ids.title} className={LABEL_CLASS}>
+              Title
+            </label>
+            <input
+              id={ids.title}
+              type="text"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              autoComplete="off"
+              aria-invalid={Boolean(errors.title)}
+              aria-describedby={errors.title ? `${ids.title}-error` : undefined}
+              className={FIELD_CLASS}
+            />
+            {errors.title && (
+              <p id={`${ids.title}-error`} className="text-xs text-ruby-300">
+                {errors.title}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={ids.description} className={LABEL_CLASS}>
+              Description
+            </label>
+            <textarea
+              id={ids.description}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              rows={5}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={ids.project} className={LABEL_CLASS}>
+                Project
+              </label>
+              <select
+                id={ids.project}
+                value={projectId}
+                onChange={(event) => changeProject(event.target.value)}
+                className={FIELD_CLASS}
+              >
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={ids.workflow} className={LABEL_CLASS}>
+                Workflow
+              </label>
+              <select
+                id={ids.workflow}
+                value={workflowId}
+                onChange={(event) => {
+                  edit('workflowId');
+                  changeWorkflow(event.target.value);
+                }}
+                className={FIELD_CLASS}
+              >
+                {workflows.map((workflow) => (
+                  <option key={workflow.workflowId} value={workflow.workflowId}>
+                    {workflow.name} (v{workflow.version})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+        <section
+          aria-labelledby={ids.how}
+          className="flex min-w-0 flex-col gap-4 border-t border-hairline p-5 xl:border-t-0"
+        >
+          <h2 id={ids.how} className="font-heading text-sm font-semibold text-slate-200">
+            How
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={agentIds.agent} className={LABEL_CLASS}>
+                Default agent
+              </label>
+              <select
+                id={agentIds.agent}
+                value={agentKind}
+                onChange={(event) => changeAgent(event.target.value)}
+                className={`${FIELD_CLASS} font-mono`}
+              >
+                <option value="">Project default</option>
+                {AGENT_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {kind}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={agentIds.model} className={LABEL_CLASS}>
+                Model
+              </label>
+              <input
+                id={agentIds.model}
+                type="text"
+                value={model}
+                onChange={(event) => {
+                  edit('model');
+                  setModel(event.target.value);
+                }}
+                placeholder="Project default"
+                autoComplete="off"
+                className={`${FIELD_CLASS} font-mono`}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={agentIds.effort} className={LABEL_CLASS}>
+                Effort
+              </label>
+              <select
+                id={agentIds.effort}
+                value={effort}
+                onChange={(event) => {
+                  edit('effort');
+                  setEffort(isEffortLevel(event.target.value) ? event.target.value : '');
+                }}
+                disabled={efforts.length === 0}
+                className={FIELD_CLASS}
+              >
+                <option value="">Project default</option>
+                {efforts.map((level) => (
+                  <option key={level} value={level}>
+                    {EFFORT_LABELS[level]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {workflow !== undefined && (
+            <DispatchPipeline
+              key={workflow.workflowId}
+              workflow={workflow}
+              overrides={overrides}
+              onOverridesChange={setOverrides}
+              defaultAgentKind={agentKind}
+            />
+          )}
+          <DispatchCapsFields
+            maxCostUsd={maxCostUsd}
+            onMaxCostUsdChange={(raw) => {
+              edit('maxCostUsd');
+              setMaxCostUsd(raw);
             }}
-            className={FIELD_CLASS}
-          >
-            {workflows.map((workflow) => (
-              <option key={workflow.workflowId} value={workflow.workflowId}>
-                {workflow.name} (v{workflow.version})
-              </option>
-            ))}
-          </select>
-        </div>
+            costError={errors.cost}
+            maxWallClockMins={maxWallClockMins}
+            onMaxWallClockMinsChange={setMaxWallClockMins}
+            wallClockError={errors.wallClock}
+          />
+        </section>
       </div>
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={ids.title} className={LABEL_CLASS}>
-          Title
-        </label>
-        <input
-          id={ids.title}
-          type="text"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          autoComplete="off"
-          aria-invalid={Boolean(errors.title)}
-          aria-describedby={errors.title ? `${ids.title}-error` : undefined}
-          className={FIELD_CLASS}
-        />
-        {errors.title && (
-          <p id={`${ids.title}-error`} className="text-xs text-ruby-300">
-            {errors.title}
+      <div className="flex flex-col gap-3 border-t border-hairline px-5 py-4">
+        {failure !== null && <DispatchFailure error={failure} />}
+        {!spendGranted && (
+          <p className="text-sm text-ruby-300">
+            Spend has not been granted on this instance, so it would refuse a Feature sent from the Hub. Grant spend for
+            this Hub on the machine to dispatch here.
           </p>
         )}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={ids.description} className={LABEL_CLASS}>
-          Description
-        </label>
-        <textarea
-          id={ids.description}
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          rows={5}
-          className={FIELD_CLASS}
-        />
-      </div>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={agentIds.agent} className={LABEL_CLASS}>
-            Default agent
-          </label>
-          <select
-            id={agentIds.agent}
-            value={agentKind}
-            onChange={(event) => changeAgent(event.target.value)}
-            className={`${FIELD_CLASS} font-mono`}
-          >
-            <option value="">Project default</option>
-            {AGENT_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={agentIds.model} className={LABEL_CLASS}>
-            Model
-          </label>
-          <input
-            id={agentIds.model}
-            type="text"
-            value={model}
-            onChange={(event) => {
-              edit('model');
-              setModel(event.target.value);
-            }}
-            placeholder="Project default"
-            autoComplete="off"
-            className={`${FIELD_CLASS} font-mono`}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={agentIds.effort} className={LABEL_CLASS}>
-            Effort
-          </label>
-          <select
-            id={agentIds.effort}
-            value={effort}
-            onChange={(event) => {
-              edit('effort');
-              setEffort(isEffortLevel(event.target.value) ? event.target.value : '');
-            }}
-            disabled={efforts.length === 0}
-            className={FIELD_CLASS}
-          >
-            <option value="">Project default</option>
-            {efforts.map((level) => (
-              <option key={level} value={level}>
-                {EFFORT_LABELS[level]}
-              </option>
-            ))}
-          </select>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="font-mono text-xs text-slate-400">
+            {overrideSummary(overrideCount)}
+          </span>
+          <Button variant="primary" type="submit" disabled={!spendGranted || sending}>
+            {instance.present ? 'Start feature' : 'Queue feature'}
+          </Button>
         </div>
       </div>
-      <AttachmentPicker files={attachments.files} onChange={attachments.setFiles} disabled={sending} />
-      {workflow !== undefined && (
-        <DispatchPipeline
-          key={workflow.workflowId}
-          workflow={workflow}
-          overrides={overrides}
-          onOverridesChange={setOverrides}
-          defaultAgentKind={agentKind}
-        />
-      )}
-      <DispatchCapsFields
-        maxCostUsd={maxCostUsd}
-        onMaxCostUsdChange={(raw) => {
-          edit('maxCostUsd');
-          setMaxCostUsd(raw);
-        }}
-        costError={errors.cost}
-        maxWallClockMins={maxWallClockMins}
-        onMaxWallClockMinsChange={setMaxWallClockMins}
-        wallClockError={errors.wallClock}
-      />
-      {failure !== null && <DispatchFailure error={failure} />}
-      {!spendGranted && (
-        <p className="text-sm text-ruby-300">
-          Spend has not been granted on this instance, so it would refuse a Feature sent from the Hub. Grant spend for
-          this Hub on the machine to dispatch here.
-        </p>
-      )}
-      <Button variant="primary"
-        type="submit"
-        disabled={!spendGranted || sending}
-        className="self-start"
-     >
-        {instance.present ? 'Start feature' : 'Queue feature'}
-      </Button>
     </form>
   );
+}
+
+function overrideSummary(count: number): string {
+  return count === 1 ? '1 step override' : `${count} step overrides`;
 }
 
 /** The Hub's refusal as a sentence where there is one; otherwise its code, as `CeremonyError` shows it. */

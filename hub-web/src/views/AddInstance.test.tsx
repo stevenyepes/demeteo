@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AddInstance } from './AddInstance';
 
@@ -33,5 +34,29 @@ describe('AddInstance', () => {
 
     const url = container.querySelector('li .font-mono');
     expect(url?.textContent).toBe(window.location.origin);
+  });
+
+  describe('copying the URL', () => {
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    });
+
+    it("copies this Hub's URL, and says so", async () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      render(<AddInstance />);
+
+      await userEvent.click(screen.getByRole('button', { name: "Copy this Hub's URL" }));
+
+      expect(writeText.mock.calls).toEqual([[window.location.origin]]);
+      expect(await screen.findByText('Copied')).toBeInTheDocument();
+    });
+
+    it('offers no copy control where the browser has no clipboard', () => {
+      Reflect.deleteProperty(navigator, 'clipboard');
+      render(<AddInstance />);
+
+      expect(screen.queryByRole('button')).toBeNull();
+    });
   });
 });

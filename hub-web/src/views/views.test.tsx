@@ -79,15 +79,15 @@ function monoTexts(container: HTMLElement): (string | null)[] {
   return Array.from(container.querySelectorAll('.font-mono'), (element) => element.textContent);
 }
 
-describe('placeholder views', () => {
-  it.each(VIEWS)('$heading renders its heading in the glass card', ({ heading, element }) => {
+describe('view first paint', () => {
+  it.each(VIEWS)('$heading renders its heading in its page header', ({ heading, element }) => {
     render(element);
 
     const headings = screen.getAllByRole('heading', { level: 1 });
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveTextContent(new RegExp(`^${heading}$`));
     expect(headings[0]).toHaveClass('font-heading');
-    expect(headings[0].closest('.panel')).not.toBeNull();
+    expect(headings[0].closest('header')).not.toBeNull();
   });
 
   it('Instance shows its instance id in monospace', () => {

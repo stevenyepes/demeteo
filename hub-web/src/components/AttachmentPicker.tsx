@@ -90,7 +90,7 @@ export function AttachmentPicker({ files, onChange, disabled = false }: Attachme
       onDragOver={(event) => event.preventDefault()}
       onDrop={onDrop}
       onPaste={onPaste}
-      className="nested-card flex flex-col gap-3 p-4 focus-visible:outline-2 focus-visible:outline-cyan-400"
+      className="nested-card flex flex-col gap-3 p-4"
     >
       <div className="flex flex-wrap items-center gap-3">
         <label
@@ -118,7 +118,7 @@ export function AttachmentPicker({ files, onChange, disabled = false }: Attachme
                 onClick={() => remove(file)}
                 disabled={disabled}
                 aria-label={`Remove ${file.name}`}
-                className="rounded px-1.5 text-slate-400 transition-colors hover:text-ruby-300 focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded px-1.5 text-slate-400 transition-colors hover:text-ruby-300 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 ×
               </button>

@@ -1,7 +1,8 @@
+import { KeyRound } from 'lucide-react';
 import { useState } from 'react';
 
 import { CeremonyError } from '../components/CeremonyError';
-import { PlaceholderCard } from '../components/PlaceholderCard';
+import { PageHeader } from '../components/PageHeader';
 import { type Session, signIn } from '../lib/auth';
 import { Button } from '../../../src/components/ui/Button';
 
@@ -29,16 +30,16 @@ export function SignIn({ onSession }: SignInProps) {
   }
 
   return (
-    <PlaceholderCard title="Sign in">
-      <p>Use a passkey you have already registered with this Hub.</p>
-      <div className="mt-6 flex max-w-sm flex-col gap-4">
-        <Button variant="primary"
-          onClick={start}
-          disabled={busy}>
+    <div className="flex flex-col gap-6">
+      <PageHeader title="Sign in" />
+      <section className="panel flex flex-col gap-4 p-6">
+        <p className="text-sm text-slate-400">Use a passkey you have already registered with this Hub.</p>
+        <Button variant="primary" size="lg" onClick={start} disabled={busy}>
+          <KeyRound aria-hidden="true" className="h-4 w-4" />
           {busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
         </Button>
         {failure && <CeremonyError error={failure.error} />}
-      </div>
-    </PlaceholderCard>
+      </section>
+    </div>
   );
 }

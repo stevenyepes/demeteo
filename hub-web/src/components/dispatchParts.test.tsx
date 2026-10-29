@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -376,6 +376,8 @@ function fleetInstance(overrides: Partial<FleetInstance> = {}): FleetInstance {
     lastSeen: 1_700_000_000,
     liveRuns: 0,
     needsYou: [],
+    harnesses: null,
+    projectCount: null,
     ...overrides,
   };
 }
@@ -431,6 +433,24 @@ describe('DispatchTargetList', () => {
     expect(screen.getByRole('button', { name: 'other' })).toHaveAttribute('aria-pressed', 'false');
     expect(row).toHaveAccessibleDescription(/online/);
     expect(row).toHaveAccessibleDescription(/read, spend/);
+  });
+
+  it('lists the harnesses an instance reported, and none it did not', () => {
+    render(
+      <DispatchTargetList
+        instances={[
+          fleetInstance({ harnesses: ['claude-code', 'opencode'] }),
+          fleetInstance({ id: 'inst-6', label: 'quiet', harnesses: null }),
+        ]}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    const laptop = screen.getByRole('button', { name: 'laptop' });
+    expect(within(laptop).getByText('claude-code')).toBeVisible();
+    expect(within(laptop).getByText('opencode')).toBeVisible();
+    expect(within(screen.getByRole('button', { name: 'quiet' })).queryByText('claude-code')).toBeNull();
   });
 
   it('renders no unattended text or control for any row', () => {

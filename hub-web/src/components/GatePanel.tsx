@@ -80,7 +80,7 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
   };
 
   return (
-    <section aria-labelledby={headingId} className="mt-3 border-t border-white/10 pt-3">
+    <section aria-labelledby={headingId} className="mt-4 border-t border-amber-500/30 pt-4">
       <h3 id={headingId} className="font-heading text-base font-semibold text-white">
         Gate
       </h3>

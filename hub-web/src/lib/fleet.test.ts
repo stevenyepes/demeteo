@@ -57,6 +57,9 @@ const WIRE_NEEDS_YOU = {
   step_id: 's-gate',
   step_execution_id: 'se-1',
   since: 1_700_000_100,
+  title: 'Retry webhooks',
+  project_name: 'checkout-api',
+  step_title: 'Review gate',
 };
 
 const WIRE_FLEET_INSTANCE = {
@@ -71,6 +74,8 @@ const WIRE_FLEET_INSTANCE = {
   last_seen: 1_700_000_200,
   live_runs: 2,
   needs_you: [WIRE_NEEDS_YOU],
+  harnesses: ['claude-code', 'opencode'],
+  project_count: 3,
 };
 
 const WIRE_RUN = {
@@ -80,6 +85,12 @@ const WIRE_RUN = {
   started_at: 1_700_000_000,
   updated_at: 1_700_000_300,
   cost_cents: null,
+  title: 'Retry webhooks',
+  project_id: 'p-1',
+  project_name: 'demeteo',
+  step_id: 's-implement',
+  step_title: 'Implement',
+  tickets: { completed: 1, failed: 0, running: 2 },
 };
 
 const WIRE_PROJECT = { id: 'p-1', name: 'demeteo', remote_url: 'https://example.com/demeteo.git' };
@@ -118,7 +129,7 @@ const WIRE_DETAIL = {
   read_granted: true,
   projects: [WIRE_PROJECT],
   live_runs: [WIRE_RUN],
-  harnesses: null,
+  harnesses: ['claude-code'],
   workflows: [WIRE_WORKFLOW],
   run_shape: [WIRE_RUN_SHAPE],
 };
@@ -147,6 +158,8 @@ describe('getFleet', () => {
             present: false,
             live_runs: 0,
             needs_you: [],
+            harnesses: [],
+            project_count: 0,
           },
         ],
       }),
@@ -171,8 +184,13 @@ describe('getFleet', () => {
             stepId: 's-gate',
             stepExecutionId: 'se-1',
             since: 1_700_000_100,
+            title: 'Retry webhooks',
+            projectName: 'checkout-api',
+            stepTitle: 'Review gate',
           },
         ],
+        harnesses: ['claude-code', 'opencode'],
+        projectCount: 3,
       },
       {
         id: OTHER_ID,
@@ -186,6 +204,8 @@ describe('getFleet', () => {
         lastSeen: 1_700_000_200,
         liveRuns: 0,
         needsYou: [],
+        harnesses: [],
+        projectCount: 0,
       },
     ]);
     expect(pending).toEqual([]);
@@ -206,6 +226,8 @@ describe('getFleet', () => {
             last_seen: null,
             live_runs: null,
             needs_you: null,
+            harnesses: null,
+            project_count: null,
           },
         ],
       }),
@@ -214,6 +236,8 @@ describe('getFleet', () => {
     const [instance] = await getFleet();
 
     expect(instance).toMatchObject({
+      harnesses: null,
+      projectCount: null,
       label: null,
       os: null,
       arch: null,
@@ -223,6 +247,23 @@ describe('getFleet', () => {
       liveRuns: null,
       needsYou: null,
     });
+  });
+
+  it('keeps a needs-you entry the snapshot gives no label for unlabelled', async () => {
+    stubFetch([
+      get('/v1/fleet', {
+        instances: [
+          {
+            ...WIRE_FLEET_INSTANCE,
+            needs_you: [{ ...WIRE_NEEDS_YOU, title: null, project_name: null, step_title: null }],
+          },
+        ],
+      }),
+    ]);
+
+    const [instance] = await getFleet();
+
+    expect(instance?.needsYou?.[0]).toMatchObject({ title: null, projectName: null, stepTitle: null });
   });
 
   it('accepts a needs-you entry whose step_id is null', async () => {
@@ -258,6 +299,16 @@ describe('getFleet', () => {
     ['a string last_seen', { ...WIRE_FLEET_INSTANCE, last_seen: '1700000200' }],
     ['scopes that are no list', { ...WIRE_FLEET_INSTANCE, scopes: 'read' }],
     ['a needs_you that is no list', { ...WIRE_FLEET_INSTANCE, needs_you: {} }],
+    ['no harnesses', { ...WIRE_FLEET_INSTANCE, harnesses: undefined }],
+    ['harnesses that are no list', { ...WIRE_FLEET_INSTANCE, harnesses: 'claude-code' }],
+    ['a harness that is no string', { ...WIRE_FLEET_INSTANCE, harnesses: [7] }],
+    ['no project_count', { ...WIRE_FLEET_INSTANCE, project_count: undefined }],
+    ['a string project_count', { ...WIRE_FLEET_INSTANCE, project_count: '3' }],
+    ['a needs-you entry with no title', { ...WIRE_FLEET_INSTANCE, needs_you: [{ ...WIRE_NEEDS_YOU, title: undefined }] }],
+    [
+      'a needs-you entry with a numeric step_title',
+      { ...WIRE_FLEET_INSTANCE, needs_you: [{ ...WIRE_NEEDS_YOU, step_title: 7 }] },
+    ],
     [
       'a needs-you entry with no since',
       { ...WIRE_FLEET_INSTANCE, needs_you: [{ ...WIRE_NEEDS_YOU, since: undefined }] },
@@ -303,9 +354,15 @@ describe('getInstance', () => {
           startedAt: 1_700_000_000,
           updatedAt: 1_700_000_300,
           costCents: null,
+          title: 'Retry webhooks',
+          projectId: 'p-1',
+          projectName: 'demeteo',
+          stepId: 's-implement',
+          stepTitle: 'Implement',
+          tickets: { completed: 1, failed: 0, running: 2 },
         },
       ],
-      harnesses: null,
+      harnesses: ['claude-code'],
       workflows: [
         {
           workflowId: 'wf-feature',
@@ -347,6 +404,7 @@ describe('getInstance', () => {
         read_granted: false,
         projects: null,
         live_runs: null,
+        harnesses: null,
         workflows: null,
         run_shape: null,
       }),
@@ -478,8 +536,10 @@ describe('getInstance', () => {
     ['no install_id', { ...WIRE_DETAIL, install_id: undefined }],
     ['a string cost_cents', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, cost_cents: '120' }] }],
     ['no cost_cents', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, cost_cents: undefined }] }],
-    ['harnesses that are not null', { ...WIRE_DETAIL, harnesses: ['claude-code'] }],
+    ['harnesses that are no list', { ...WIRE_DETAIL, harnesses: 'claude-code' }],
     ['no harnesses', { ...WIRE_DETAIL, harnesses: undefined }],
+    ['a run with no tickets', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, tickets: undefined }] }],
+    ['a run with no title', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, title: undefined }] }],
     ['a project with no name', { ...WIRE_DETAIL, projects: [{ ...WIRE_PROJECT, name: undefined }] }],
     ['a project with no remote_url', { ...WIRE_DETAIL, projects: [{ id: 'p-1', name: 'demeteo' }] }],
     ['no workflows', { ...WIRE_DETAIL, workflows: undefined }],

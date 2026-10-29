@@ -36,7 +36,11 @@ export function DispatchPipeline({ workflow, overrides, onOverridesChange, defau
   const selected = workflow.graph?.nodes.find((node) => node.id === selectedId) ?? null;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <div className="flex flex-col gap-2">
+      <p className="text-xs font-medium text-slate-300">
+        Pipeline <span className="font-normal text-slate-400">· select a step to override it</span>
+      </p>
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="nested-card h-80 overflow-hidden">
         <div className="panel-field h-full w-full">
           <WorkflowCanvas
@@ -49,7 +53,9 @@ export function DispatchPipeline({ workflow, overrides, onOverridesChange, defau
         </div>
       </div>
       {selected === null ? (
-        <p className="text-xs text-slate-400">Select a step on the graph to pin its agent, model or effort.</p>
+        <p className="nested-card px-4 py-3 text-xs text-slate-400">
+          Select a step on the graph to pin its agent, model or effort.
+        </p>
       ) : (
         <section aria-label="Step override">
           <StepOverridePanel
@@ -64,6 +70,7 @@ export function DispatchPipeline({ workflow, overrides, onOverridesChange, defau
           />
         </section>
       )}
+      </div>
     </div>
   );
 }

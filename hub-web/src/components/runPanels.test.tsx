@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import type { RunEvent } from '../lib/runs';
@@ -36,7 +37,7 @@ describe('TicketProgress', () => {
 
     expect(countOf('Completed')).toHaveTextContent('4');
     expect(countOf('Running')).toHaveTextContent('1');
-    expect(countOf('Running')).toHaveClass('text-emerald-300');
+    expect(countOf('Running')).toHaveClass('text-cyan-300');
     expect(countOf('Failed')).toHaveTextContent('2');
     expect(countOf('Failed')).toHaveClass('text-ruby-300');
     expect(screen.getByText('No ticket events reported yet.')).toBeInTheDocument();
@@ -51,15 +52,44 @@ describe('TicketProgress', () => {
 });
 
 describe('RunEvents', () => {
-  it('renders one row per event with its offset, raw kind, ids and age', () => {
+  it('renders one row per event, newest first, with its offset, kind in words, ids and age', () => {
     render(<RunEvents events={EVENTS} now={NOW} />);
 
     const rows = within(screen.getByRole('list', { name: 'Events' })).getAllByRole('listitem');
     expect(rows.map((row) => row.textContent)).toEqual([
-      '#1ticket_startedticket t-110m ago',
-      '#2ticket_startedticket t-28m ago',
-      '#3ticket_completedticket t-12m ago',
-      '#4step_completedstep s-implement1m ago',
+      '#4Step completed · s-implement1m ago',
+      '#3Ticket completed · t-12m ago',
+      '#2Ticket started · t-28m ago',
+      '#1Ticket started · t-110m ago',
+    ]);
+  });
+
+  it('shows the latest eight and offers the rest', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => event({ offset: i + 1, kind: 'gate_pending' }));
+    render(<RunEvents events={many} now={NOW} />);
+
+    const list = screen.getByRole('list', { name: 'Events' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(8);
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent(/^#12/);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show all 12 events' }));
+
+    expect(within(list).getAllByRole('listitem')).toHaveLength(12);
+  });
+
+  it('names a step by the title it was given, and by its id otherwise', () => {
+    render(
+      <RunEvents
+        events={[event({ offset: 5, stepId: 's-plan' }), event({ offset: 6, stepId: 's-other' })]}
+        now={NOW}
+        stepTitles={{ 's-plan': 'Plan work' }}
+      />,
+    );
+
+    const rows = within(screen.getByRole('list', { name: 'Events' })).getAllByRole('listitem');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '#6Step started · s-other1m ago',
+      '#5Step started · Plan work1m ago',
     ]);
   });
 

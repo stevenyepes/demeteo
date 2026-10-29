@@ -1,7 +1,8 @@
+import { Monitor } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 
 import { CeremonyError } from '../components/CeremonyError';
-import { PlaceholderCard } from '../components/PlaceholderCard';
+import { PageHeader } from '../components/PageHeader';
 import { HubApiError } from '../lib/api';
 import {
   approvePairing,
@@ -11,6 +12,7 @@ import {
   type PairingScope,
   startPairing,
 } from '../lib/pairing';
+import { routeHref } from '../lib/router';
 import { Button } from '../../../src/components/ui/Button';
 
 /** What each scope allows, as `docs/HUB.md` §7 states it. */
@@ -100,68 +102,91 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
   }
 
   return (
-    <PlaceholderCard title="Pair instance">
-      <p>A Demeteo instance is asking to be paired with your account on this Hub.</p>
-      {prompt === null && failure === null && <p className="mt-6">Reading the pairing request…</p>}
+    <div className="flex flex-col gap-7">
+      <PageHeader
+        title="Pair instance"
+        eyebrow={
+          <a href={routeHref({ name: 'add-instance' })} className="transition-colors hover:text-white">
+            Add instance
+          </a>
+        }
+      />
+      <p className="-mt-3 max-w-2xl text-sm text-slate-400">
+        A Demeteo instance is asking to be paired with your account on this Hub.
+      </p>
+      {prompt === null && failure === null && <p className="text-sm text-slate-400">Reading the pairing request…</p>}
       {prompt !== null && (
-        <div className="mt-6 flex max-w-xl flex-col gap-6">
-          <section aria-labelledby={`${id}-key`} className="nested-card px-4 py-3">
-            <h2 id={`${id}-key`} className="text-xs font-medium text-slate-300">
+        <div className="panel flex max-w-2xl flex-col gap-6 p-6">
+          <section aria-labelledby={`${id}-claimed`} className="flex items-start gap-4">
+            <span
+              aria-hidden="true"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-hairline bg-white/5 text-slate-300"
+            >
+              <Monitor className="h-5 w-5" />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <h2 id={`${id}-claimed`} className="text-xs font-medium text-slate-400">
+                Claimed by the machine
+              </h2>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                <dt className="text-slate-400">Name</dt>
+                <dd className="font-heading font-semibold text-white break-all">{prompt.instanceName}</dd>
+                <dt className="text-slate-400">OS</dt>
+                <dd className="font-mono text-slate-200 break-all">{prompt.os}</dd>
+                <dt className="text-slate-400">Architecture</dt>
+                <dd className="font-mono text-slate-200 break-all">{prompt.arch}</dd>
+                <dt className="text-slate-400">Demeteo version</dt>
+                <dd className="font-mono text-slate-200 break-all">{prompt.appVersion}</dd>
+              </dl>
+              <p className="text-xs text-slate-400">
+                The machine reported these about itself. The Hub has not verified them.
+              </p>
+            </div>
+          </section>
+          <section
+            aria-labelledby={`${id}-key`}
+            className="flex flex-col gap-2 rounded-md border border-hairline bg-surface-well px-4 py-3"
+          >
+            <h2 id={`${id}-key`} className="text-xs font-medium text-slate-400">
               Device key fingerprint
             </h2>
-            <p className="mt-2 font-mono text-slate-200 break-all">{prompt.fingerprint}</p>
-            <p className="mt-2 text-xs text-slate-300">
+            <p className="font-mono text-lg text-white break-all">{prompt.fingerprint}</p>
+            <p className="text-xs text-slate-400">
               Check that this matches the fingerprint Demeteo shows on the machine. If it does not,
               choose Deny.
             </p>
           </section>
-          <section aria-labelledby={`${id}-claimed`} className="nested-card px-4 py-3">
-            <h2 id={`${id}-claimed`} className="text-xs font-medium text-slate-300">
-              Claimed by the machine
-            </h2>
-            <p className="mt-1 text-xs">
-              The machine reported these about itself. The Hub has not verified them.
-            </p>
-            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-              <dt>Name</dt>
-              <dd className="text-slate-200 break-all">{prompt.instanceName}</dd>
-              <dt>OS</dt>
-              <dd className="text-slate-200 break-all">{prompt.os}</dd>
-              <dt>Architecture</dt>
-              <dd className="text-slate-200 break-all">{prompt.arch}</dd>
-              <dt>Demeteo version</dt>
-              <dd className="text-slate-200 break-all">{prompt.appVersion}</dd>
-            </dl>
-          </section>
-          <fieldset className="flex flex-col gap-2">
-            <legend className="text-xs font-medium text-slate-300">Scopes requested</legend>
-            <p className="mt-1 text-xs">
+          <fieldset className="flex flex-col">
+            <legend className="text-xs font-medium text-slate-400">Scopes requested</legend>
+            <p className="mt-1 mb-2 text-xs text-slate-400">
               Uncheck any you do not want to grant. Nothing the machine did not ask for can be added
               here.
             </p>
-            {prompt.scopes.map((scope) => (
-              <div key={scope} className="nested-card flex items-start gap-3 px-4 py-3">
-                <input
-                  id={`${id}-${scope}`}
-                  type="checkbox"
-                  checked={!withheld.includes(scope)}
-                  onChange={(event) => toggle(scope, event.target.checked)}
-                  disabled={!answerable}
-                  aria-describedby={`${id}-${scope}-allows`}
-                  className="mt-0.5 accent-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-                />
-                <div className="flex flex-col gap-0.5">
-                  <label htmlFor={`${id}-${scope}`} className="font-mono text-slate-200">
-                    {scope}
-                  </label>
-                  <span id={`${id}-${scope}-allows`} className="text-xs">
-                    {ALLOWS[scope]}
-                  </span>
+            <div className="flex flex-col divide-y divide-hairline rounded-md border border-hairline">
+              {prompt.scopes.map((scope) => (
+                <div key={scope} className="flex items-start gap-3 px-4 py-3">
+                  <input
+                    id={`${id}-${scope}`}
+                    type="checkbox"
+                    checked={!withheld.includes(scope)}
+                    onChange={(event) => toggle(scope, event.target.checked)}
+                    disabled={!answerable}
+                    aria-describedby={`${id}-${scope}-allows`}
+                    className="mt-0.5 accent-accent disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <label htmlFor={`${id}-${scope}`} className="font-mono text-sm text-slate-200">
+                      {scope}
+                    </label>
+                    <span id={`${id}-${scope}-allows`} className="text-xs text-slate-400">
+                      {ALLOWS[scope]}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </fieldset>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="primary"
               onClick={() => answer(() => approvePairing(prompt.pairingId, granted))}
@@ -176,25 +201,25 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
             >
               Deny
             </Button>
+            {busy && (
+              <p role="status" className="text-sm text-slate-400">
+                Sending your answer…
+              </p>
+            )}
+            {answered && (
+              <p role="status" className="text-sm text-slate-400">
+                Returning to Demeteo on the machine…
+              </p>
+            )}
           </div>
         </div>
       )}
-      {busy && (
-        <p role="status" className="mt-4 text-cyan-300">
-          Sending your answer…
-        </p>
-      )}
-      {answered && (
-        <p role="status" className="mt-4 text-cyan-300">
-          Returning to Demeteo on the machine…
-        </p>
-      )}
       {failure && (
-        <div className="mt-4 max-w-xl">
+        <div className="max-w-2xl">
           <CeremonyError error={failure.error} />
           {spentHint !== null && <p className="mt-3 text-xs text-slate-300">{spentHint}</p>}
         </div>
       )}
-    </PlaceholderCard>
+    </div>
   );
 }

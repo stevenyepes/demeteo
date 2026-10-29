@@ -2,7 +2,7 @@ import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 
 
 import { CeremonyError } from '../components/CeremonyError';
 import { PasskeyRow } from '../components/PasskeyRow';
-import { PlaceholderCard } from '../components/PlaceholderCard';
+import { PageHeader } from '../components/PageHeader';
 import { HubApiError } from '../lib/api';
 import { isUsablePasskeyLabel } from '../lib/passkeyLabel';
 import {
@@ -41,6 +41,8 @@ function showNothing(): void {}
 
 export function Passkeys() {
   const labelId = useId();
+  const listId = useId();
+  const addId = useId();
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -117,31 +119,51 @@ export function Passkeys() {
 
   const trusted = passkeys?.filter((passkey) => passkey.status === 'trusted').length ?? 0;
 
+  const pending = passkeys?.filter((passkey) => passkey.status === 'pending').length ?? 0;
+
   return (
-    <PlaceholderCard title="Passkeys">
-      <p>Each trusted passkey signs you in to this Hub. Revoking one signs it out everywhere.</p>
-      {passkeys === null && failure === null && <p className="mt-6">Loading your passkeys…</p>}
+    <div className="flex flex-col gap-7">
+      <PageHeader
+        title="Passkeys"
+        summary={passkeys === null ? undefined : summaryOf(trusted, pending)}
+      />
+      <p className="-mt-3 max-w-2xl text-sm text-slate-400">
+        Each trusted passkey signs you in to this Hub. Revoking one signs it out everywhere.
+      </p>
+      {passkeys === null && failure === null && <p className="text-sm text-slate-400">Loading your passkeys…</p>}
       {passkeys !== null && (
-        <>
-          <ul className="mt-6 flex flex-col gap-2">
-            {passkeys.map((passkey) => (
-              <PasskeyRow
-                key={passkey.credentialId}
-                passkey={passkey}
-                lastTrusted={passkey.status === 'trusted' && trusted === 1}
-                disabled={busy}
-                onEndorse={(credentialId) => run(() => endorsePasskey(credentialId))}
-                onRevoke={(credentialId) => run(() => revokePasskey(credentialId))}
-              />
-            ))}
-          </ul>
-          {passkeys.some((passkey) => passkey.status === 'pending') && (
-            <p className="mt-3 text-xs text-cyan-300">
-              A pending passkey cannot sign in yet. A passkey that is already trusted must approve
-              it: choose Endorse on its row and answer the prompt with a trusted passkey.
-            </p>
-          )}
-          <form onSubmit={add} className="mt-6 flex max-w-sm flex-col gap-4">
+        <div className="flex flex-wrap items-start gap-6">
+          <section aria-labelledby={listId} className="panel min-w-0 flex-[2_1_480px] p-2">
+            <h2 id={listId} className="sr-only">
+              Your passkeys
+            </h2>
+            <ul className="flex flex-col divide-y divide-hairline">
+              {passkeys.map((passkey) => (
+                <PasskeyRow
+                  key={passkey.credentialId}
+                  passkey={passkey}
+                  lastTrusted={passkey.status === 'trusted' && trusted === 1}
+                  disabled={busy}
+                  onEndorse={(credentialId) => run(() => endorsePasskey(credentialId))}
+                  onRevoke={(credentialId) => run(() => revokePasskey(credentialId))}
+                />
+              ))}
+            </ul>
+            {pending > 0 && (
+              <p className="border-t border-hairline px-4 py-3 text-xs text-slate-400">
+                A pending passkey cannot sign in yet. A passkey that is already trusted must approve
+                it: choose Endorse on its row and answer the prompt with a trusted passkey.
+              </p>
+            )}
+          </section>
+          <form
+            onSubmit={add}
+            aria-labelledby={addId}
+            className="panel flex min-w-0 flex-[1_1_280px] flex-col gap-4 p-5"
+          >
+            <h2 id={addId} className="font-heading text-base font-semibold text-white">
+              Add a passkey
+            </h2>
             <div className="flex flex-col gap-1.5">
               <label htmlFor={labelId} className="text-xs font-medium text-slate-300">
                 Passkey name
@@ -152,42 +174,44 @@ export function Passkeys() {
                 value={typed}
                 onChange={(event) => setTyped(event.target.value)}
                 autoComplete="off"
-                className="input-field focus:border-cyan-400! focus:shadow-none!"
+                className="input-field"
               />
             </div>
-            <Button variant="primary"
-              type="submit"
-              disabled={!canAdd}>
+            <Button variant="primary" type="submit" disabled={!canAdd}>
               Add passkey
             </Button>
+            <p className="text-xs text-slate-400">It starts pending until a trusted passkey endorses it.</p>
           </form>
-        </>
+        </div>
       )}
       {busy && (
-        <p role="status" className="mt-4 text-cyan-300">
+        <p role="status" className="text-sm text-slate-400">
           Waiting for your passkey…
         </p>
       )}
       {failure && (
-        <div className="mt-4 max-w-sm">
+        <div className="max-w-xl">
           <CeremonyError error={failure.error} />
           {isExpiredCeremony(failure.error) && (
-            <p className="mt-3 text-xs text-cyan-300">
+            <p className="mt-3 text-xs text-slate-400">
               The Hub was no longer holding this request. Try again. If it keeps happening, another
               sign-in with this same passkey may be starting requests of its own: sign in with a
               different trusted passkey and revoke this one.
             </p>
           )}
           {passkeys === null && (
-            <Button variant="primary"
-              onClick={retryLoad}
-              className="mt-4"
-           >
+            <Button variant="primary" onClick={retryLoad} className="mt-4">
               Try again
             </Button>
           )}
         </div>
       )}
-    </PlaceholderCard>
+    </div>
   );
+}
+
+function summaryOf(trusted: number, pending: number): string {
+  const parts = [`${trusted} trusted`];
+  if (pending > 0) parts.push(`${pending} pending`);
+  return parts.join(' · ');
 }

@@ -1,6 +1,9 @@
+import { Monitor } from 'lucide-react';
 import { useId } from 'react';
 
+import { Chip } from '../../../src/components/ui/Chip';
 import type { FleetInstance } from '../lib/fleet';
+import { platformText } from '../lib/fleetSummary';
 
 interface DispatchTargetListProps {
   instances: FleetInstance[];
@@ -21,7 +24,7 @@ export function DispatchTargetList({ instances, selectedId, onSelect }: Dispatch
   const headingId = useId();
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-2">
+    <section aria-labelledby={headingId} className="flex flex-col gap-3">
       <h2 id={headingId} className="font-heading text-sm font-semibold text-slate-200">
         Where to run
       </h2>
@@ -54,6 +57,7 @@ function TargetRow({ instance, selected, onSelect }: TargetRowProps) {
   const id = useId();
   const spend = instance.scopes.includes('spend');
   const describedBy = [`${id}-presence`, `${id}-scopes`, ...(spend ? [] : [`${id}-reason`])].join(' ');
+  const platform = platformText(instance);
 
   return (
     <button
@@ -63,31 +67,48 @@ function TargetRow({ instance, selected, onSelect }: TargetRowProps) {
       aria-labelledby={`${id}-name`}
       aria-describedby={describedBy}
       onClick={onSelect}
-      className={`nested-card flex w-full flex-col gap-1.5 px-4 py-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-60 ${selected ? 'border-cyan-400/50 bg-cyan-500/10' : 'enabled:hover:border-cyan-400/30'}`}
+      className={`nested-card flex w-full items-start gap-3 px-3 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+        selected ? 'border-accent-edge bg-accent-tint' : 'enabled:hover:bg-white/5'
+      }`}
     >
-      <span className="flex flex-wrap items-center gap-3">
-        <span id={`${id}-name`} className="font-mono text-sm text-white break-all">
-          {instance.label ?? instance.id}
-        </span>
-        <span
-          id={`${id}-presence`}
-          className={`ml-auto flex items-center gap-2 rounded-full border px-2 py-0.5 text-xs font-medium ${instance.present ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-slate-500/30 bg-slate-500/10 text-slate-400'}`}
-        >
-          <span
-            aria-hidden="true"
-            className={`inline-block h-2 w-2 shrink-0 rounded-full ${instance.present ? 'bg-emerald-400 animate-pulse-glow' : 'bg-slate-500'}`}
-          />
-          {instance.present ? 'online' : 'offline · requests queue until it reconnects'}
-        </span>
+      <span
+        aria-hidden="true"
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-white/5 ${
+          selected ? 'text-white' : 'text-slate-400'
+        }`}
+      >
+        <Monitor className="h-4 w-4" />
       </span>
-      <span id={`${id}-scopes`} className="font-mono text-xs text-slate-400">
-        {instance.scopes.length === 0 ? 'No scopes granted' : `Scopes: ${instance.scopes.join(', ')}`}
-      </span>
-      {!spend && (
-        <span id={`${id}-reason`} className="text-xs text-ruby-300">
-          Spend has not been granted on this instance.
+      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <span className="flex flex-wrap items-center gap-2">
+          <span id={`${id}-name`} className="font-heading text-sm font-semibold text-white break-all">
+            {instance.label ?? instance.id}
+          </span>
+          <span id={`${id}-presence`} className="ml-auto">
+            <Chip tone={instance.present ? 'emerald' : 'slate'} dot>
+              {instance.present ? 'online' : 'offline · requests queue until it reconnects'}
+            </Chip>
+          </span>
         </span>
-      )}
+        {platform !== '' && <span className="font-mono text-xs text-slate-400 break-all">{platform}</span>}
+        {instance.harnesses !== null && instance.harnesses.length > 0 && (
+          <span className="flex flex-wrap gap-1.5">
+            {instance.harnesses.map((harness) => (
+              <Chip key={harness} tone="slate">
+                {harness}
+              </Chip>
+            ))}
+          </span>
+        )}
+        <span id={`${id}-scopes`} className="font-mono text-xs text-slate-400">
+          {instance.scopes.length === 0 ? 'No scopes granted' : `Scopes: ${instance.scopes.join(', ')}`}
+        </span>
+        {!spend && (
+          <span id={`${id}-reason`} className="text-xs text-ruby-300">
+            Spend has not been granted on this instance.
+          </span>
+        )}
+      </span>
     </button>
   );
 }

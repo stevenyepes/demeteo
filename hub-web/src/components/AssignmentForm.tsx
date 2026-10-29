@@ -82,7 +82,7 @@ export function AssignmentForm({ instanceId, featureId, stepId, runStatus, state
         it has.
       </p>
       {blocked !== null && (
-        <p id={reasonId} className="mt-2 text-sm text-cyan-300">
+        <p id={reasonId} className="mt-2 text-sm text-slate-300">
           {blocked}
         </p>
       )}
@@ -116,7 +116,7 @@ export function AssignmentForm({ instanceId, featureId, stepId, runStatus, state
               onChange={(event) => setModel(event.target.value)}
               placeholder="Unchanged"
               autoComplete="off"
-              className="input-field font-mono focus:border-cyan-400! focus:shadow-none!"
+              className="input-field font-mono"
             />
           </div>
           <div className="flex flex-col gap-1.5">

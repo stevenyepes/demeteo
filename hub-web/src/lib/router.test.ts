@@ -8,6 +8,7 @@ const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/fleet', { name: 'fleet' }],
   ['#/instances/i-1', { name: 'instance', instanceId: 'i-1' }],
   ['#/runs', { name: 'runs' }],
+  ['#/runs/i-1/f-9', { name: 'runs', instanceId: 'i-1', featureId: 'f-9' }],
   ['#/instances/i-1/runs/f-9', { name: 'run', instanceId: 'i-1', featureId: 'f-9' }],
   ['#/dispatch', { name: 'dispatch' }],
   ['#/instances/i-1/dispatch', { name: 'dispatch', instanceId: 'i-1' }],
@@ -63,7 +64,8 @@ describe('parseRoute', () => {
   });
 
   it('reports an over-long path as not-found', () => {
-    expect(parseRoute('#/runs/x/y')).toEqual({ name: 'not-found', path: '/runs/x/y' });
+    expect(parseRoute('#/runs/x')).toEqual({ name: 'not-found', path: '/runs/x' });
+    expect(parseRoute('#/runs/x/y/z')).toEqual({ name: 'not-found', path: '/runs/x/y/z' });
     expect(parseRoute('#/instances/i-1/runs/f-9/extra').name).toBe('not-found');
     expect(parseRoute('#/instances/i-1/dispatch/x').name).toBe('not-found');
   });

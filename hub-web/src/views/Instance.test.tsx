@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setCsrfToken } from '../lib/api';
+import { FleetProvider } from '../lib/fleetContext';
 import { routeHref } from '../lib/router';
 import { Instance } from './Instance';
 
@@ -69,6 +70,12 @@ function run(feature_id: string, overrides: Record<string, unknown> = {}): Recor
     started_at: NOW - 600,
     updated_at: NOW - 60,
     cost_cents: null,
+    title: null,
+    project_id: null,
+    project_name: null,
+    step_id: null,
+    step_title: null,
+    tickets: { completed: 0, failed: 0, running: 0 },
     ...overrides,
   };
 }
@@ -121,12 +128,74 @@ describe('Instance', () => {
     expect(container.textContent).not.toContain('tok');
   });
 
-  it('renders no cost and no Harnesses section when neither is reported', async () => {
+  it('renders no cost when none is reported, and says harnesses were not reported rather than none', async () => {
     const { container } = await renderLoaded(detail({ live_runs: [run('feat-1', { cost_cents: null })] }));
 
     expect(within(screen.getByRole('region', { name: 'Running now' })).getByText('feat-1')).toBeInTheDocument();
     expect(container.textContent).not.toContain('$');
-    expect(screen.queryByRole('heading', { name: /harnesses/i })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Harnesses' })).toHaveTextContent(/has not reported its harnesses/);
+  });
+
+  it('lists the harness kinds the instance reports', async () => {
+    await renderLoaded(detail({ harnesses: ['claude-code', 'opencode'] }));
+
+    const harnesses = screen.getByRole('region', { name: 'Harnesses' });
+    expect(within(harnesses).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'claude-code',
+      'opencode',
+    ]);
+  });
+
+  it('leads a run with its title, then its project, step and tickets', async () => {
+    await renderLoaded(
+      detail({
+        live_runs: [
+          run('feat-1', {
+            title: 'Retry failed webhooks',
+            project_name: 'checkout-api',
+            step_id: 's-implement',
+            step_title: 'Implement',
+            tickets: { completed: 2, failed: 0, running: 1 },
+          }),
+        ],
+      }),
+    );
+
+    const link = within(screen.getByRole('region', { name: 'Running now' })).getByRole('link');
+    expect(within(link).getByText('Retry failed webhooks')).toHaveClass('font-heading');
+    expect(link).toHaveTextContent('feat-1');
+    expect(link).toHaveTextContent('checkout-api');
+    expect(link).toHaveTextContent('Implement · 2 tickets landed, 1 running');
+    expect(link).not.toHaveTextContent('s-implement');
+  });
+
+  it('shows the default workflow of each project by name and newest version', async () => {
+    await renderLoaded(
+      detail({
+        projects: [
+          { id: 'p-1', name: 'demeteo', remote_url: null },
+          { id: 'p-2', name: 'notes', remote_url: null },
+        ],
+        workflows: [
+          { workflow_id: 'w-1', version: 6, name: 'feature-standard', graph: null },
+          { workflow_id: 'w-1', version: 7, name: 'feature-standard', graph: null },
+        ],
+        run_shape: [
+          {
+            project_id: 'p-1',
+            default_agent_kind: null,
+            default_model: null,
+            default_effort: null,
+            default_workflow_id: 'w-1',
+            default_max_budget_cents: null,
+          },
+        ],
+      }),
+    );
+
+    const rows = within(screen.getByRole('region', { name: 'Projects' })).getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('feature-standard v7');
+    expect(rows[2]).toHaveTextContent('None set');
   });
 
   it('shows the cost of a run only when it is reported', async () => {
@@ -144,10 +213,10 @@ describe('Instance', () => {
       routeHref({ name: 'run', instanceId: ID, featureId: 'feat-1' }),
       routeHref({ name: 'run', instanceId: ID, featureId: 'feat-2' }),
     ]);
-    expect(links[0]).toHaveTextContent('running');
+    expect(links[0]).toHaveTextContent('Running');
     expect(links[0]).toHaveTextContent('Started 10m ago');
     expect(links[0]).toHaveTextContent('Updated 1m ago');
-    expect(links[1]).toHaveTextContent('failed');
+    expect(links[1]).toHaveTextContent('Failed');
     expect(links[1]).not.toHaveTextContent('Started');
   });
 
@@ -164,7 +233,8 @@ describe('Instance', () => {
 
     const running = screen.getByRole('region', { name: 'Running now' });
     const projects = screen.getByRole('region', { name: 'Projects' });
-    for (const section of [running, projects]) {
+    const harnesses = screen.getByRole('region', { name: 'Harnesses' });
+    for (const section of [running, projects, harnesses]) {
       expect(section).toHaveTextContent(/withheld/i);
       expect(section).toHaveTextContent(/turn on read/i);
     }
@@ -207,6 +277,60 @@ describe('Instance', () => {
 
     expect(screen.getByText('<b>x</b>')).toBeInTheDocument();
     expect(container.querySelector('b')).toBeNull();
+  });
+
+  it('marks a run whose gate waits on you amber, from the fleet the shell read', async () => {
+    const gate = {
+      instance_id: ID,
+      feature_id: 'feat-2',
+      step_id: 's-gate',
+      step_execution_id: 'se-1',
+      since: NOW - 300,
+      title: null,
+      project_name: null,
+      step_title: 'Review',
+    };
+    const answers: Record<string, unknown> = {
+      [`GET ${PATH}`]: detail({ live_runs: [run('feat-1'), run('feat-2')] }),
+      'GET /v1/fleet': {
+        instances: [
+          {
+            id: ID,
+            label: 'workstation',
+            present: true,
+            os: 'linux',
+            arch: 'x86_64',
+            version: '1.4.2',
+            scopes: ['read'],
+            read_granted: true,
+            last_seen: NOW,
+            live_runs: 2,
+            needs_you: [gate],
+            harnesses: null,
+            project_count: 0,
+          },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const body = answers[`GET ${String(input)}`];
+        if (body === undefined) throw new Error(`fetch double was not told about ${String(input)}`);
+        return json(body);
+      }),
+    );
+    render(
+      <FleetProvider readKey="instance">
+        <Instance instanceId={ID} />
+      </FleetProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'workstation' })).toBeInTheDocument();
+    const [plain, gated] = within(screen.getByRole('region', { name: 'Running now' })).getAllByRole('link');
+    expect(gated).toHaveTextContent('Gate needs you');
+    expect(gated).toHaveTextContent('waiting 5m');
+    expect(plain).not.toHaveTextContent('Gate needs you');
   });
 
   it('renders a 404 as not found', async () => {

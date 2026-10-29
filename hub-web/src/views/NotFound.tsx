@@ -1,5 +1,6 @@
-import { PlaceholderCard } from '../components/PlaceholderCard';
+import { PageHeader } from '../components/PageHeader';
 import { routeHref } from '../lib/router';
+import { buttonClasses } from '../../../src/components/ui/Button';
 
 interface NotFoundProps {
   path: string;
@@ -7,16 +8,16 @@ interface NotFoundProps {
 
 export function NotFound({ path }: NotFoundProps) {
   return (
-    <PlaceholderCard title="Not found">
-      <p>
-        No view matches <span className="font-mono text-slate-200 break-all">{path}</span>.
-      </p>
-      <a
-        href={routeHref({ name: 'fleet' })}
-        className="mt-4 inline-block text-accent-ink transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
-      >
-        Back to Fleet
-      </a>
-    </PlaceholderCard>
+    <div className="flex flex-col gap-6">
+      <PageHeader title="Not found" />
+      <section className="panel flex max-w-xl flex-col items-start gap-4 p-6">
+        <p className="text-sm text-slate-400">
+          No view matches <span className="font-mono text-slate-200 break-all">{path}</span>.
+        </p>
+        <a href={routeHref({ name: 'fleet' })} className={buttonClasses('secondary')}>
+          Back to Fleet
+        </a>
+      </section>
+    </div>
   );
 }

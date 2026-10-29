@@ -49,7 +49,7 @@ export function DispatchCapsFields({
           aria-required="true"
           aria-invalid={Boolean(costError)}
           aria-describedby={costError ? `${costId}-help ${costId}-error` : `${costId}-help`}
-          className="input-field font-mono focus:border-cyan-400! focus:shadow-none! focus-visible:outline-2 focus-visible:outline-cyan-400"
+          className="input-field font-mono"
         />
         <p id={`${costId}-help`} className="text-xs text-slate-500">
           The instance refuses to start a run with no cap, or with a cap above its own local ceiling, which the Hub
@@ -74,7 +74,7 @@ export function DispatchCapsFields({
           autoComplete="off"
           aria-invalid={Boolean(wallClockError)}
           aria-describedby={wallClockError ? `${wallClockId}-help ${wallClockId}-error` : `${wallClockId}-help`}
-          className="input-field font-mono focus:border-cyan-400! focus:shadow-none! focus-visible:outline-2 focus-visible:outline-cyan-400"
+          className="input-field font-mono"
         />
         <p id={`${wallClockId}-help`} className="text-xs text-slate-500">
           Optional. Leave blank for no wall-clock cap.

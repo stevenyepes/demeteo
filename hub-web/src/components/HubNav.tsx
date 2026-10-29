@@ -1,13 +1,17 @@
+import { KeyRound, LogOut, type LucideIcon, Play, Plus, Server, Zap } from 'lucide-react';
+import { useId } from 'react';
+
+import RailBadge from '../../../src/components/ui/RailBadge';
 import { type Route, routeHref } from '../lib/router';
 
 type Section = 'fleet' | 'runs' | 'dispatch' | 'add-instance' | 'passkeys';
 
-const SECTIONS: readonly { name: Section; label: string }[] = [
-  { name: 'fleet', label: 'Fleet' },
-  { name: 'runs', label: 'Runs' },
-  { name: 'dispatch', label: 'Dispatch' },
-  { name: 'add-instance', label: 'Add instance' },
-  { name: 'passkeys', label: 'Passkeys' },
+const SECTIONS: readonly { name: Section; label: string; icon: LucideIcon }[] = [
+  { name: 'fleet', label: 'Fleet', icon: Server },
+  { name: 'runs', label: 'Runs', icon: Zap },
+  { name: 'dispatch', label: 'Dispatch', icon: Play },
+  { name: 'add-instance', label: 'Add instance', icon: Plus },
+  { name: 'passkeys', label: 'Passkeys', icon: KeyRound },
 ];
 
 /**
@@ -41,37 +45,63 @@ function sectionOf(route: Route): Section | null {
   }
 }
 
+const ITEM =
+  'relative flex h-10 w-10 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-40';
+
+const IDLE = 'border-transparent text-slate-400 not-disabled:hover:bg-white/5 not-disabled:hover:text-white';
+
 interface HubNavProps {
   route: Route;
+  /** Gates waiting across the fleet; `null` until the fleet has been read, and then no badge. */
+  needsYou: number | null;
   signingOut: boolean;
   onSignOut: () => void;
 }
 
-export function HubNav({ route, signingOut, onSignOut }: HubNavProps) {
+/**
+ * The left rail. Icon-only, so every item carries its label as its accessible
+ * name and as a tooltip. The needs-you count rides on Runs, the list a gate is
+ * reviewed from.
+ */
+export function HubNav({ route, needsYou, signingOut, onSignOut }: HubNavProps) {
   const active = sectionOf(route);
+  const badgeId = useId();
+  const badgeLabel = needsYou === 1 ? '1 gate needs you' : `${needsYou} gates need you`;
   return (
-    <nav aria-label="Primary" className="flex flex-1 flex-wrap items-center gap-1">
-      {SECTIONS.map(({ name, label }) => (
-        <a
-          key={name}
-          href={routeHref({ name })}
-          aria-current={name === active ? 'page' : undefined}
-          className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 ${
-            name === active
-              ? 'border-accent-edge bg-accent-tint text-white'
-              : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-cyan-300 focus-visible:text-cyan-300'
-          }`}
-        >
-          {label}
-        </a>
-      ))}
+    <nav aria-label="Primary" className="flex flex-1 flex-col items-center gap-2">
+      {SECTIONS.map(({ name, label, icon: Icon }) => {
+        const badged = name === 'runs' && needsYou !== null && needsYou > 0;
+        return (
+          <a
+            key={name}
+            href={routeHref({ name })}
+            aria-label={label}
+            title={label}
+            aria-current={name === active ? 'page' : undefined}
+            aria-describedby={badged ? badgeId : undefined}
+            className={`${ITEM} ${name === active ? 'border-accent-edge bg-accent-tint text-white' : IDLE}`}
+          >
+            <Icon aria-hidden="true" className="h-5 w-5" />
+            {badged && (
+              <>
+                <RailBadge tone="amber" count={needsYou} label={badgeLabel} corner="right" />
+                <span id={badgeId} className="sr-only">
+                  {badgeLabel}
+                </span>
+              </>
+            )}
+          </a>
+        );
+      })}
       <button
         type="button"
         onClick={onSignOut}
         disabled={signingOut}
-        className="ml-auto rounded-lg border border-transparent px-3 py-1.5 text-sm font-medium text-slate-400 transition-colors hover:bg-white/5 hover:text-cyan-300 focus-visible:text-cyan-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+        aria-label="Sign out"
+        title="Sign out"
+        className={`${ITEM} ${IDLE} mt-auto`}
       >
-        Sign out
+        <LogOut aria-hidden="true" className="h-5 w-5" />
       </button>
     </nav>
   );

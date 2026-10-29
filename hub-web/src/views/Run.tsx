@@ -1,80 +1,30 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import type { NodeRunStatus } from '../../../src/components/canvas/types';
 import { WorkflowCanvas } from '../../../src/components/canvas/WorkflowCanvas';
-import { runStatusMeta, TONE_TEXT } from '../../../src/lib/runStatus';
+import { Chip } from '../../../src/components/ui/Chip';
+import { runStatusMeta } from '../../../src/lib/runStatus';
 import { CeremonyError } from '../components/CeremonyError';
-import { PlaceholderCard } from '../components/PlaceholderCard';
+import { PageHeader } from '../components/PageHeader';
 import { RunEvents } from '../components/RunEvents';
-import { type GateDecisionTicket, StepInspector } from '../components/StepInspector';
+import { RunGatesWaiting } from '../components/RunGatesWaiting';
+import { RunStepList } from '../components/RunStepList';
+import { StepInspector } from '../components/StepInspector';
 import { TicketProgress } from '../components/TicketProgress';
-import { HubApiError } from '../lib/api';
 import { getInstance, type HubScope } from '../lib/fleet';
-import { getRunDetail, type RunDetail } from '../lib/runs';
-import { sameStatusMap, statusByNode } from '../lib/runView';
+import { useFleet } from '../lib/fleetContext';
+import { routeHref } from '../lib/router';
+import type { RunDetail } from '../lib/runs';
+import { useGateDecisions } from '../lib/useGateDecisions';
+import { stepTitles } from '../lib/runView';
+import { isNotFound, isScopeNotGranted, type StatusMap, useRunDetail } from '../lib/useRunDetail';
 
 interface RunProps {
   instanceId: string;
   featureId: string;
 }
 
-type StatusMap = Record<string, NodeRunStatus>;
-
-type Load =
-  | { state: 'loading' }
-  | {
-      state: 'loaded';
-      detail: RunDetail;
-      statusByNode: StatusMap;
-      /** Epoch ms of the read that answered `detail`. */
-      readAt: number;
-      /** The latest read after it failed, so `detail` is no longer live. */
-      stale: boolean;
-    }
-  | { state: 'failed'; error: unknown };
-
-const POLL_MS = 5000;
-
 export function Run({ instanceId, featureId }: RunProps) {
-  const [load, setLoad] = useState<Load>({ state: 'loading' });
-
-  /** Bumped on unmount, so a read that settles after it has no page to land on. */
-  const latestRead = useRef(0);
-
-  useEffect(() => {
-    latestRead.current += 1;
-    const read = latestRead.current;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let loaded = false;
-    setLoad({ state: 'loading' });
-    const poll = () => {
-      getRunDetail(instanceId, featureId).then(
-        (detail) => {
-          if (latestRead.current !== read) return;
-          loaded = true;
-          setLoad((previous) => settled(previous, detail));
-          if (detail.status === 'running') timer = setTimeout(poll, POLL_MS);
-        },
-        (error: unknown) => {
-          if (latestRead.current !== read) return;
-          // A poll that fails after a first load keeps the last answer on screen,
-          // marked stale, and tries again; a lost session, a withdrawn run or a
-          // revoked `read` would only fail the same way forever.
-          if (loaded && !endsPolling(error)) {
-            setLoad((previous) => (previous.state === 'loaded' ? { ...previous, stale: true } : previous));
-            timer = setTimeout(poll, POLL_MS);
-          } else {
-            setLoad({ state: 'failed', error });
-          }
-        },
-      );
-    };
-    poll();
-    return () => {
-      latestRead.current += 1;
-      clearTimeout(timer);
-    };
-  }, [instanceId, featureId]);
+  const load = useRunDetail(instanceId, featureId);
 
   const [scopes, setScopes] = useState<HubScope[] | null>(null);
 
@@ -99,9 +49,16 @@ export function Run({ instanceId, featureId }: RunProps) {
     </>
   );
 
+  const loaded = load.state === 'loaded' ? load.detail : null;
+
   return (
-    <PlaceholderCard title="Run">
-      {load.state === 'loading' && <p>Loading run {ids}…</p>}
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title={loaded === null ? 'Run' : (loaded.title ?? featureId)}
+        eyebrow={loaded === null ? undefined : <RunBreadcrumb instanceId={instanceId} detail={loaded} />}
+        summary={loaded === null ? undefined : <RunSummaryLine featureId={featureId} detail={loaded} />}
+      />
+      {load.state === 'loading' && <p className="text-sm text-slate-400">Loading run {ids}…</p>}
       {load.state === 'failed' && isNotFound(load.error) && (
         <p
           role="alert"
@@ -120,7 +77,7 @@ export function Run({ instanceId, featureId }: RunProps) {
         </p>
       )}
       {load.state === 'failed' && !isNotFound(load.error) && !isScopeNotGranted(load.error) && (
-        <div className="flex max-w-xl flex-col gap-2">
+        <div className="flex max-w-xl flex-col gap-2 text-sm text-slate-400">
           <p>Run {ids} could not be loaded.</p>
           <CeremonyError error={load.error} />
         </div>
@@ -134,51 +91,10 @@ export function Run({ instanceId, featureId }: RunProps) {
           readAt={load.readAt}
           stale={load.stale}
           scopes={scopes}
-          ids={ids}
         />
       )}
-    </PlaceholderCard>
+    </div>
   );
-}
-
-/**
- * The canvas re-seeds its nodes whenever `definition` or `statusByNode`
- * changes identity, so a poll that reports nothing new hands back the objects
- * already on screen rather than equal copies of them.
- */
-function settled(previous: Load, detail: RunDetail): Load {
-  const next = statusByNode(detail.steps, detail.pendingGates);
-  const readAt = Date.now();
-  if (previous.state !== 'loaded') return { state: 'loaded', detail, statusByNode: next, readAt, stale: false };
-  const held = previous.detail.workflow;
-  const workflow =
-    held !== null && detail.workflow !== null && JSON.stringify(held) === JSON.stringify(detail.workflow)
-      ? held
-      : detail.workflow;
-  return {
-    state: 'loaded',
-    detail: { ...detail, workflow },
-    statusByNode: sameStatusMap(previous.statusByNode, next) ? previous.statusByNode : next,
-    readAt,
-    stale: false,
-  };
-}
-
-function isNotFound(error: unknown): boolean {
-  return error instanceof HubApiError && error.code === 'not_found';
-}
-
-function isUnauthenticated(error: unknown): boolean {
-  return error instanceof HubApiError && error.status === 401;
-}
-
-/** The Hub answers a revoked scope with `409`, never `403`. */
-function isScopeNotGranted(error: unknown): boolean {
-  return error instanceof HubApiError && error.code === 'scope_not_granted';
-}
-
-function endsPolling(error: unknown): boolean {
-  return isUnauthenticated(error) || isNotFound(error) || isScopeNotGranted(error);
 }
 
 interface LoadedProps {
@@ -189,69 +105,100 @@ interface LoadedProps {
   readAt: number;
   stale: boolean;
   scopes: HubScope[] | null;
-  ids: ReactNode;
 }
 
-function Loaded({ instanceId, featureId, detail, statusByNode, readAt, stale, scopes, ids }: LoadedProps) {
+function Loaded({ instanceId, featureId, detail, statusByNode, readAt, stale, scopes }: LoadedProps) {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   /** Here, not in the inspector, so a decision's status also survives closing and reopening it. */
-  const [gateDecisions, setGateDecisions] = useState<Record<string, GateDecisionTicket>>({});
-  const onGateDecided = (stepExecutionId: string, decided: GateDecisionTicket) => {
-    // Re-inserted, so the step's latest decision is its last entry.
-    setGateDecisions(({ [stepExecutionId]: _replaced, ...rest }) => ({ ...rest, [stepExecutionId]: decided }));
-  };
-  const onGateSettled = (requestId: string) => {
-    setGateDecisions((held) => {
-      const entry = Object.entries(held).find(([, decided]) => decided.ticket.requestId === requestId);
-      if (entry === undefined || entry[1].settled) return held;
-      return { ...held, [entry[0]]: { ...entry[1], settled: true } };
-    });
-  };
+  const { gateDecisions, onGateDecided, onGateSettled } = useGateDecisions();
   const now = Math.floor(Date.now() / 1000);
+  const titles = stepTitles(detail);
   return (
-    <div className="flex flex-col gap-3">
-      <div className="nested-card flex flex-wrap items-center gap-3 px-4 py-3">
-        <span>{ids}</span>
-        <StatusLabel status={detail.status} />
+    <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]">
+      <div className="flex min-w-0 flex-col gap-4">
+        {stale && <StaleNotice readAt={readAt} />}
+        {detail.workflow === null ? (
+          <NotReported detail={detail} statusByNode={statusByNode} titles={titles} onSelect={setSelectedStepId} />
+        ) : (
+          <>
+            <section aria-label="Pipeline graph" className="panel panel-field h-[36rem] w-full overflow-hidden">
+              <WorkflowCanvas
+                definition={detail.workflow}
+                statusByNode={statusByNode}
+                onNodeActivate={setSelectedStepId}
+                selectedNodeId={selectedStepId}
+              />
+            </section>
+            <OffGraphGates detail={detail} titles={titles} onSelect={setSelectedStepId} />
+          </>
+        )}
+        <TicketProgress detail={detail} now={now} />
       </div>
-      {stale && <StaleNotice readAt={readAt} />}
-      {detail.workflow === null ? (
-        <NotReported detail={detail} statusByNode={statusByNode} onSelect={setSelectedStepId} />
-      ) : (
+      <aside aria-label="Run inspector" className="flex min-w-0 flex-col gap-4">
+        {selectedStepId === null ? (
+          <RunGatesWaiting detail={detail} titles={titles} now={now} onSelect={setSelectedStepId} />
+        ) : (
+          <StepInspector
+            instanceId={instanceId}
+            featureId={featureId}
+            stepId={selectedStepId}
+            detail={detail}
+            scopes={scopes}
+            gateDecisions={gateDecisions}
+            onGateDecided={onGateDecided}
+            onGateSettled={onGateSettled}
+            onClose={() => setSelectedStepId(null)}
+          />
+        )}
+        <RunEvents events={detail.events} now={now} stepTitles={titles} />
+        <p className="text-xs text-slate-400">
+          Transcripts, diffs and agent output stay on the instance. The Hub sees step and ticket events only.
+        </p>
+      </aside>
+    </div>
+  );
+}
+
+function RunBreadcrumb({ instanceId, detail }: { instanceId: string; detail: RunDetail }) {
+  const { fleet } = useFleet();
+  const label = fleet?.find((instance) => instance.id === instanceId)?.label ?? instanceId;
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <a href={routeHref({ name: 'runs' })} className="text-accent-ink transition-colors hover:text-white">
+        Runs
+      </a>
+      <span aria-hidden="true">/</span>
+      <a
+        href={routeHref({ name: 'instance', instanceId })}
+        className="text-accent-ink transition-colors hover:text-white break-all"
+      >
+        {label}
+      </a>
+      {detail.projectName !== null && (
         <>
-          <div className="nested-card panel-field h-[32rem] w-full overflow-hidden">
-            <WorkflowCanvas
-              definition={detail.workflow}
-              statusByNode={statusByNode}
-              onNodeActivate={setSelectedStepId}
-              selectedNodeId={selectedStepId}
-            />
-          </div>
-          <OffGraphGates detail={detail} onSelect={setSelectedStepId} />
+          <span aria-hidden="true">/</span>
+          <span className="break-all">{detail.projectName}</span>
         </>
       )}
-      {selectedStepId !== null && (
-        <StepInspector
-          instanceId={instanceId}
-          featureId={featureId}
-          stepId={selectedStepId}
-          detail={detail}
-          scopes={scopes}
-          gateDecisions={gateDecisions}
-          onGateDecided={onGateDecided}
-          onGateSettled={onGateSettled}
-          onClose={() => setSelectedStepId(null)}
-        />
-      )}
-      <TicketProgress detail={detail} now={now} />
-      <RunEvents events={detail.events} now={now} />
-    </div>
+    </span>
+  );
+}
+
+function RunSummaryLine({ featureId, detail }: { featureId: string; detail: RunDetail }) {
+  const status = detail.status === 'running' && detail.pendingGates.length > 0 ? 'awaiting_gate' : detail.status;
+  return (
+    <span className="flex flex-wrap items-center gap-3">
+      <Chip status={status}>{runStatusMeta(status).label}</Chip>
+      <span className="break-all">{featureId}</span>
+      {detail.workflow !== null && <span className="break-all">{detail.workflow.name}</span>}
+    </span>
   );
 }
 
 interface NotReportedProps {
   detail: RunDetail;
   statusByNode: StatusMap;
+  titles: Record<string, string>;
   onSelect: (stepId: string) => void;
 }
 
@@ -259,32 +206,27 @@ interface NotReportedProps {
  * Never a graph drawn from `steps`: they carry no edges, so any layout of them would be invented.
  * A gate can name a step that has emitted no event yet, so it is listed after the reported ones.
  */
-function NotReported({ detail, statusByNode, onSelect }: NotReportedProps) {
+function NotReported({ detail, statusByNode, titles, onSelect }: NotReportedProps) {
   const reported = new Set(detail.steps.map((step) => step.stepId));
   const gated = detail.pendingGates.flatMap((gate) =>
     gate.stepId === null || reported.has(gate.stepId) ? [] : [gate.stepId],
   );
   const listed = [...detail.steps.map((step) => step.stepId), ...new Set(gated)];
   return (
-    <section className="nested-card px-4 py-3">
+    <section className="panel flex flex-col gap-3 p-5 text-sm text-slate-400">
       <p className="text-slate-200">This instance has not reported the run's graph.</p>
       {listed.length === 0 ? (
-        <p className="mt-2">No steps reported yet.</p>
+        <p>No steps reported yet.</p>
       ) : (
-        <ul aria-label="Reported steps" className="mt-2 flex flex-col gap-1">
-          {listed.map((stepId) => (
-            <li key={stepId}>
-              <button
-                type="button"
-                onClick={() => onSelect(stepId)}
-                className="flex w-full flex-wrap items-baseline gap-x-4 rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-              >
-                <span className="font-mono text-slate-200 break-all">{stepId}</span>
-                <StatusLabel status={statusByNode[stepId]?.status ?? 'not reported'} />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <RunStepList
+          label="Reported steps"
+          steps={listed.map((stepId) => ({
+            stepId,
+            title: titles[stepId] ?? null,
+            status: statusByNode[stepId]?.status ?? 'not reported',
+          }))}
+          onSelect={onSelect}
+        />
       )}
     </section>
   );
@@ -292,11 +234,12 @@ function NotReported({ detail, statusByNode, onSelect }: NotReportedProps) {
 
 interface OffGraphGatesProps {
   detail: RunDetail;
+  titles: Record<string, string>;
   onSelect: (stepId: string) => void;
 }
 
 /** A gate on a step the reported graph has no node for would otherwise have nothing on the canvas to open it from. */
-function OffGraphGates({ detail, onSelect }: OffGraphGatesProps) {
+function OffGraphGates({ detail, titles, onSelect }: OffGraphGatesProps) {
   const nodes = new Set(detail.workflow?.nodes.map((node) => node.id));
   const offGraph = [
     ...new Set(
@@ -305,22 +248,13 @@ function OffGraphGates({ detail, onSelect }: OffGraphGatesProps) {
   ];
   if (offGraph.length === 0) return null;
   return (
-    <section className="nested-card px-4 py-3">
+    <section className="panel flex flex-col gap-3 p-5 text-sm">
       <p className="text-slate-200">Gates pending on steps the graph does not show:</p>
-      <ul aria-label="Gates off the graph" className="mt-2 flex flex-col gap-1">
-        {offGraph.map((stepId) => (
-          <li key={stepId}>
-            <button
-              type="button"
-              onClick={() => onSelect(stepId)}
-              className="flex w-full flex-wrap items-baseline gap-x-4 rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-            >
-              <span className="font-mono text-slate-200 break-all">{stepId}</span>
-              <StatusLabel status="awaiting_gate" />
-            </button>
-          </li>
-        ))}
-      </ul>
+      <RunStepList
+        label="Gates off the graph"
+        steps={offGraph.map((stepId) => ({ stepId, title: titles[stepId] ?? null, status: 'awaiting_gate' }))}
+        onSelect={onSelect}
+      />
     </section>
   );
 }
@@ -328,16 +262,8 @@ function OffGraphGates({ detail, onSelect }: OffGraphGatesProps) {
 function StaleNotice({ readAt }: { readAt: number }) {
   const at = new Date(readAt);
   return (
-    <p
-      role="status"
-      className="nested-card max-w-xl px-3 py-2 text-sm text-slate-300"
-    >
+    <p role="status" className="nested-card px-3 py-2 text-sm text-slate-300">
       Last updated at <time dateTime={at.toISOString()}>{at.toLocaleTimeString()}</time> — could not refresh.
     </p>
   );
-}
-
-function StatusLabel({ status }: { status: string }) {
-  const meta = runStatusMeta(status);
-  return <span className={`text-xs ${TONE_TEXT[meta.tone]}`}>{meta.label}</span>;
 }

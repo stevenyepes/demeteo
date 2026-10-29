@@ -4,6 +4,8 @@ import { CeremonyError } from './components/CeremonyError';
 import { HubNav } from './components/HubNav';
 import { onSessionGone } from './lib/api';
 import { fetchSession, signOut } from './lib/auth';
+import { FleetProvider, useFleet } from './lib/fleetContext';
+import { summarizeFleet } from './lib/fleetSummary';
 import { parseRoute, type Route, routeHref } from './lib/router';
 import { useRoute } from './lib/useRoute';
 import { AddInstance } from './views/AddInstance';
@@ -55,7 +57,7 @@ function viewFor(route: Route, onSession: () => void): ReactElement {
     case 'instance':
       return <Instance instanceId={route.instanceId} />;
     case 'runs':
-      return <Runs />;
+      return <Runs instanceId={route.instanceId} featureId={route.featureId} />;
     case 'run':
       return <Run instanceId={route.instanceId} featureId={route.featureId} />;
     case 'dispatch':
@@ -155,45 +157,79 @@ function App() {
   }
   const otherAuthView =
     !signedIn && (shown.name === 'sign-in' || shown.name === 'sign-up') ? OTHER_AUTH_VIEW[shown.name] : null;
-  return (
-    <div className="flex h-screen flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-8 gap-y-2 border-b border-white/5 px-8 py-3">
-        <span className="font-heading text-lg font-semibold text-white tracking-tight">Demeteo Hub</span>
-        {signedIn && <HubNav route={shown} signingOut={signingOut} onSignOut={endSession} />}
-      </header>
-      {/* `body` is `height: 100vh; overflow: hidden` in `src/App.css`, so a view
-          taller than the window is unreachable unless this element scrolls. */}
-      <main aria-busy={session.status === 'loading'} className="min-h-0 flex-1 overflow-y-auto p-8">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-          {session.status === 'unknown' && (
-            <>
-              <CeremonyError error={session.error} />
-              <p className="text-sm text-slate-400">
-                The Hub did not say whether you are signed in. Reload the page to ask again.
+  const content = (
+    // `body` is `height: 100vh; overflow: hidden` in `src/App.css`, so a view
+    // taller than the window is unreachable unless this element scrolls.
+    <main
+      aria-busy={session.status === 'loading'}
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pt-8 pb-14 sm:px-10"
+    >
+      <div className={`flex w-full flex-col gap-4 ${signedIn ? '' : 'mx-auto max-w-md'}`}>
+        {session.status === 'unknown' && (
+          <>
+            <CeremonyError error={session.error} />
+            <p className="text-sm text-slate-400">
+              The Hub did not say whether you are signed in. Reload the page to ask again.
+            </p>
+          </>
+        )}
+        {signOutFailure && <CeremonyError error={signOutFailure.error} />}
+        {(signedIn || session.status === 'signed-out') && (
+          <div key={shownKey} className="animate-fade-in">
+            {viewFor(shown, () => setSession({ status: 'signed-in' }))}
+            {otherAuthView && (
+              <p className="mt-4 text-sm text-slate-400">
+                {otherAuthView.prompt}{' '}
+                <a
+                  href={routeHref(otherAuthView.route)}
+                  className="text-accent-ink transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
+                >
+                  {otherAuthView.label}
+                </a>
               </p>
-            </>
-          )}
-          {signOutFailure && <CeremonyError error={signOutFailure.error} />}
-          {(signedIn || session.status === 'signed-out') && (
-            <div key={shownKey} className="animate-fade-in">
-              {viewFor(shown, () => setSession({ status: 'signed-in' }))}
-              {otherAuthView && (
-                <p className="mt-4 text-sm text-slate-400">
-                  {otherAuthView.prompt}{' '}
-                  <a
-                    href={routeHref(otherAuthView.route)}
-                    className="text-accent-ink transition-colors hover:text-cyan-300 focus-visible:text-cyan-300"
-                  >
-                    {otherAuthView.label}
-                  </a>
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
+            )}
+          </div>
+        )}
+      </div>
+    </main>
   );
+
+  if (!signedIn) {
+    return (
+      <div className="flex h-screen flex-col">
+        <header className="flex shrink-0 items-center border-b border-hairline px-4 py-3 sm:px-8">
+          <span className="font-heading text-lg font-semibold text-white">Demeteo Hub</span>
+        </header>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <FleetProvider readKey={shownKey}>
+      <div className="flex h-screen">
+        <aside className="flex w-16 shrink-0 flex-col items-center gap-4 border-r border-hairline bg-surface-sidebar py-5">
+          <a
+            href={routeHref({ name: 'fleet' })}
+            aria-label="Demeteo Hub"
+            title="Demeteo Hub"
+            className="font-heading text-2xl font-extrabold text-accent-ink"
+          >
+            D
+          </a>
+          <ShellNav route={shown} signingOut={signingOut} onSignOut={endSession} />
+        </aside>
+        {content}
+      </div>
+    </FleetProvider>
+  );
+}
+
+/** Inside the provider, so the badge reads the same fleet answer the Fleet view does. */
+function ShellNav(props: { route: Route; signingOut: boolean; onSignOut: () => void }) {
+  const { fleet } = useFleet();
+  const needsYou = fleet === null ? null : summarizeFleet(fleet).gatesWaiting;
+  return <HubNav {...props} needsYou={needsYou} />;
 }
 
 export default App;

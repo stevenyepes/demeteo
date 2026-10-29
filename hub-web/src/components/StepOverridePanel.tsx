@@ -23,7 +23,7 @@ interface StepOverridePanelProps {
 const AGENT_KINDS = Object.keys(EFFORT_SUPPORT);
 
 const SELECT_CLASS =
-  'input-field focus:border-cyan-400! focus:shadow-none! focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40';
+  'input-field disabled:cursor-not-allowed disabled:opacity-40';
 
 /**
  * Plain controls, not `src/components/ui/HarnessModelPicker.tsx`: that picker
@@ -100,8 +100,7 @@ export function StepOverridePanel({ node, override, defaultAgentKind, onChange, 
           ))}
         </select>
         <p id={`${agentId}-help`} className="text-xs text-slate-500">
-          The Hub has no list of this instance's harnesses. The instance checks the agent and refuses one it has not
-          registered as harness_not_registered.
+          The instance checks the agent and refuses one it has not registered as harness_not_registered.
         </p>
       </div>
       <div className="flex flex-col gap-1.5">

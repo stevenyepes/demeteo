@@ -1,6 +1,8 @@
+import { Chip } from '../../../src/components/ui/Chip';
 import { buttonClasses } from '../../../src/components/ui/Button';
 import { elapsedText, type NeedsYouItem } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
+import { ToneCard } from './ToneCard';
 
 interface NeedsYouCardProps {
   item: NeedsYouItem;
@@ -13,23 +15,32 @@ interface NeedsYouCardProps {
  * route, where the step's output can be read first.
  */
 export function NeedsYouCard({ item, now }: NeedsYouCardProps) {
+  const details = [item.projectName, item.stepTitle ?? item.stepId, `waiting ${elapsedText(item.since, now)}`].filter(
+    (part) => part !== null,
+  );
   return (
-    <article className="nested-card flex flex-wrap items-center gap-3 border-amber-500/30 bg-amber-500/10 px-4 py-3">
-      <span className="flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
-        <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-pulse-glow-amber" />
-        Gate needs you
-      </span>
-      <span className="font-medium text-slate-200 break-all">{item.instanceLabel}</span>
-      <span className="font-mono text-xs text-slate-300 break-all">{item.featureId}</span>
-      {item.stepId !== null && <span className="font-mono text-xs text-slate-400 break-all">{item.stepId}</span>}
-      <span className="text-xs text-slate-400">waiting {elapsedText(item.since, now)}</span>
+    <ToneCard tone="amber" surface="panel" needsYou className="flex items-center gap-4 py-4 pr-4">
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip tone="amber" dot>
+            Gate needs you
+          </Chip>
+          <span className="font-mono text-xs text-slate-400 break-all">{item.instanceLabel}</span>
+        </div>
+        {item.title === null ? (
+          <span className="font-mono text-sm text-slate-200 break-all">{item.featureId}</span>
+        ) : (
+          <span className="font-heading text-base font-semibold text-white break-words">{item.title}</span>
+        )}
+        <span className="font-mono text-xs text-slate-400 break-all">{details.join(' · ')}</span>
+      </div>
       <a
         href={routeHref({ name: 'run', instanceId: item.instanceId, featureId: item.featureId })}
-        aria-label={`Review ${item.featureId} on ${item.instanceLabel}`}
-        className={`ml-auto ${buttonClasses('secondary', 'sm')} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400`}
+        aria-label={`Review ${item.title ?? item.featureId} on ${item.instanceLabel}`}
+        className={`shrink-0 ${buttonClasses('secondary', 'sm')}`}
       >
         Review
       </a>
-    </article>
+    </ToneCard>
   );
 }

@@ -68,6 +68,12 @@ const WIRE_RUN = {
   started_at: 1_700_000_000,
   updated_at: 1_700_000_300,
   cost_cents: null,
+  title: 'Retry webhooks',
+  project_id: 'p-1',
+  project_name: 'demeteo',
+  step_id: 'review',
+  step_title: 'Review gate',
+  tickets: { completed: 1, failed: 0, running: 0 },
 };
 
 const WORKFLOW = {
@@ -86,6 +92,7 @@ const WIRE_PENDING_GATE = {
   step_execution_id: 'se-2',
   step_id: 'review',
   since: 1_700_000_250,
+  step_title: 'Review gate',
 };
 
 const WIRE_EVENT = {
@@ -102,9 +109,12 @@ const WIRE_DETAIL = {
   feature_id: 'f-1',
   status: 'running',
   workflow: null,
+  title: 'Retry webhooks',
+  project_id: 'p-1',
+  project_name: 'demeteo',
   steps: [
-    { step_id: 'plan', state: 'completed' },
-    { step_id: 'build', state: 'failed' },
+    { step_id: 'plan', state: 'completed', title: 'Plan' },
+    { step_id: 'build', state: 'failed', title: null },
   ],
   tickets: { completed: 2, failed: 1, running: 3 },
   pending_gates: [WIRE_PENDING_GATE],
@@ -144,6 +154,13 @@ describe('listRuns', () => {
         startedAt: 1_700_000_000,
         updatedAt: 1_700_000_300,
         costCents: null,
+
+        title: 'Retry webhooks',
+        projectId: 'p-1',
+        projectName: 'demeteo',
+        stepId: 'review',
+        stepTitle: 'Review gate',
+        tickets: { completed: 1, failed: 0, running: 0 },
       },
       {
         instanceId: OTHER_ID,
@@ -152,6 +169,13 @@ describe('listRuns', () => {
         startedAt: null,
         updatedAt: 1_700_000_300,
         costCents: null,
+
+        title: 'Retry webhooks',
+        projectId: 'p-1',
+        projectName: 'demeteo',
+        stepId: 'review',
+        stepTitle: 'Review gate',
+        tickets: { completed: 1, failed: 0, running: 0 },
       },
     ]);
     expect(pending).toEqual([]);
@@ -181,6 +205,11 @@ describe('listRuns', () => {
     ['no feature_id', { ...WIRE_RUN, feature_id: undefined }],
     ['no updated_at', { ...WIRE_RUN, updated_at: undefined }],
     ['a string cost_cents', { ...WIRE_RUN, cost_cents: '120' }],
+    ['no title', { ...WIRE_RUN, title: undefined }],
+    ['a numeric project_name', { ...WIRE_RUN, project_name: 7 }],
+    ['no step_title', { ...WIRE_RUN, step_title: undefined }],
+    ['no tickets', { ...WIRE_RUN, tickets: undefined }],
+    ['a string ticket count', { ...WIRE_RUN, tickets: { completed: '1', failed: 0, running: 0 } }],
     ['null', null],
   ])('refuses a run with %s', async (_, run) => {
     stubFetch([get('/v1/runs', { runs: [run] })]);
@@ -207,12 +236,17 @@ describe('getRunDetail', () => {
       featureId: 'f-1',
       status: 'running',
       workflow: null,
+      title: 'Retry webhooks',
+      projectId: 'p-1',
+      projectName: 'demeteo',
       steps: [
-        { stepId: 'plan', state: 'completed' },
-        { stepId: 'build', state: 'failed' },
+        { stepId: 'plan', state: 'completed', title: 'Plan' },
+        { stepId: 'build', state: 'failed', title: null },
       ],
       tickets: { completed: 2, failed: 1, running: 3 },
-      pendingGates: [{ featureId: 'f-1', stepExecutionId: 'se-2', stepId: 'review', since: 1_700_000_250 }],
+      pendingGates: [
+        { featureId: 'f-1', stepExecutionId: 'se-2', stepId: 'review', since: 1_700_000_250, stepTitle: 'Review gate' },
+      ],
       events: [
         {
           offset: 4,
@@ -267,7 +301,14 @@ describe('getRunDetail', () => {
   it.each<[string, unknown]>([
     ['an unknown status', { ...WIRE_DETAIL, status: 'paused' }],
     ['an unknown step state', { ...WIRE_DETAIL, steps: [{ step_id: 'plan', state: 'awaiting_gate' }] }],
-    ['a step with no step_id', { ...WIRE_DETAIL, steps: [{ state: 'running' }] }],
+    ['a step with no step_id', { ...WIRE_DETAIL, steps: [{ state: 'running', title: null }] }],
+    ['a step with no title', { ...WIRE_DETAIL, steps: [{ step_id: 'plan', state: 'running' }] }],
+    ['no title', { ...WIRE_DETAIL, title: undefined }],
+    ['no project_name', { ...WIRE_DETAIL, project_name: undefined }],
+    [
+      'a pending gate with no step_title',
+      { ...WIRE_DETAIL, pending_gates: [{ ...WIRE_PENDING_GATE, step_title: undefined }] },
+    ],
     ['no workflow', { ...WIRE_DETAIL, workflow: undefined }],
     ['a workflow with no nodes', { ...WIRE_DETAIL, workflow: { ...WORKFLOW, nodes: undefined } }],
     ['a workflow node with no id', { ...WIRE_DETAIL, workflow: { ...WORKFLOW, nodes: [{ type: 'agent' }] } }],

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowCanvasProps } from '../../../src/components/canvas/WorkflowCanvas';
 import { TONE_CHIP } from '../../../src/lib/runStatus';
 import { setCsrfToken } from '../lib/api';
+import { FleetProvider } from '../lib/fleetContext';
 import { Dispatch } from './Dispatch';
 
 /** What each render handed the canvas; the real one lays out through an elk worker jsdom cannot run. */
@@ -114,6 +115,8 @@ function fleetRow(overrides: Record<string, unknown> = {}): Record<string, unkno
     last_seen: NOW - 60,
     live_runs: 0,
     needs_you: [],
+    harnesses: null,
+    project_count: null,
     ...overrides,
   };
 }
@@ -336,7 +339,11 @@ describe('Dispatch', () => {
       { request: 'GET /v1/fleet', answer: () => json({ instances: [fleetRow()] }) },
       { request: `GET ${PATH}`, answer: () => json(detail()) },
     ]);
-    render(<Dispatch />);
+    render(
+      <FleetProvider readKey="dispatch">
+        <Dispatch />
+      </FleetProvider>,
+    );
 
     const list = await screen.findByRole('region', { name: 'Where to run' });
     await userEvent.click(within(list).getByRole('button', { name: 'laptop' }));

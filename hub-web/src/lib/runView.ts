@@ -1,5 +1,5 @@
 import type { NodeRunStatus } from '../../../src/components/canvas/types';
-import type { PendingGate, RunEvent, StepView } from './runs';
+import type { PendingGate, RunDetail, RunEvent, StepView } from './runs';
 
 export type TicketRow = { ticketId: string; lastKind: string; lastAt: number };
 
@@ -43,4 +43,37 @@ export function ticketRows(events: RunEvent[]): TicketRow[] {
 
 function isLater(event: RunEvent, than: RunEvent): boolean {
   return event.occurredAt !== than.occurredAt ? event.occurredAt > than.occurredAt : event.offset > than.offset;
+}
+
+/** Titles from the pinned graph first, then from the steps the instance reported. */
+export function stepTitles(detail: Pick<RunDetail, 'steps' | 'pendingGates' | 'workflow'>): Record<string, string> {
+  const titles: Record<string, string> = {};
+  for (const step of detail.steps) if (step.title !== null) titles[step.stepId] = step.title;
+  for (const gate of detail.pendingGates) {
+    if (gate.stepId !== null && gate.stepTitle !== null) titles[gate.stepId] = gate.stepTitle;
+  }
+  for (const node of detail.workflow?.nodes ?? []) titles[node.id] = node.title;
+  return titles;
+}
+
+/**
+ * The graph's nodes in columns for a one-line pipeline: a node sits one column
+ * after its latest predecessor, so steps that fan out from one node share a
+ * column. Nodes are placed in declared order and only an already-placed
+ * predecessor counts, which keeps a rework edge pointing back up the pipeline
+ * from dragging its target forward.
+ */
+export function pipelineColumns(workflow: Pick<NonNullable<RunDetail['workflow']>, 'nodes' | 'edges'>): string[][] {
+  const column = new Map<string, number>();
+  const columns: string[][] = [];
+  for (const node of workflow.nodes) {
+    let at = 0;
+    for (const edge of workflow.edges) {
+      const from = edge.to === node.id ? column.get(edge.from) : undefined;
+      if (from !== undefined) at = Math.max(at, from + 1);
+    }
+    column.set(node.id, at);
+    columns[at] = [...(columns[at] ?? []), node.id];
+  }
+  return columns.filter((ids) => ids !== undefined);
 }

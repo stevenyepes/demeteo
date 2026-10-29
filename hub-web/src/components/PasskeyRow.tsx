@@ -1,5 +1,8 @@
+import { KeyRound } from 'lucide-react';
+
 import { Button } from '../../../src/components/ui/Button';
-import { TONE_CHIP, type RunStatusTone } from '../../../src/lib/runStatus';
+import { Chip } from '../../../src/components/ui/Chip';
+import type { RunStatusTone } from '../../../src/lib/runStatus';
 import type { Passkey, PasskeyStatus } from '../lib/passkeys';
 
 /** A pending passkey waits for a trusted one to endorse it, so it is the one amber state here. */
@@ -8,8 +11,6 @@ const STATUS: Record<PasskeyStatus, { text: string; tone: RunStatusTone }> = {
   pending: { text: 'Pending', tone: 'amber' },
   revoked: { text: 'Revoked', tone: 'ruby' },
 };
-
-const CHIP = 'rounded-full border px-2 py-0.5 text-xs font-medium';
 
 interface PasskeyRowProps {
   passkey: Passkey;
@@ -23,14 +24,13 @@ interface PasskeyRowProps {
 export function PasskeyRow({ passkey, lastTrusted, disabled, onEndorse, onRevoke }: PasskeyRowProps) {
   const status = STATUS[passkey.status];
   return (
-    <li className="nested-card flex flex-wrap items-center gap-3 px-4 py-3">
-      <span className="font-medium text-slate-200 break-all">{passkey.label}</span>
-      {passkey.current && (
-        <span className={`${CHIP} border-accent-edge bg-accent-tint text-accent-ink`}>
-          This session
-        </span>
-      )}
-      <span className={`${CHIP} ${TONE_CHIP[status.tone]}`}>{status.text}</span>
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3">
+      <KeyRound aria-hidden="true" className="h-4 w-4 shrink-0 text-slate-500" />
+      <span className="font-medium text-slate-100 break-all">{passkey.label}</span>
+      {passkey.current && <span className="text-xs text-slate-400">This session</span>}
+      <Chip tone={status.tone} dot={false}>
+        {status.text}
+      </Chip>
       <div className="ml-auto flex items-center gap-2">
         {passkey.status === 'pending' && (
           <Button

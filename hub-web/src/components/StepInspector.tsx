@@ -1,6 +1,7 @@
 import { useId } from 'react';
 
 import { nodeTypeMeta } from '../../../src/components/canvas/types';
+import { Chip } from '../../../src/components/ui/Chip';
 import { runStatusMeta, TONE_TEXT } from '../../../src/lib/runStatus';
 import type { HubScope } from '../lib/fleet';
 import type { RequestTicket } from '../lib/requests';
@@ -58,17 +59,19 @@ export function StepInspector({
   const gate = detail.pendingGates.find((candidate) => candidate.stepId === stepId);
   const decision = heldDecision(gateDecisions, stepId, gate?.stepExecutionId);
   const state = step === undefined ? null : runStatusMeta(step.state);
+  const title = node?.title ?? step?.title ?? gate?.stepTitle ?? null;
   return (
-    <section aria-labelledby={headingId} className="nested-card px-4 py-3">
-      <div className="flex items-baseline gap-3">
-        <h2 id={headingId} className="font-heading text-lg font-semibold text-white">
+    <section aria-labelledby={headingId} className="panel p-5 text-sm text-slate-400">
+      <div className="flex items-center gap-3">
+        <h2 id={headingId} className="font-heading text-base font-semibold text-white">
           Step
         </h2>
+        {step !== undefined && state !== null && <Chip status={step.state}>{state.label}</Chip>}
         <Button variant="secondary" size="sm" onClick={onClose} className="ml-auto">
           Close
         </Button>
       </div>
-      <dl aria-label="Step details" className="mt-2 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
+      <dl aria-label="Step details" className="mt-3 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
         <dt>Id</dt>
         <dd className="font-mono text-slate-200 break-all">{stepId}</dd>
         <dt>State</dt>
@@ -79,8 +82,12 @@ export function StepInspector({
           <>
             <dt>Kind</dt>
             <dd className="text-slate-200">{nodeTypeMeta(node.type).label}</dd>
+          </>
+        )}
+        {title !== null && (
+          <>
             <dt>Title</dt>
-            <dd className="text-slate-200 break-words">{node.title}</dd>
+            <dd className="text-slate-200 break-words">{title}</dd>
           </>
         )}
         {gate !== undefined && (
@@ -112,7 +119,7 @@ export function StepInspector({
         />
       )}
       {decision !== undefined && (
-        <section aria-labelledby={decisionHeadingId} className="mt-3 border-t border-white/10 pt-3">
+        <section aria-labelledby={decisionHeadingId} className="mt-4 border-t border-hairline pt-4">
           <h3 id={decisionHeadingId} className="font-heading text-base font-semibold text-white">
             Gate decision
           </h3>

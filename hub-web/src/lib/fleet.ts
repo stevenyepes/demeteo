@@ -6,12 +6,16 @@ export type { RunStatus, RunSummary };
 
 export type HubScope = 'read' | 'spend' | 'gates';
 
+/** The three labels are `null` when the instance's snapshot gives none (docs/HUB.md §6.4). */
 export type NeedsYou = {
   instanceId: string;
   featureId: string;
   stepId: string | null;
   stepExecutionId: string;
   since: number;
+  title: string | null;
+  projectName: string | null;
+  stepTitle: string | null;
 };
 
 export type FleetInstance = {
@@ -27,6 +31,9 @@ export type FleetInstance = {
   /** `null` is withheld without `read` (docs/HUB.md §6.4), never a count of zero. */
   liveRuns: number | null;
   needsYou: NeedsYou[] | null;
+  /** Harness kinds only; `null` without `read`, before a snapshot, or from a desktop that does not report them. */
+  harnesses: string[] | null;
+  projectCount: number | null;
 };
 
 export type ProjectSummary = { id: string; name: string; remoteUrl: string | null };
@@ -68,7 +75,7 @@ export type InstanceDetail = {
   /** `null` is withheld without `read` (docs/HUB.md §6.4), never an empty list. */
   projects: ProjectSummary[] | null;
   liveRuns: RunSummary[] | null;
-  harnesses: null;
+  harnesses: string[] | null;
   workflows: WorkflowChoice[] | null;
   runShape: RunShapeDefaults[] | null;
 };
@@ -79,6 +86,9 @@ type WireNeedsYou = {
   step_id: string | null;
   step_execution_id: string;
   since: number;
+  title: string | null;
+  project_name: string | null;
+  step_title: string | null;
 };
 
 type WireFleetInstance = {
@@ -93,6 +103,8 @@ type WireFleetInstance = {
   last_seen: number | null;
   live_runs: number | null;
   needs_you: WireNeedsYou[] | null;
+  harnesses: string[] | null;
+  project_count: number | null;
 };
 
 type WireProject = { id: string; name: string; remote_url: string | null };
@@ -136,7 +148,7 @@ type WireInstanceDetail = {
   read_granted: boolean;
   projects: WireProject[] | null;
   live_runs: WireRunSummary[] | null;
-  harnesses: null;
+  harnesses: string[] | null;
   workflows: WireWorkflow[] | null;
   run_shape: WireRunShape[] | null;
 };
@@ -167,6 +179,8 @@ function fleetInstanceOf(wire: WireFleetInstance): FleetInstance {
     lastSeen: wire.last_seen,
     liveRuns: wire.live_runs,
     needsYou: wire.needs_you === null ? null : wire.needs_you.map(needsYouOf),
+    harnesses: wire.harnesses === null ? null : [...wire.harnesses],
+    projectCount: wire.project_count,
   };
 }
 
@@ -177,6 +191,9 @@ function needsYouOf(wire: WireNeedsYou): NeedsYou {
     stepId: wire.step_id,
     stepExecutionId: wire.step_execution_id,
     since: wire.since,
+    title: wire.title,
+    projectName: wire.project_name,
+    stepTitle: wire.step_title,
   };
 }
 
@@ -194,7 +211,7 @@ function instanceDetailOf(wire: WireInstanceDetail): InstanceDetail {
     readGranted: wire.read_granted,
     projects: wire.projects === null ? null : wire.projects.map(projectOf),
     liveRuns: wire.live_runs === null ? null : wire.live_runs.map(runSummaryOf),
-    harnesses: null,
+    harnesses: wire.harnesses === null ? null : [...wire.harnesses],
     workflows: wire.workflows === null ? null : wire.workflows.map(workflowOf),
     runShape: wire.run_shape === null ? null : wire.run_shape.map(runShapeOf),
   };
@@ -244,7 +261,10 @@ const isWireNeedsYou: Guard<WireNeedsYou> = (value): value is WireNeedsYou =>
   typeof memberOf(value, 'feature_id') === 'string' &&
   isStringOrNull(memberOf(value, 'step_id')) &&
   typeof memberOf(value, 'step_execution_id') === 'string' &&
-  typeof memberOf(value, 'since') === 'number';
+  typeof memberOf(value, 'since') === 'number' &&
+  isStringOrNull(memberOf(value, 'title')) &&
+  isStringOrNull(memberOf(value, 'project_name')) &&
+  isStringOrNull(memberOf(value, 'step_title'));
 
 const isWireFleetInstance: Guard<WireFleetInstance> = (value): value is WireFleetInstance =>
   typeof memberOf(value, 'id') === 'string' &&
@@ -257,7 +277,9 @@ const isWireFleetInstance: Guard<WireFleetInstance> = (value): value is WireFlee
   typeof memberOf(value, 'read_granted') === 'boolean' &&
   isNumberOrNull(memberOf(value, 'last_seen')) &&
   isNumberOrNull(memberOf(value, 'live_runs')) &&
-  isListOrNull(memberOf(value, 'needs_you'), isWireNeedsYou);
+  isListOrNull(memberOf(value, 'needs_you'), isWireNeedsYou) &&
+  isListOrNull(memberOf(value, 'harnesses'), isString) &&
+  isNumberOrNull(memberOf(value, 'project_count'));
 
 const isFleet: Guard<{ instances: WireFleetInstance[] }> = (
   value,
@@ -326,9 +348,13 @@ const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireIn
   typeof memberOf(value, 'read_granted') === 'boolean' &&
   isListOrNull(memberOf(value, 'projects'), isWireProject) &&
   isListOrNull(memberOf(value, 'live_runs'), isWireRunSummary) &&
-  memberOf(value, 'harnesses') === null &&
+  isListOrNull(memberOf(value, 'harnesses'), isString) &&
   isListOrNull(memberOf(value, 'workflows'), isWireWorkflow) &&
   isListOrNull(memberOf(value, 'run_shape'), isWireRunShape);
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
+}
 
 function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string';

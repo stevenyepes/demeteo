@@ -125,10 +125,12 @@ describe('hub-web, from no account to signed back in', () => {
       answer('GET /v1/session', { error: 'unauthenticated' }, 401),
       answer('POST /v1/register/start', { ceremony_id: 'cer-register', options: CREATION_OPTIONS }),
       answer('POST /v1/register/finish', { csrf_token: 'csrf-from-register', credential_id: 'cred-1' }),
+      answer('GET /v1/runs?status=running', { runs: [] }),
       answer('GET /v1/fleet', { instances: [] }),
       answer('POST /v1/session/end', {}),
       answer('POST /v1/session/start', { ceremony_id: 'cer-sign-in', options: REQUEST_OPTIONS }),
       answer('POST /v1/session/finish', { csrf_token: 'csrf-from-sign-in', credential_id: 'cred-1' }),
+      answer('GET /v1/runs?status=running', { runs: [] }),
       answer('GET /v1/fleet', { instances: [] }),
     ]);
     webauthn.createCredential.mockResolvedValueOnce(ATTESTATION);
@@ -150,6 +152,7 @@ describe('hub-web, from no account to signed back in', () => {
         csrf: null,
         body: { ceremony_id: 'cer-register', credential: ATTESTATION },
       },
+      { request: 'GET /v1/runs?status=running', csrf: null, body: undefined },
       { request: 'GET /v1/fleet', csrf: null, body: undefined },
     ]);
     expect(webauthn.createCredential.mock.calls).toEqual([[CREATION_OPTIONS]]);
@@ -159,7 +162,7 @@ describe('hub-web, from no account to signed back in', () => {
     const signInControl = await screen.findByRole('button', { name: 'Sign in with a passkey' });
     expect(shownView()).toBe('Sign in');
     expect(screen.queryByRole('navigation')).toBeNull();
-    expect(sent.slice(4)).toEqual([
+    expect(sent.slice(5)).toEqual([
       { request: 'POST /v1/session/end', csrf: 'csrf-from-register', body: {} },
     ]);
 
@@ -168,13 +171,14 @@ describe('hub-web, from no account to signed back in', () => {
     await screen.findByRole('button', { name: 'Sign out' });
     expect(shownView()).toBe('Fleet');
     await screen.findByText(/no instances are paired/i);
-    expect(sent.slice(5)).toEqual([
+    expect(sent.slice(6)).toEqual([
       { request: 'POST /v1/session/start', csrf: null, body: {} },
       {
         request: 'POST /v1/session/finish',
         csrf: null,
         body: { ceremony_id: 'cer-sign-in', credential: SIGN_IN_ASSERTION },
       },
+      { request: 'GET /v1/runs?status=running', csrf: null, body: undefined },
       { request: 'GET /v1/fleet', csrf: null, body: undefined },
     ]);
     expect(webauthn.getCredential.mock.calls).toEqual([[REQUEST_OPTIONS]]);
@@ -191,6 +195,7 @@ describe('hub-web, opened signed out on a pairing link', () => {
       answer('POST /v1/session/start', { ceremony_id: 'cer-sign-in', options: REQUEST_OPTIONS }),
       answer('POST /v1/session/finish', { csrf_token: 'csrf-from-sign-in', credential_id: 'cred-1' }),
       answer('POST /v1/pairing/start', PAIRING_PROMPT),
+      answer('GET /v1/fleet', { instances: [] }),
     ]);
     webauthn.getCredential.mockResolvedValueOnce(SIGN_IN_ASSERTION);
     window.location.hash = PAIRING_LINK;
@@ -222,6 +227,7 @@ describe('hub-web, opened signed out on a pairing link', () => {
         body: { ceremony_id: 'cer-sign-in', credential: SIGN_IN_ASSERTION },
       },
       { request: 'POST /v1/pairing/start', csrf: 'csrf-from-sign-in', body: { request: PAIRING_REQUEST } },
+      { request: 'GET /v1/fleet', csrf: null, body: undefined },
     ]);
     expect(webauthn.getCredential.mock.calls).toEqual([[REQUEST_OPTIONS]]);
     expect(pending).toEqual([]);
@@ -239,6 +245,7 @@ describe('hub-web, when the session ends under it', () => {
           wirePasskey('cred-4', 'tablet', 'trusted', false),
         ],
       }),
+      answer('GET /v1/fleet', { instances: [] }),
       answer('POST /v1/passkeys/revoke/start', { ceremony_id: 'cer-revoke', options: REQUEST_OPTIONS }),
       answer('POST /v1/passkeys/revoke/finish', {
         passkey: wirePasskey('cred-1', 'laptop', 'revoked', true),
@@ -252,6 +259,7 @@ describe('hub-web, when the session ends under it', () => {
           wirePasskey('cred-4', 'tablet', 'trusted', true),
         ],
       }),
+      answer('GET /v1/fleet', { instances: [] }),
     ]);
     webauthn.getAssertion.mockResolvedValueOnce(REVOKING_ASSERTION);
     webauthn.getCredential.mockResolvedValueOnce(SIGN_IN_ASSERTION);
@@ -264,7 +272,7 @@ describe('hub-web, when the session ends under it', () => {
     expect(shownView()).toBe('Sign in');
     expect(screen.queryByRole('navigation')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(sent.slice(2)).toEqual([
+    expect(sent.slice(3)).toEqual([
       { request: 'POST /v1/passkeys/revoke/start', csrf: 'csrf-laptop', body: { credential_id: 'cred-1' } },
       {
         request: 'POST /v1/passkeys/revoke/finish',
@@ -282,7 +290,7 @@ describe('hub-web, when the session ends under it', () => {
     await screen.findByRole('button', { name: 'Revoke tablet' });
     expect(shownView()).toBe('Passkeys');
     expect(screen.getByRole('navigation')).toBeInTheDocument();
-    expect(sent.slice(5)).toEqual([
+    expect(sent.slice(6)).toEqual([
       { request: 'POST /v1/session/start', csrf: null, body: {} },
       {
         request: 'POST /v1/session/finish',
@@ -290,6 +298,7 @@ describe('hub-web, when the session ends under it', () => {
         body: { ceremony_id: 'cer-sign-in', credential: SIGN_IN_ASSERTION },
       },
       { request: 'GET /v1/passkeys', csrf: null, body: undefined },
+      { request: 'GET /v1/fleet', csrf: null, body: undefined },
     ]);
     expect(pending).toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
@@ -304,6 +313,7 @@ describe('hub-web, when the session ends under it', () => {
           wirePasskey('cred-2', 'phone', 'pending', false),
         ],
       }),
+      answer('GET /v1/fleet', { instances: [] }),
       answer('POST /v1/passkeys/endorse/start', { error: 'internal' }, 500),
       answer('GET /v1/passkeys', { error: 'unauthenticated' }, 401),
     ]);
@@ -316,7 +326,7 @@ describe('hub-web, when the session ends under it', () => {
     expect(shownView()).toBe('Sign in');
     expect(screen.queryByRole('navigation')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(sent.slice(2)).toEqual([
+    expect(sent.slice(3)).toEqual([
       { request: 'POST /v1/passkeys/endorse/start', csrf: 'csrf-laptop', body: { credential_id: 'cred-2' } },
       { request: 'GET /v1/passkeys', csrf: null, body: undefined },
     ]);

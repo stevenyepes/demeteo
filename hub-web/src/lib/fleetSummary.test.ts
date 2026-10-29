@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FleetInstance, NeedsYou } from './fleet';
-import { elapsedText, needsYouOldestFirst, platformText, redactUserinfo, summarizeFleet } from './fleetSummary';
+import {
+  elapsedText,
+  fleetSummaryText,
+  needsYouOldestFirst,
+  platformText,
+  redactUserinfo,
+  summarizeFleet,
+  ticketText,
+} from './fleetSummary';
 
 function instance(overrides: Partial<FleetInstance>): FleetInstance {
   return {
@@ -16,12 +24,23 @@ function instance(overrides: Partial<FleetInstance>): FleetInstance {
     lastSeen: null,
     liveRuns: 0,
     needsYou: [],
+    harnesses: null,
+    projectCount: null,
     ...overrides,
   };
 }
 
 function gate(featureId: string, since: number): NeedsYou {
-  return { instanceId: 'unused', featureId, stepId: null, stepExecutionId: `exec-${featureId}`, since };
+  return {
+    instanceId: 'unused',
+    featureId,
+    stepId: null,
+    stepExecutionId: `exec-${featureId}`,
+    since,
+    title: null,
+    projectName: null,
+    stepTitle: null,
+  };
 }
 
 describe('summarizeFleet', () => {
@@ -123,5 +142,26 @@ describe('redactUserinfo', () => {
 
   it('returns a string that is not a url unchanged', () => {
     expect(redactUserinfo('not a url')).toBe('not a url');
+  });
+});
+
+describe('fleetSummaryText', () => {
+  it('pluralises each count on its own', () => {
+    expect(fleetSummaryText({ instances: 1, online: 0, runsActive: 1, gatesWaiting: 2, withheld: 0 })).toBe(
+      '1 instance · 0 online · 1 run active · 2 need you',
+    );
+    expect(fleetSummaryText({ instances: 6, online: 4, runsActive: 5, gatesWaiting: 0, withheld: 1 })).toBe(
+      '6 instances · 4 online · 5 runs active · 0 need you',
+    );
+  });
+});
+
+describe('ticketText', () => {
+  it('says how many landed and failed, and nothing for a run with no tickets', () => {
+    expect(ticketText(null)).toBeNull();
+    expect(ticketText({ completed: 0, failed: 0, running: 0 })).toBeNull();
+    expect(ticketText({ completed: 0, failed: 0, running: 1 })).toBe('0 tickets landed');
+    expect(ticketText({ completed: 1, failed: 0, running: 1 })).toBe('1 ticket landed');
+    expect(ticketText({ completed: 3, failed: 2, running: 0 })).toBe('3 tickets landed, 2 failed');
   });
 });

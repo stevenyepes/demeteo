@@ -16,18 +16,18 @@ export function TicketProgress({ detail, now }: TicketProgressProps) {
   const rows = ticketRows(detail.events);
   const { completed, failed, running } = detail.tickets;
   return (
-    <section aria-labelledby={headingId} className="nested-card px-4 py-3">
-      <h2 id={headingId} className="font-heading text-lg font-semibold text-white">
+    <section aria-labelledby={headingId} className="panel p-5 text-sm text-slate-400">
+      <h2 id={headingId} className="font-heading text-base font-semibold text-white">
         Tickets
       </h2>
-      <dl aria-label="Ticket counts" className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
+      <dl aria-label="Ticket counts" className="mt-3 flex flex-wrap gap-x-6 gap-y-1">
         <div className="flex items-baseline gap-2">
           <dt>Completed</dt>
-          <dd className="text-slate-200">{completed}</dd>
+          <dd className="text-emerald-300">{completed}</dd>
         </div>
         <div className="flex items-baseline gap-2">
           <dt>Running</dt>
-          <dd className="text-emerald-300">{running}</dd>
+          <dd className="text-cyan-300">{running}</dd>
         </div>
         <div className="flex items-baseline gap-2">
           <dt>Failed</dt>
@@ -35,9 +35,9 @@ export function TicketProgress({ detail, now }: TicketProgressProps) {
         </div>
       </dl>
       {rows.length === 0 ? (
-        <p className="mt-2">No ticket events reported yet.</p>
+        <p className="mt-3">No ticket events reported yet.</p>
       ) : (
-        <ul aria-label="Tickets" className="mt-2 flex flex-col gap-1">
+        <ul aria-label="Tickets" className="mt-3 flex flex-col gap-1.5">
           {rows.map((row) => (
             <li key={row.ticketId} className="flex flex-wrap items-baseline gap-x-4">
               <span className="font-mono text-slate-200 break-all">{row.ticketId}</span>

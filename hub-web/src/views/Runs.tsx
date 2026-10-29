@@ -1,33 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
+import { SegmentedControl } from '../../../src/components/ui/SegmentedControl';
 import { CeremonyError } from '../components/CeremonyError';
-import { PlaceholderCard } from '../components/PlaceholderCard';
-import { elapsedText } from '../lib/fleetSummary';
-import { routeHref } from '../lib/router';
-import { listRuns, type RunStatus, type RunSummary } from '../lib/runs';
+import { PageHeader } from '../components/PageHeader';
+import { RunPreview } from '../components/RunPreview';
+import { RunRow } from '../components/RunRow';
+import { useFleet } from '../lib/fleetContext';
+import { listRuns, type RunSummary } from '../lib/runs';
+import { bandRuns, type ListedRun, type RunsBand, type RunsBands, type RunsShown } from '../lib/runsList';
 
 type Load = { state: 'loading' } | { state: 'loaded'; runs: RunSummary[] } | { state: 'failed'; error: unknown };
 
-type Filter = RunStatus | 'all';
-
-const FILTERS: { filter: Filter; label: string }[] = [
-  { filter: 'all', label: 'All' },
-  { filter: 'running', label: 'Running' },
-  { filter: 'completed', label: 'Completed' },
-  { filter: 'failed', label: 'Failed' },
-  { filter: 'cancelled', label: 'Cancelled' },
+const BANDS: { band: RunsBand; heading: string; empty: string }[] = [
+  { band: 'needs-you', heading: 'Needs you', empty: 'No run is waiting on you.' },
+  { band: 'active', heading: 'Active', empty: 'No run is active.' },
+  { band: 'finished', heading: 'Finished', empty: 'No run has finished.' },
 ];
 
-const STATUS_CLASSES: Record<RunStatus, string> = {
-  running: 'text-emerald-300',
-  completed: 'text-slate-300',
-  failed: 'text-ruby-300',
-  cancelled: 'text-slate-400',
-};
+interface RunsProps {
+  /** The run whose preview is open; without one, the first run listed. */
+  instanceId?: string;
+  featureId?: string;
+}
 
-export function Runs() {
+export function Runs({ instanceId, featureId }: RunsProps) {
   const [load, setLoad] = useState<Load>({ state: 'loading' });
-  const [filter, setFilter] = useState<Filter>('all');
+  const [shown, setShown] = useState<RunsShown>('all');
+  const { fleet } = useFleet();
 
   /** Bumped on unmount, so a read that settles after it has no page to land on. */
   const latestRead = useRef(0);
@@ -37,7 +36,7 @@ export function Runs() {
     const read = latestRead.current;
     listRuns().then(
       (runs) => {
-        if (latestRead.current === read) setLoad({ state: 'loaded', runs: newestFirst(runs) });
+        if (latestRead.current === read) setLoad({ state: 'loaded', runs });
       },
       (error: unknown) => {
         if (latestRead.current === read) setLoad({ state: 'failed', error });
@@ -48,84 +47,129 @@ export function Runs() {
     };
   }, []);
 
+  const bands = load.state === 'loaded' ? bandRuns(load.runs, fleet) : null;
+
   return (
-    <PlaceholderCard title="Runs">
-      {load.state === 'loading' && <p>Loading runs across your fleet…</p>}
+    <div className="flex flex-col gap-7">
+      <PageHeader
+        title="Runs"
+        summary={bands === null ? 'Every Feature on every instance, newest first' : summaryText(bands)}
+        actions={
+          bands !== null &&
+          load.state === 'loaded' &&
+          load.runs.length > 0 && (
+            <SegmentedControl
+              ariaLabel="Show"
+              value={shown}
+              onChange={setShown}
+              options={[
+                { value: 'all', label: 'All', count: load.runs.length },
+                { value: 'needs-you', label: 'Needs you', count: bands['needs-you'].length, countTone: 'amber' },
+                { value: 'active', label: 'Active', count: bands.active.length },
+                { value: 'finished', label: 'Finished', count: bands.finished.length },
+              ]}
+            />
+          )
+        }
+      />
+      {load.state === 'loading' && <p className="text-sm text-slate-400">Loading runs across your fleet…</p>}
       {load.state === 'failed' && (
         <div className="max-w-sm">
           <CeremonyError error={load.error} />
         </div>
       )}
-      {load.state === 'loaded' && load.runs.length === 0 && <p>No runs reported by your instances yet.</p>}
-      {load.state === 'loaded' && load.runs.length > 0 && (
-        <Loaded runs={load.runs} filter={filter} onFilter={setFilter} />
+      {load.state === 'loaded' && load.runs.length === 0 && (
+        <p className="text-sm text-slate-400">No runs reported by your instances yet.</p>
+      )}
+      {bands !== null && load.state === 'loaded' && load.runs.length > 0 && (
+        <RunsLoaded bands={bands} shown={shown} instanceId={instanceId} featureId={featureId} />
       )}
       {load.state === 'loaded' && (
-        <p className="mt-3 text-xs">Runs of instances with read off are not listed.</p>
-      )}
-    </PlaceholderCard>
-  );
-}
-
-function newestFirst(runs: RunSummary[]): RunSummary[] {
-  return [...runs].sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-interface LoadedProps {
-  runs: RunSummary[];
-  filter: Filter;
-  onFilter: (filter: Filter) => void;
-}
-
-function Loaded({ runs, filter, onFilter }: LoadedProps) {
-  const now = Math.floor(Date.now() / 1000);
-  const shown = filter === 'all' ? runs : runs.filter((run) => run.status === filter);
-  return (
-    <div className="flex flex-col gap-3">
-      <div role="group" aria-label="Status" className="flex flex-wrap gap-1">
-        {FILTERS.map(({ filter: option, label }) => (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={option === filter}
-            onClick={() => onFilter(option)}
-            className={`rounded-lg border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 ${
-              option === filter
-                ? 'border-accent-edge bg-accent-tint text-white'
-                : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-cyan-300'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {shown.length === 0 ? (
-        <p>No {filter} runs.</p>
-      ) : (
-        <ul className="nested-card flex flex-col gap-2 px-2 py-2">
-          {shown.map((run) => (
-            <li key={`${run.instanceId}/${run.featureId}`}>
-              <RunRow run={run} now={now} />
-            </li>
-          ))}
-        </ul>
+        <p className="text-xs text-slate-400">Runs of instances with read off are not listed.</p>
       )}
     </div>
   );
 }
 
-function RunRow({ run, now }: { run: RunSummary; now: number }) {
+function summaryText(bands: RunsBands): string {
+  const total = bands['needs-you'].length + bands.active.length + bands.finished.length;
+  const parts = [
+    total === 1 ? '1 run' : `${total} runs`,
+    `${bands.active.length + bands['needs-you'].length} active`,
+    `${bands['needs-you'].length} need you`,
+  ];
+  return parts.join(' · ');
+}
+
+interface RunsLoadedProps {
+  bands: RunsBands;
+  shown: RunsShown;
+  instanceId?: string;
+  featureId?: string;
+}
+
+function RunsLoaded({ bands, shown, instanceId, featureId }: RunsLoadedProps) {
+  const { fleet } = useFleet();
+  const now = Math.floor(Date.now() / 1000);
+  const visible = BANDS.filter(({ band }) => shown === 'all' || shown === band);
+  const listed = visible.flatMap(({ band }) => bands[band]);
+  const everyRun = BANDS.flatMap(({ band }) => bands[band]);
+  // A run chosen by the URL stays open when a filter hides its row.
+  const selected =
+    everyRun.find(({ run }) => run.instanceId === instanceId && run.featureId === featureId) ?? listed[0] ?? null;
+  const selectedKey = selected === null ? null : runKey(selected);
+  const scopes = fleet?.find((instance) => instance.id === selected?.run.instanceId)?.scopes ?? null;
   return (
-    <a
-      href={routeHref({ name: 'run', instanceId: run.instanceId, featureId: run.featureId })}
-      className="flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-lg px-2 py-1 transition-colors hover:bg-cyan-500/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-    >
-      <span className="font-mono text-slate-200 break-all">{run.featureId}</span>
-      <span className={`text-xs ${STATUS_CLASSES[run.status]}`}>{run.status}</span>
-      <span className="font-mono text-xs break-all">{run.instanceId}</span>
-      {run.startedAt !== null && <span className="text-xs">Started {elapsedText(run.startedAt, now)} ago</span>}
-      <span className="text-xs">Updated {elapsedText(run.updatedAt, now)} ago</span>
-      {typeof run.costCents === 'number' && <span className="text-xs">${(run.costCents / 100).toFixed(2)}</span>}
-    </a>
+    <div className="grid items-start gap-4 lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
+      <nav aria-label="Runs list" className="panel flex flex-col gap-4 p-2">
+        {visible.map(({ band, heading, empty }) =>
+          shown === 'all' && bands[band].length === 0 ? null : (
+            <RunBand
+              key={band}
+              heading={heading}
+              empty={empty}
+              runs={bands[band]}
+              now={now}
+              selectedKey={selectedKey}
+            />
+          ),
+        )}
+      </nav>
+      {selected !== null && <RunPreview key={selectedKey} listed={selected} scopes={scopes} now={now} />}
+    </div>
+  );
+}
+
+function runKey({ run }: ListedRun): string {
+  return `${run.instanceId}/${run.featureId}`;
+}
+
+interface RunBandProps {
+  heading: string;
+  empty: string;
+  runs: ListedRun[];
+  now: number;
+  selectedKey: string | null;
+}
+
+function RunBand({ heading, empty, runs, now, selectedKey }: RunBandProps) {
+  const headingId = useId();
+  return (
+    <section aria-labelledby={headingId} className="flex flex-col gap-1">
+      <h2 id={headingId} className="px-3 pt-2 pb-1 text-xs font-medium text-slate-400">
+        {heading}
+      </h2>
+      {runs.length === 0 ? (
+        <p className="px-3 pb-2 text-sm text-slate-400">{empty}</p>
+      ) : (
+        <ul aria-label={heading} className="flex flex-col gap-1">
+          {runs.map((listed) => (
+            <li key={runKey(listed)}>
+              <RunRow listed={listed} now={now} selected={runKey(listed) === selectedKey} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

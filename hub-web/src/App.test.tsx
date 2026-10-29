@@ -45,6 +45,7 @@ const SIGNED_IN: Answers = {
   'GET /v1/passkeys': () => json({ passkeys: [] }),
   'GET /v1/fleet': () => json({ instances: [] }),
   'GET /v1/runs': () => json({ runs: [] }),
+  'GET /v1/runs?status=running': () => json({ runs: [] }),
   'POST /v1/pairing/start': () =>
     json({
       pairing_id: 'pairing-1',
@@ -111,14 +112,15 @@ function monoTexts(container: HTMLElement): (string | null)[] {
 }
 
 describe('App shell, signed in', () => {
-  it.each(ROUTES)('$hash renders the $heading view in a glass card', async ({ hash, heading }) => {
+  it.each(ROUTES)('$hash renders the $heading view under its page header', async ({ hash, heading }) => {
     await renderAt(hash);
 
     const headings = screen.getAllByRole('heading', { level: 1 });
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveAccessibleName(heading);
     expect(headings[0]).toHaveClass('font-heading');
-    expect(headings[0].closest('.panel')).not.toBeNull();
+    expect(headings[0].closest('main')).not.toBeNull();
+    expect(headings[0].closest('header')).not.toBeNull();
   });
 
   it.each(ROUTES)('$hash marks $activeHref as the current nav link', async ({ hash, activeHref }) => {
@@ -136,6 +138,56 @@ describe('App shell, signed in', () => {
 
     expect(screen.getByRole('navigation')).toHaveAccessibleName();
     expect(navLinks().map((link) => link.getAttribute('href'))).toEqual(NAV_HREFS);
+  });
+
+  it('badges Runs with the gates waiting across the fleet, and only above zero', async () => {
+    const gate = (feature: string) => ({
+      instance_id: 'inst-1',
+      feature_id: feature,
+      step_id: null,
+      step_execution_id: `se-${feature}`,
+      since: 1_700_000_000,
+      title: null,
+      project_name: null,
+      step_title: null,
+    });
+    stubHub({
+      ...SIGNED_IN,
+      'GET /v1/fleet': () =>
+        json({
+          instances: [
+            {
+              id: 'inst-1',
+              label: 'workstation',
+              present: true,
+              os: 'linux',
+              arch: 'x86_64',
+              version: '1.4.2',
+              scopes: ['read'],
+              read_granted: true,
+              last_seen: 1_700_000_000,
+              live_runs: 2,
+              needs_you: [gate('f-1'), gate('f-2')],
+              harnesses: null,
+              project_count: null,
+            },
+          ],
+        }),
+    });
+    window.location.hash = '#/passkeys';
+    render(<App />);
+
+    const runs = within(await screen.findByRole('navigation')).getByRole('link', { name: 'Runs' });
+    await waitFor(() => expect(runs).toHaveAccessibleDescription('2 gates need you'));
+    expect(within(runs).getByRole('img', { name: '2 gates need you' })).toHaveTextContent('2');
+  });
+
+  it('shows no badge on an idle fleet', async () => {
+    await renderAt('#/passkeys');
+
+    const runs = within(screen.getByRole('navigation')).getByRole('link', { name: 'Runs' });
+    await waitFor(() => expect(runs).not.toHaveAttribute('aria-describedby'));
+    expect(within(runs).queryByRole('img')).toBeNull();
   });
 
   it('offers one sign-out control, in the nav', async () => {
@@ -214,7 +266,8 @@ describe('App shell, signed in', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/was not found or not yours/);
     expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Run');
     expect(monoTexts(container)).toEqual(['feat-42', 'inst-7']);
-    expect(asked).toEqual(['GET /v1/session']);
+    // The one read is the rail's fleet, for its needs-you badge.
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/fleet']);
   });
 
   it('asks the Hub for the run the hash names', async () => {
@@ -229,7 +282,9 @@ describe('App shell, signed in', () => {
     render(<App />);
 
     expect(await screen.findByRole('heading', { level: 1 })).toHaveAccessibleName('Run');
-    await waitFor(() => expect(asked).toEqual(['GET /v1/session', `GET ${path}`, `GET ${instance}`]));
+    await waitFor(() =>
+      expect(asked).toEqual(['GET /v1/session', `GET ${path}`, `GET ${instance}`, 'GET /v1/fleet']),
+    );
   });
 });
 
@@ -325,7 +380,7 @@ describe('App shell, signing out', () => {
       expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Sign in'),
     );
     expect(screen.queryByRole('navigation')).toBeNull();
-    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'POST /v1/session/end']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'GET /v1/fleet', 'POST /v1/session/end']);
   });
 
   it('lands on the sign-in view when the hash was left on #/sign-up', async () => {
@@ -351,7 +406,7 @@ describe('App shell, signing out', () => {
     await userEvent.click(control);
 
     expect(control).toBeDisabled();
-    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'POST /v1/session/end']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'GET /v1/fleet', 'POST /v1/session/end']);
   });
 
   it('stays signed in and shows the failure when the Hub does not end the session', async () => {
@@ -433,7 +488,7 @@ describe('App shell, when the Hub no longer knows the session', () => {
     render(<App />);
 
     await expectSignInView();
-    expect(asked).toEqual(['GET /v1/session', 'GET /v1/passkeys']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/passkeys', 'GET /v1/fleet']);
     expect(window.location.hash).toBe('#/passkeys');
   });
 
@@ -449,6 +504,7 @@ describe('App shell, when the Hub no longer knows the session', () => {
     expect(asked).toEqual([
       'GET /v1/session',
       'GET /v1/passkeys',
+      'GET /v1/fleet',
       'POST /v1/passkeys/add/start',
       'GET /v1/passkeys',
     ]);
@@ -462,7 +518,7 @@ describe('App shell, when the Hub no longer knows the session', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
 
     await expectSignInView();
-    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'POST /v1/session/end']);
+    expect(asked).toEqual(['GET /v1/session', 'GET /v1/runs', 'GET /v1/fleet', 'POST /v1/session/end']);
   });
 
   it('lands on the sign-in view when the 401 arrives with the hash on #/sign-up', async () => {

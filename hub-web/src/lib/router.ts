@@ -9,7 +9,8 @@
 export type Route =
   | { name: 'fleet' }
   | { name: 'instance'; instanceId: string }
-  | { name: 'runs' }
+  /** The list with one run's preview open beside it; the full page is `run`. */
+  | { name: 'runs'; instanceId?: string; featureId?: string }
   | { name: 'run'; instanceId: string; featureId: string }
   | { name: 'dispatch'; instanceId?: string }
   | { name: 'add-instance' }
@@ -30,8 +31,11 @@ export function routeHref(route: Exclude<Route, { name: 'not-found' }>): string 
 
 function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
   switch (route.name) {
-    case 'fleet':
     case 'runs':
+      return route.instanceId === undefined || route.featureId === undefined
+        ? ['runs']
+        : ['runs', route.instanceId, route.featureId];
+    case 'fleet':
     case 'add-instance':
     case 'sign-up':
     case 'sign-in':
@@ -77,6 +81,7 @@ function matchSegments(segments: string[] | null): Route | null {
         return null;
     }
   }
+  if (head === 'runs') return segments.length === 3 ? { name: 'runs', instanceId, featureId: tail } : null;
   if (head === 'pair') return segments.length === 2 ? { name: 'pair', request: segments[1] } : null;
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };
