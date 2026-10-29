@@ -1,0 +1,139 @@
+/*
+ * Token values only; what each one means is specified in AGENTS.md §4. They
+ * live apart from the rules in App.css so a second UI can import the same set,
+ * and so a change to a value is made in one place.
+ *
+ * Renaming a `@theme` key silently retires the utility named after it —
+ * `scripts/check-classes.mjs` catches that, the build does not.
+ */
+
+/*
+ * These keys are the utility namespace, not only values: `--font-heading` is
+ * what makes `font-heading` resolve, `--color-ruby-500` what makes
+ * `text-ruby-500` resolve. Rename or drop one and nothing fails to build —
+ * every call site keeps a class that now matches no rule and silently
+ * inherits. `scripts/check-classes.mjs` is what catches that; AGENTS.md §4
+ * covers how to name a key.
+ */
+@theme {
+  --font-sans: 'Inter', -apple-system, sans-serif;
+  --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Outfit', sans-serif;
+
+  /* Ruby is a red alias used throughout the UI for errors and destructive actions */
+  --color-ruby-50: #fef2f2;
+  --color-ruby-100: #fee2e2;
+  --color-ruby-200: #fecaca;
+  --color-ruby-300: #fca5a5;
+  --color-ruby-400: #f87171;
+  --color-ruby-500: #ef4444;
+  --color-ruby-600: #dc2626;
+  --color-ruby-700: #b91c1c;
+  --color-ruby-800: #991b1b;
+  --color-ruby-900: #7f1d1d;
+  --color-ruby-950: #450a0a;
+
+  /* Emerald (finished well) and cyan (in motion) at Tailwind's lightness but
+     0.8x its chroma. Stock, they were the most saturated things on a
+     near-black screen, louder than the accent that marks what to click, and
+     a completed run is mostly green. Lightness is what WCAG contrast reads, so
+     keeping it keeps every pairing that passed before; the hue gap between the
+     two is unchanged, so they stay distinguishable. Amber keeps full chroma:
+     it is the one hue meant to pull the eye. Shades left out fall back to
+     Tailwind's. */
+  --color-emerald-100: oklch(95% 0.042 163);
+  --color-emerald-200: oklch(90.5% 0.074 164.2);
+  --color-emerald-300: oklch(84.5% 0.114 165);
+  --color-emerald-400: oklch(76.5% 0.142 163.2);
+  --color-emerald-500: oklch(69.6% 0.136 162.5);
+  --color-emerald-600: oklch(59.6% 0.116 163.2);
+  --color-emerald-950: oklch(26.2% 0.041 172.6);
+  --color-cyan-200: oklch(91.7% 0.064 205);
+  --color-cyan-300: oklch(86.5% 0.102 207.1);
+  --color-cyan-400: oklch(78.9% 0.123 211.5);
+  --color-cyan-500: oklch(71.5% 0.114 215.2);
+  --color-cyan-600: oklch(60.9% 0.101 221.7);
+  --color-cyan-950: oklch(30.2% 0.045 229.7);
+}
+
+/* The surfaces as Tailwind colours, so a call site writes `bg-surface-panel`
+   or `border-hairline` rather than a hex. `static` makes Tailwind emit every one
+   of these variables whether or not a utility uses it, because the --bg-* and
+   --border-* names below alias them. */
+@theme static {
+  --color-surface-app: #08090c;
+  --color-surface-sidebar: #0d0f14;
+  --color-surface-well: #050608;
+  --color-surface-panel: #11151d;
+  --color-surface-panel-hover: #191e29;
+  --color-surface-raised: #181d28;
+  --color-hairline: rgb(255 255 255 / 0.05);
+  --color-hairline-raised: rgb(255 255 255 / 0.09);
+
+  /* The accent, indigo "Signal" (docs/DECISIONS.md, decision 61): primary
+     actions, selection and focus, and never a status. The fill always carries
+     a white label, which is 5.40:1 on it; the ink is for accent text on a dark
+     surface. The ring and edge were chosen to clear 3:1 against the panel, which
+     stock violet's focus and selection borders did not. */
+  --color-accent: #5a60c2;
+  --color-accent-hover: #6269cc;
+  --color-accent-ink: #838ef4;
+  --color-accent-ring: #6e78db;
+  --color-accent-edge: #6972c0;
+  --color-accent-tint: rgb(90 96 194 / 0.16);
+}
+
+@layer base {
+  :root {
+    /* Color Palette */
+    --bg-app: var(--color-surface-app);
+    --bg-sidebar: var(--color-surface-sidebar);
+    /* The darkest surface — terminal and code wells sunk into a panel. */
+    --bg-well: var(--color-surface-well);
+    /* Three solid surfaces, each a step lighter than the one it sits on: the app,
+       a panel on it, and the raised layer (menus, dialogs) over both. Solid on
+       purpose: a translucent panel takes its colour from whatever scrolls behind
+       it, so the same card read differently on every screen, and the blur that
+       hid that cost a WebKitGTK frame per scroll. The panel and hover values are
+       the old translucent ones composited over --bg-app, so a panel on the app
+       background looks as it did. */
+    --bg-panel: var(--color-surface-panel);
+    --bg-panel-hover: var(--color-surface-panel-hover);
+    --bg-raised: var(--color-surface-raised);
+    --bg-input: rgba(10, 12, 16, 0.6);
+
+    /* The edge every surface states. Raised surfaces take a brighter one, since
+       they sit on a panel rather than on the near-black app background. */
+    --border-hairline: var(--color-hairline);
+    --border-raised: var(--color-hairline-raised);
+
+    /* The only shadow in the system, and only the raised layer casts it: a panel
+       is separated by its step and its hairline, a menu also by floating. */
+    --shadow-raised: 0 12px 32px -8px rgba(0, 0, 0, 0.6);
+
+    /* One corner radius for every panel-level surface. A card, a canvas well and
+       a banner are the same object at different depths, and a run view showing
+       all three at once is where a second value reads as a mistake rather than
+       as variety. Smaller radii still belong to controls — chips, buttons and
+       inputs are not panels. */
+    --radius-panel: 12px;
+
+
+    /* Text colors */
+    --text-primary: #f3f4f6;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --text-dark: #1f2937;
+
+    /* Typography */
+    --font-ui: 'Inter', -apple-system, sans-serif;
+    --font-heading: 'Outfit', sans-serif;
+    --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
+
+    /* Transitions */
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-spring: 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    --transition-smooth: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}

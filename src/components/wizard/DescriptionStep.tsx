@@ -39,7 +39,7 @@ export function DescriptionStep({
       <div>
         <label
           htmlFor="wizard-title"
-          className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block mb-1"
+          className="text-[11px] font-mono text-slate-400 block mb-1"
         >
           Feature title
         </label>
@@ -50,7 +50,7 @@ export function DescriptionStep({
           value={title}
           onChange={(e) => onSubmit(commitPayloadWith({ title: e.target.value }))}
           placeholder="e.g. Implement billing-service in Rust"
-          className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
+          className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring"
         />
         {showTitleError && (
           <p className="mt-1 text-[11px] text-amber-300 font-mono">
@@ -62,7 +62,7 @@ export function DescriptionStep({
       <div>
         <label
           htmlFor="wizard-description"
-          className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block mb-1"
+          className="text-[11px] font-mono text-slate-400 block mb-1"
         >
           What do you want to build?
         </label>
@@ -73,7 +73,7 @@ export function DescriptionStep({
           onChange={(e) => onSubmit(commitPayloadWith({ description: e.target.value }))}
           rows={8}
           placeholder="Describe the feature. The pipeline will research, draft a spec, implement, review, validate, and ship."
-          className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 resize-y"
+          className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring resize-y"
         />
         <p className="mt-1 text-[10px] text-slate-500 font-mono">
           {description.trim().length} characters · minimum 8.
@@ -86,7 +86,7 @@ export function DescriptionStep({
       </div>
 
       <div>
-        <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block mb-1">
+        <label className="text-[11px] font-mono text-slate-400 block mb-1">
           Repo visibility
         </label>
         <div className="grid grid-cols-2 gap-1.5">
@@ -96,7 +96,7 @@ export function DescriptionStep({
             data-testid="wizard-visibility-private"
             className={`px-3 py-2 rounded-lg text-[11px] font-mono border transition-all ${
               visibility === 'private'
-                ? 'bg-violet-500/10 border-violet-500/50 text-violet-200'
+                ? 'bg-accent-tint border-accent-edge text-white'
                 : 'bg-black/30 border-white/10 text-slate-400 hover:border-white/20'
             }`}
           >
@@ -108,7 +108,7 @@ export function DescriptionStep({
             data-testid="wizard-visibility-public"
             className={`px-3 py-2 rounded-lg text-[11px] font-mono border transition-all ${
               visibility === 'public'
-                ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-200'
+                ? 'bg-accent-tint border-accent-edge text-white'
                 : 'bg-black/30 border-white/10 text-slate-400 hover:border-white/20'
             }`}
           >

@@ -4,7 +4,7 @@
 // that a refused `setDiscoveryBase` stays inside the still-open editor rather
 // than closing it or reaching `onBaseChanged`.
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -145,7 +145,20 @@ describe('DiscoveryWorkspaceHeader base branch', () => {
     expect((screen.getByRole('button', { name: 'Change' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(screen.getByTestId('discovery-base-locked').textContent).toContain('Ticket DSC-2');
+    expect(screen.getByTestId('discovery-base-locked').textContent).toContain('DSC-2');
+  });
+
+  it('counts a long lock list and keeps the ids behind a toggle', () => {
+    const many = Array.from({ length: 6 }, (_, i) => ticket(i + 1, 'started'));
+    mount({ board: board(...many) });
+
+    const note = screen.getByTestId('discovery-base-locked');
+    expect(note.textContent).toContain('6 tickets have left Unstarted');
+    expect(note.textContent).not.toContain('DSC-4');
+    expect(screen.queryByTestId('discovery-base-locked-tickets')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show tickets' }));
+    expect(screen.getByTestId('discovery-base-locked-tickets').textContent).toContain('DSC-4');
   });
 
   it('renders a set base branch verbatim', () => {

@@ -1,6 +1,7 @@
 import { type ChangeEvent, type ClipboardEvent, type DragEvent, useId, useState } from 'react';
 
 import { MAX_ATTACHMENTS_PER_DISPATCH } from '../lib/attachments';
+import { buttonClasses } from '../../../src/components/ui/Button';
 
 interface AttachmentPickerProps {
   files: File[];
@@ -94,7 +95,7 @@ export function AttachmentPicker({ files, onChange, disabled = false }: Attachme
       <div className="flex flex-wrap items-center gap-3">
         <label
           htmlFor={inputId}
-          className={`btn-secondary text-xs focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-cyan-400 ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}
+          className={`${buttonClasses('secondary', 'sm')} focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent-ring ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}
         >
           Add files
           <input id={inputId} type="file" multiple disabled={disabled} onChange={onPick} className="sr-only" />

@@ -238,7 +238,7 @@ describe('AskThreadView — empty state', () => {
     expect(chips[0]).toHaveTextContent('Acme API');
     expect(chips[1]).toHaveTextContent('Map the journey from New Feature to a merged branch');
     expect(chips[2]).toHaveTextContent("What changed in this project's dependencies recently?");
-    expect(chips[2]).toHaveTextContent('web');
+    expect(chips[2]).toHaveTextContent('Web');
   });
 
   it('falls back to "this project" in the first chip when no projectName is given', async () => {

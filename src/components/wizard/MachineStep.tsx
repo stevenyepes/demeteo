@@ -48,7 +48,7 @@ export function MachineStep({
 
   return (
     <div className="space-y-4" data-testid="wizard-step-machine">
-      <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
+      <label className="text-[11px] font-mono text-slate-400 block">
         Where should agents run?
       </label>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -58,7 +58,7 @@ export function MachineStep({
           data-testid="wizard-machine-local"
           className={`flex items-center gap-3 p-3 rounded-lg border text-left text-sm transition-all ${
             kind === 'local'
-              ? 'bg-violet-500/10 border-violet-500/50 text-violet-100'
+              ? 'bg-accent-tint border-accent-edge text-white'
               : 'bg-black/40 border-white/10 text-slate-300 hover:border-white/20'
           }`}
         >
@@ -74,7 +74,7 @@ export function MachineStep({
           data-testid="wizard-machine-remote"
           className={`flex items-center gap-3 p-3 rounded-lg border text-left text-sm transition-all ${
             kind === 'remote'
-              ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-100'
+              ? 'bg-accent-tint border-accent-edge text-white'
               : 'bg-black/40 border-white/10 text-slate-300 hover:border-white/20'
           }`}
         >
@@ -92,7 +92,7 @@ export function MachineStep({
             value={machineId}
             onChange={(e) => emit({ machineId: e.target.value || null })}
             data-testid="wizard-machine-select"
-            className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-500/50"
+            className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-accent-ring"
           >
             <option value="">
               {machines.length === 0 ? 'No machines configured — add one in Settings → Machines' : 'Select a machine…'}
@@ -108,7 +108,7 @@ export function MachineStep({
             <div>
               <label
                 htmlFor="wizard-machine-passphrase"
-                className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5"
+                className="block text-[10px] font-mono text-slate-400 mb-1.5 flex items-center gap-1.5"
               >
                 <Key className="w-3 h-3" /> Private key passphrase
               </label>
@@ -119,7 +119,7 @@ export function MachineStep({
                 onChange={(e) => onPassphraseChange(e.target.value)}
                 placeholder="Leave blank if the key has no passphrase"
                 autoComplete="off"
-                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
               />
               <p className="mt-1 text-[10px] text-slate-500 font-mono">
                 Written to the OS keyring via <code>set_machine_secret</code> before bootstrap.

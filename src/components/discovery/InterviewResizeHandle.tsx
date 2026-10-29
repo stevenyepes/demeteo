@@ -103,9 +103,9 @@ export function InterviewResizeHandle({
         onPointerCancel={revert}
         onKeyDown={onKeyDown}
         /* `w-2.5` is hit area, not appearance — the visible line is the 1px child. */
-        className="group absolute inset-y-0 -left-1.5 flex w-2.5 cursor-col-resize justify-center transition-colors hover:bg-cyan-500/20 focus-visible:bg-cyan-500/20 focus-visible:outline-none active:bg-cyan-500/20"
+        className="group absolute inset-y-0 -left-1.5 flex w-2.5 cursor-col-resize justify-center transition-colors hover:bg-white/5 focus-visible:bg-accent-tint focus-visible:outline-none active:bg-white/5"
       >
-        <span className="h-full w-px bg-transparent transition-colors group-hover:bg-cyan-500/50 group-focus-visible:bg-cyan-500/50" />
+        <span className="h-full w-px bg-transparent transition-colors group-hover:bg-white/30 group-focus-visible:bg-accent-ring" />
       </div>
     </div>
   );

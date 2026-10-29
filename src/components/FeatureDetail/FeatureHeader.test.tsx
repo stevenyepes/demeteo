@@ -79,12 +79,14 @@ describe('FeatureHeader telemetry', () => {
     expect(screen.getAllByTestId('metric')).toHaveLength(3);
   });
 
-  it('takes every value colour from the shared tone vocabulary', () => {
+  // Cost and tokens are quantities, not states (AGENTS.md §4), so they stay
+  // neutral; only cache reads is dimmed, as the secondary figure.
+  it('keeps the telemetry values out of the status hues', () => {
     renderHeader();
 
-    expect(metricValue('Cost')).toHaveClass(TONE_TEXT.emerald);
-    expect(metricValue('Tokens')).toHaveClass(TONE_TEXT.cyan);
-    expect(metricValue('Cache Reads')).toHaveClass(TONE_TEXT.violet);
+    expect(metricValue('Cost')).toHaveClass('text-white');
+    expect(metricValue('Tokens')).toHaveClass('text-white');
+    expect(metricValue('Cache Reads')).toHaveClass(TONE_TEXT.slate);
     expect(metricValue('Elapsed')).toHaveClass('text-white');
   });
 
@@ -347,7 +349,7 @@ describe('the header action ranking', () => {
     renderHeader({ status: 'completed', statusMeta: runStatusMeta('completed'), mrUrl: null });
 
     const filled = Array.from(screen.getByTestId('feature-header').querySelectorAll('button, a'))
-      .filter((el) => /(^|\s)bg-(violet|cyan|emerald|rose)-600(\s|$)/.test(el.className))
+      .filter((el) => /(^|\s)bg-(accent|cyan|emerald|rose|ruby)(-600)?(\s|$)/.test(el.className))
       .map((el) => el.textContent?.trim());
     expect(filled).toEqual(['Publish MR']);
   });

@@ -6,7 +6,7 @@ import type { CacheSweepEntry, CacheSweepVerdict } from '../../lib/featureDetail
 import type { RunStatusTone } from '../../lib/runStatus';
 
 const VERDICT_LABEL: Record<CacheSweepVerdict, { label: string; tone: RunStatusTone }> = {
-  delete: { label: 'Reclaimable', tone: 'violet' },
+  delete: { label: 'Reclaimable', tone: 'slate' },
   unknown: { label: 'Undecided — left for you', tone: 'amber' },
   keep: { label: 'Kept', tone: 'slate' },
 };
@@ -38,7 +38,7 @@ function EntryRow({ entry }: { entry: CacheSweepEntry }) {
   return (
     <li className="flex flex-col gap-1 py-2 border-t border-white/5 first:border-t-0">
       <div className="flex items-center gap-2 min-w-0">
-        <Chip tone={entry.kind === 'cache' ? 'cyan' : 'violet'} size="sm">{entry.kind}</Chip>
+        <Chip tone="slate" size="sm">{entry.kind}</Chip>
         <span className="font-mono text-xs text-slate-200 truncate min-w-0" title={entry.path}>{entry.path}</span>
       </div>
       <p className="text-[11px] text-slate-500 leading-relaxed">{entry.reason.text}</p>

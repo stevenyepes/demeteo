@@ -8,6 +8,7 @@ pub mod create_project_port;
 pub mod db;
 pub mod discovery;
 pub mod execution;
+pub mod git_credentials;
 pub mod hub;
 pub mod memory;
 pub mod memory_llm;

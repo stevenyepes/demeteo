@@ -67,7 +67,7 @@ export function SequenceTasks({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        <span className="text-[10px] font-bold text-slate-500">
           Task list
         </span>
         {tasks.length > 0 && (
@@ -79,7 +79,7 @@ export function SequenceTasks({
 
       {loading && !state ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading task list…
+          <Loader2 className="h-4 w-4 animate-spin text-slate-400" /> Loading task list…
         </div>
       ) : error ? (
         <div className="flex items-start gap-2 rounded-lg border border-rose-500/20 bg-rose-950/20 p-3 text-xs text-rose-300">
@@ -96,7 +96,7 @@ export function SequenceTasks({
                   node is the norm and a "Cycle 0" header on it is noise. */}
               {group.labelled && (
                 <li className="flex items-baseline justify-between px-1 pb-0.5 pt-2 first:pt-0">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">
+                  <span className="text-[10px] font-bold text-slate-400">
                     {group.cycle === 0 ? 'Original decomposition' : `Rework ${group.cycle}`}
                   </span>
                   <span className="font-mono text-[10px] text-slate-500">
@@ -191,7 +191,7 @@ function SequenceTaskRow({ index, task }: { index: number; task: SequenceState['
           </span>
         )}
         <span
-          className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${TONE_CHIP[meta.tone]}`}
+          className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${TONE_CHIP[meta.tone]}`}
         >
           {task.landed ? 'Landed' : meta.label}
         </span>

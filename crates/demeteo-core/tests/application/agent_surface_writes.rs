@@ -1133,6 +1133,15 @@ const STANDARD: &str = "wf-starter-standard";
 /// A Standard-pipeline run parked at its ship gate with `review` stored as
 /// the critic's artifact, and a [`GateSpy`] in place of the presenter.
 fn parked_at_ship_gate(tag: &str, workflow_id: &str, review: &str) -> (AppContext, Arc<GateSpy>) {
+    parked_at_ship_gate_with_review_under(tag, workflow_id, review, "s-critic")
+}
+
+fn parked_at_ship_gate_with_review_under(
+    tag: &str,
+    workflow_id: &str,
+    review: &str,
+    store_key: &str,
+) -> (AppContext, Arc<GateSpy>) {
     let mut ctx = fixture(tag);
     let gates = GateSpy::new();
     ctx.presenter = gates.clone();
@@ -1190,7 +1199,7 @@ fn parked_at_ship_gate(tag: &str, workflow_id: &str, review: &str) -> (AppContex
     ctx.artifact_store
         .put(
             "f-1",
-            "s-critic",
+            store_key,
             &crate::domain::artifact::Artifact::agent_text("critic-review", review),
         )
         .unwrap();
@@ -1247,6 +1256,32 @@ async fn a_refused_rework_decides_nothing_and_does_not_count_against_the_cap() {
     assert!(gates.decided().is_empty());
     let recorded = ctx.run_events.list_since("f-1", 0).unwrap();
     assert!(recorded.iter().all(|e| e.kind != CRITIC_REWORK_EVENT));
+}
+
+/// A detached run's artifacts are mirrored under the step-execution id, and
+/// the store answers nothing for any other key.
+#[tokio::test]
+async fn rework_reads_a_review_mirrored_under_the_critics_execution_id() {
+    let (ctx, gates) =
+        parked_at_ship_gate_with_review_under("rework-mirrored", STANDARD, FAILING, "se-critic");
+
+    let outcome = rework_from_critic(&ctx, &gate_id())
+        .await
+        .expect("the mirrored review is found");
+
+    assert_eq!(outcome.verdict, "FAIL");
+    assert_eq!(gates.decided().len(), 1);
+}
+
+#[tokio::test]
+async fn a_review_stored_under_neither_key_is_not_available() {
+    let (ctx, gates) =
+        parked_at_ship_gate_with_review_under("rework-nowhere", STANDARD, FAILING, "se-other");
+
+    let refused = rework_from_critic(&ctx, &gate_id()).await;
+
+    assert!(refused.is_err_and(|e| e.contains("not available")));
+    assert!(gates.decided().is_empty());
 }
 
 #[tokio::test]

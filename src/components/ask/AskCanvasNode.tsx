@@ -54,26 +54,25 @@ export const ROLE_LABEL: Record<NodeRole, string> = {
 
 /** Icon-chip tint per role — the app's colour language, unchanged by state. */
 export const ROLE_CHIP: Record<NodeRole, string> = {
-  orchestration: 'border-violet-500/20 bg-violet-500/10 text-violet-300',
+  orchestration: 'border-white/10 bg-white/5 text-slate-300',
   boundary: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300',
   agent: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
   needs_human: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
 };
 
 export const ROLE_TEXT: Record<NodeRole, string> = {
-  orchestration: 'text-violet-300',
+  orchestration: 'text-slate-300',
   boundary: 'text-cyan-300',
   agent: 'text-emerald-300',
   needs_human: 'text-amber-300',
 };
 
-/** Card border + glow per state. */
+/** Card border per state. Selection is the accent; a citation is not a
+ *  selection, so it stays neutral and is told apart by its ring. */
 const STATE_CARD: Record<NodeCardState, string> = {
   resting: 'border-slate-700/60 shadow-lg shadow-black/30',
-  selected:
-    'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]',
-  cited:
-    'border-violet-400/60 shadow-[0_0_0_2px_rgba(167,139,250,0.45),0_0_18px_rgba(139,92,246,0.25)]',
+  selected: 'border-accent-edge shadow-lg shadow-black/30',
+  cited: 'border-slate-300/60 ring-2 ring-slate-300/30 shadow-lg shadow-black/30',
 };
 
 /** A muted/dashed overlay, not a ring — it never competes with the role tone
@@ -135,7 +134,7 @@ export function AskCanvasNode({
           <div className="truncate text-[13px] font-medium text-slate-100" title={node.title}>
             {node.title}
           </div>
-          <div className={`text-[9px] font-medium uppercase tracking-wide ${ROLE_TEXT[node.role]}`}>
+          <div className={`text-[9px] font-medium ${ROLE_TEXT[node.role]}`}>
             {ROLE_LABEL[node.role]}
           </div>
         </div>
@@ -150,7 +149,7 @@ export function AskCanvasNode({
 
   const shell = [
     'absolute flex flex-col justify-center gap-1.5 rounded-xl border px-3.5',
-    'bg-slate-900/70 backdrop-blur-sm',
+    'bg-surface-raised',
     STATE_CARD[state],
     pathState === 'missing' ? UNRESOLVED_OVERLAY : '',
   ].join(' ');

@@ -5,6 +5,7 @@ import { sendAskTurn } from '../../lib/ask';
 import type { TurnPhase } from '../../lib/askActivity';
 import { formatError } from '../../lib/errors';
 import type { AskMessage } from '../../types';
+import { Button } from '../ui/Button';
 
 interface AskComposerProps {
   threadId: string;
@@ -119,16 +120,15 @@ export function AskComposer({
           }
           className="chat-input disabled:opacity-50"
         />
-        <button
-          type="button"
+        <Button
+          variant="primary"
           data-testid="ask-composer-send"
           aria-label="Send this turn"
           disabled={blocked || value.trim().length === 0}
           onClick={() => void send()}
-          className="btn-primary disabled:cursor-not-allowed disabled:opacity-35"
         >
           <Send className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       {error && (
         <p role="alert" className="mt-2 mb-0 font-mono text-[11px] text-ruby-200">

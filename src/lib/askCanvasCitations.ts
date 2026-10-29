@@ -40,7 +40,7 @@ function matches(haystack: string, node: Pick<CanvasNode, 'title' | 'path'>): bo
 }
 
 /**
- * The violet 'cited' ring's only source anywhere in this feature — never a
+ * The 'cited' ring's only source anywhere in this feature — never a
  * stored field (Acceptance Criterion 6). Recomputed from the answer text on
  * every render instead.
  */

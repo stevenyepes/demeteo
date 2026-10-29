@@ -22,6 +22,7 @@
 import { X, ExternalLink } from 'lucide-react';
 
 import { ArtifactViewer } from './ArtifactViewer';
+import { Button } from './ui/Button';
 import { Modal } from './ui/Modal';
 import {
   ARTIFACT_KIND_COLORS,
@@ -60,11 +61,11 @@ export function ArtifactModal({
   return (
     <Modal
       onClose={onClose}
-      backdropClassName="bg-black/70 p-4"
+      backdropClassName="p-4"
       // Wider than the app default for the same reason `GateView` documents:
       // an artifact at 42rem wraps every line. `max-h-[85vh]` + a `min-h-0`
       // scroll body is what keeps the card inside the viewport.
-      className="w-full max-w-6xl mx-4 bg-[var(--bg-sidebar)] border border-violet-500/30 rounded-2xl shadow-[0_0_50px_rgba(139,92,246,0.15)] overflow-hidden flex flex-col font-sans max-h-[85vh]"
+      className="raised w-full max-w-6xl mx-4 overflow-hidden flex flex-col font-sans max-h-[85vh]"
     >
       <div className="p-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
@@ -82,7 +83,7 @@ export function ArtifactModal({
               {basename}
             </h2>
             <p className="text-xs text-slate-400 truncate">
-              <span className="uppercase tracking-wider font-mono text-[10px] text-slate-500">
+              <span className="font-mono text-[10px] text-slate-500">
                 {ARTIFACT_KIND_LABELS[kind]}
               </span>
               {stepId ? <span> · {humanizeStepId(stepId)}</span> : null}
@@ -118,12 +119,9 @@ export function ArtifactModal({
           {artifactPath}
         </span>
         {onOpenEditorForPath && (
-          <button
-            onClick={() => onOpenEditorForPath(artifactPath)}
-            className="px-4 py-2 border border-cyan-500/20 hover:border-cyan-500/50 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5 shrink-0"
-          >
+          <Button onClick={() => onOpenEditorForPath(artifactPath)} className="shrink-0">
             <ExternalLink className="w-3.5 h-3.5" /> Open in editor
-          </button>
+          </Button>
         )}
       </div>
     </Modal>

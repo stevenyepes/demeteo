@@ -27,7 +27,7 @@ export function NameStep({ value, onSubmit }: NameStepProps) {
     <div className="space-y-3" data-testid="wizard-step-name">
       <label
         htmlFor="wizard-name-input"
-        className="text-[11px] font-mono text-slate-400 uppercase tracking-widest"
+        className="text-[11px] font-mono text-slate-400"
       >
         What do you want to call this project?
       </label>
@@ -45,7 +45,7 @@ export function NameStep({ value, onSubmit }: NameStepProps) {
         placeholder="e.g. billing-service-rust"
         autoFocus
         aria-invalid={value.trim().length > 0 && (tooShort || invalid)}
-        className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50"
+        className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring"
       />
       <p className="text-[11px] text-slate-500 font-mono">
         Lowercase letters, digits, dots, dashes or underscores. Used

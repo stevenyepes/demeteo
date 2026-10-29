@@ -81,6 +81,32 @@ pub fn build_core_context_with_policy_writer(
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
 ) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
+    build_core_context_parts(
+        cfg,
+        notif,
+        runtime,
+        Arc::new(adapters::git_credentials::KeyringCredentialSource),
+    )
+}
+
+/// [`build_core_context`] with the source every origin-authenticating git
+/// call asks for its PAT, for a process that holds it somewhere other than the
+/// OS keyring.
+pub fn build_core_context_with_credentials(
+    cfg: CoreConfig,
+    notif: Arc<dyn NotificationPort>,
+    runtime: tokio::runtime::Handle,
+    git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
+) -> AppContext {
+    build_core_context_parts(cfg, notif, runtime, git_credentials).0
+}
+
+fn build_core_context_parts(
+    cfg: CoreConfig,
+    notif: Arc<dyn NotificationPort>,
+    runtime: tokio::runtime::Handle,
+    git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
+) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
     let CoreConfig {
         app_data_dir,
         execution_mode,
@@ -202,10 +228,13 @@ pub fn build_core_context_with_policy_writer(
             workspace_dir.clone(),
         ));
 
-    let worktree_ops = Arc::new(adapters::worktree::git_ops::GitOpsHelper::new(
-        app_settings_repo.clone(),
-        exec_inner.clone(),
-    ));
+    let worktree_ops = Arc::new(
+        adapters::worktree::git_ops::GitOpsHelper::new(
+            app_settings_repo.clone(),
+            exec_inner.clone(),
+        )
+        .with_credential_source(git_credentials.clone()),
+    );
 
     let provider_http = Arc::new(adapters::provider_http::ReqwestProviderHttpAdapter::new());
 
@@ -227,7 +256,8 @@ pub fn build_core_context_with_policy_writer(
         let git_ops_for_merge = adapters::worktree::git_ops::GitOpsHelper::new(
             app_settings_repo.clone(),
             exec_inner.clone(),
-        );
+        )
+        .with_credential_source(git_credentials.clone());
         Arc::new(adapters::merge::SqliteMergeExecutor::new(
             merge_audit_repo.clone(),
             sync_sessions_repo.clone(),
@@ -277,6 +307,7 @@ pub fn build_core_context_with_policy_writer(
             remote_run_mirror_repo.clone(),
             sync_turns.clone(),
         )
+        .with_credential_source(git_credentials.clone())
         .with_cache_reclaim(cache_reclaim.clone());
         // Only the desktop lets a finished run open its own PR. The headless
         // runner (`LocalOnly`) publishes at the end of `run.rs` instead, with
@@ -407,6 +438,7 @@ pub fn build_core_context_with_policy_writer(
         mr_publisher,
         feature_cache,
         worktree_ops,
+        git_credentials,
         provider_http,
         memory_llm,
         attachments: attachment_store,

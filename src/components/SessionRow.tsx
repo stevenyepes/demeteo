@@ -94,7 +94,7 @@ function SessionRowImpl({
                   onClick={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => e.stopPropagation()}
                   maxLength={rename.maxLength}
-                  className="flex-1 min-w-0 bg-[#0d0f14] border border-cyan-500/40 rounded px-1.5 py-0.5 text-xs font-mono text-white outline-none focus:border-cyan-400"
+                  className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-1.5 py-0.5 text-xs font-mono text-white outline-none focus:border-accent-ring"
                   data-testid={`session-row-rename-${tab.tabId}`}
                   aria-label="Rename terminal session"
                 />

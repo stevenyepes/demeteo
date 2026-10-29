@@ -10,6 +10,7 @@ import { type RequestTicket, type StepAssignment, setStepAssignment } from '../l
 import type { RunStatus, StepState } from '../lib/runs';
 import { CeremonyError } from './CeremonyError';
 import { RequestStatus } from './RequestStatus';
+import { Button } from '../../../src/components/ui/Button';
 
 interface AssignmentFormProps {
   instanceId: string;
@@ -131,13 +132,11 @@ export function AssignmentForm({ instanceId, featureId, stepId, runStatus, state
               ))}
             </select>
           </div>
-          <button
+          <Button variant="primary"
             type="submit"
-            disabled={!canSend}
-            className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-          >
+            disabled={!canSend}>
             Change assignment
-          </button>
+          </Button>
         </fieldset>
       </form>
       {send.state === 'sending' && (

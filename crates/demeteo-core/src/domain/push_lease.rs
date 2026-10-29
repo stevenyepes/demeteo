@@ -107,6 +107,32 @@ pub fn is_stale_lease(error: &str) -> bool {
         .any(|line| line.contains("! [rejected]") && line.contains("(stale info)"))
 }
 
+/// The arguments of a `git ls-remote` reading `branch`'s tip on `origin`, which
+/// [`already_published`] parses. `ls-remote` rather than `fetch` because it
+/// leaves the tracking ref the lease reads alone.
+pub fn remote_tip_query(branch: &str) -> [String; 3] {
+    [
+        "ls-remote".to_string(),
+        "origin".to_string(),
+        format!("refs/heads/{branch}"),
+    ]
+}
+
+/// Whether `origin` already holds `branch` at exactly `local_head`, from
+/// [`remote_tip_query`]'s output. A push that failed for any reason other than
+/// its lease while this holds has nothing left to do: a concurrent push of the
+/// same commit won the race to create the ref. Only equal full SHAs count; a
+/// ref at any other commit stays the push's failure.
+pub fn already_published(local_head: &str, ls_remote_output: &str, branch: &str) -> bool {
+    let local_head = local_head.trim();
+    let refname = format!("refs/heads/{branch}");
+    !local_head.is_empty()
+        && ls_remote_output.lines().any(|line| {
+            line.split_once(char::is_whitespace)
+                .is_some_and(|(sha, name)| sha == local_head && name.trim() == refname)
+        })
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/push_lease.rs"]
 mod tests;

@@ -210,10 +210,10 @@ export function SplitPane({
         onKeyDown={onKeyDown}
         /* `w-2.5` is hit area, not appearance — the visible line is the 1px
            child, and a 1px pointer target is a usability defect. */
-        className="group absolute inset-y-0 z-20 flex w-2.5 translate-x-1/2 cursor-col-resize items-center justify-center bg-transparent transition-colors hover:bg-cyan-500/20 focus-visible:bg-cyan-500/20 focus-visible:outline-none active:bg-cyan-500/20"
+        className="group absolute inset-y-0 z-20 flex w-2.5 translate-x-1/2 cursor-col-resize items-center justify-center bg-transparent transition-colors hover:bg-white/5 focus-visible:bg-accent-tint focus-visible:outline-none active:bg-white/5"
         style={{ right: `var(${SPLIT_SECONDARY_VAR}, 0px)` }}
       >
-        <span className="h-full w-px bg-white/10 transition-colors group-hover:bg-cyan-500/50 group-focus-visible:bg-cyan-500/50" />
+        <span className="h-full w-px bg-white/10 transition-colors group-hover:bg-white/30 group-focus-visible:bg-accent-ring" />
       </div>
     </div>
   );

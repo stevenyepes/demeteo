@@ -7,5 +7,5 @@
 - Recorded MCP decisions 45–52 in `docs/DECISIONS.md` and the unresolved per-grant project-list question in `docs/OPEN_QUESTIONS.md` §19.
 - Fixed stale decision-count anchors and wording in `docs/DECISIONS.md`, `docs/OPEN_QUESTIONS.md` and `AGENTS.md` by renaming "The 44 Decisions" to "The Locked Decisions".
 - Documented the Demeteo Hub in the new `docs/HUB.md`: trust model and the list of what never leaves an instance, pairing, the instance-initiated socket, the six request kinds and attachments, scopes and local ceilings, passkey-signed gate decisions, storage and custody, and what is not built or not decided yet.
-- Recorded Hub decisions 61–68 in `docs/DECISIONS.md`, with detail blocks for 63, 65 and 66, and pointed the web-companion item in `docs/OPEN_QUESTIONS.md` §17 at them.
+- Recorded Hub decisions 62–69 in `docs/DECISIONS.md`, with detail blocks for 64, 66 and 67, and pointed the web-companion item in `docs/OPEN_QUESTIONS.md` §17 at them.
 - Marked `docs/hub-design/README.md` as decided but not built and listed the mockup parts the decisions supersede; added the Hub's separate gate-decision surface to `docs/MCP_INTEGRATION.md` §8, a Hub section to `docs/ARCHITECTURE.md` §3, and the custody invariant and `docs/HUB.md` entry to `AGENTS.md`.

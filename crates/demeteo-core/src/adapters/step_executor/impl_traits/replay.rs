@@ -1,11 +1,18 @@
+use std::time::{Duration, Instant};
+
 use super::super::driver::rework::persist_retry_context;
 use super::super::DagStepExecutor;
-use crate::domain::ids::StepExecutionId;
+use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{StepAttempt, StepConfig, StepExecution};
 use crate::domain::run_control::{out_of_band_refusal, shadow_refusal, RunAction};
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::StepExecutor;
+
+/// How long a replay waits for the driver it cancelled to exit. A cancel
+/// interrupts an agent turn and kills its sessions, so this bounds a slow
+/// teardown, not a turn.
+const DRIVER_EXIT_WAIT: Duration = Duration::from_secs(30);
 
 /// The patch that rewinds one in-range step to `pending`.
 ///
@@ -140,15 +147,19 @@ impl DagStepExecutor {
             .get(feature_id)?
             .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
 
-        // Cancel any in-flight execution and force-kill the old session
-        if feature.status == "running" {
+        // Stop the old driver whatever the feature's status says. A driver
+        // parked at a gate leaves the feature `awaiting_gate`, not `running`,
+        // and is just as alive: skipped here, it kept waiting on its question,
+        // and `start_execution_loop` below — which declines to start a second
+        // driver — made the replay a silent no-op over rows already rewound
+        // to `pending`.
+        let driver_live = self.driver_registry.is_live(feature_id);
+        if feature.status == "running" || driver_live {
             self.feature_cancel(feature_id.as_str()).await?;
             let reg = self.registry.clone();
             let fid = feature_id.to_string();
             reg.kill(&fid).await;
-            // Yield to let the old driver's cancel handler finish
-            // writing its terminal state before we overwrite it.
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            self.await_driver_exit(feature_id).await?;
         }
 
         // Re-pin the feature-wide harness/model overrides (resolution tier 2)
@@ -376,6 +387,28 @@ impl DagStepExecutor {
             return Err(e);
         }
 
+        Ok(())
+    }
+
+    /// Wait for the feature's driver to deregister after a cancel.
+    ///
+    /// Deregistering is the driver task's last act, after its cancel path has
+    /// written the feature's terminal status, so once it is gone nothing will
+    /// write over the rows the caller is about to rewind. Past the bound this
+    /// is an error rather than a shrug: starting the replay's driver while
+    /// this one lives is the silent no-op the wait exists to prevent.
+    async fn await_driver_exit(&self, feature_id: &FeatureId) -> Result<(), String> {
+        let deadline = Instant::now() + DRIVER_EXIT_WAIT;
+        while self.driver_registry.is_live(feature_id) {
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "The run's current driver did not stop within {}s, so nothing was \
+                     rewound. Try again in a moment.",
+                    DRIVER_EXIT_WAIT.as_secs()
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         Ok(())
     }
 }

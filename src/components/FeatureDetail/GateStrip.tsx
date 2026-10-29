@@ -8,6 +8,7 @@ import {
   type GateStripRow,
 } from '../../lib/gateStrip';
 import { TONE_CHIP } from '../../lib/runStatus';
+import { Button } from '../ui/Button';
 import { humanizeStepId } from './stepIdentity';
 
 export interface GateStripProps {
@@ -66,7 +67,7 @@ export function GateStrip({
           className="h-2 w-2 shrink-0 rounded-full bg-current animate-pulse-glow-amber"
         />
         <ShieldAlert className="w-4 h-4 shrink-0" />
-        <span className="text-xs font-semibold uppercase tracking-wide">
+        <span className="text-xs font-semibold">
           {gates.length === 1 ? '1 gate needs you' : `${gates.length} gates need you`}
         </span>
         <span className="truncate font-mono text-xs opacity-80" title={stepName}>
@@ -79,13 +80,9 @@ export function GateStrip({
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={() => onDecideGate(next.id)}
-        className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded bg-amber-500 px-3 py-1.5 text-xs font-bold text-black transition hover:bg-amber-600"
-      >
+      <Button variant="primary" size="sm" onClick={() => onDecideGate(next.id)} className="shrink-0 whitespace-nowrap">
         Decide Gate <ArrowRight className="w-3 h-3" />
-      </button>
+      </Button>
     </div>
   );
 }

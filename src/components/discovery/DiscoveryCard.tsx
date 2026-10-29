@@ -15,14 +15,13 @@ import { Chip } from '../ui/Chip';
 import { TicketProgressBar } from './TicketProgressBar';
 
 /**
- * The 4 px accent bar's fill and its glow, per lifecycle tone. Kept beside the
- * only component that draws one: it is a card treatment, not a status
- * vocabulary, so it does not belong next to `TONE_CHIP`.
+ * The 4 px accent bar's fill, per lifecycle tone. Kept beside the only
+ * component that draws one: it is a card treatment, not a status vocabulary,
+ * so it does not belong next to `TONE_CHIP`.
  */
 const TONE_ACCENT: Partial<Record<RunStatusTone, string>> = {
-  violet: 'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]',
-  cyan: 'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]',
-  slate: 'bg-slate-600 shadow-[0_0_10px_rgba(100,116,139,0.6)]',
+  cyan: 'bg-cyan-500',
+  slate: 'bg-slate-600',
 };
 
 interface DiscoveryCardProps {
@@ -57,7 +56,7 @@ export function DiscoveryCard({
       type="button"
       data-testid="discovery-card"
       onClick={() => onOpen(discovery.id, discovery.title)}
-      className="glass-panel glass-panel-hover relative w-full overflow-hidden rounded-xl p-5 text-left"
+      className="panel panel-hover relative w-full overflow-hidden p-5 text-left"
     >
       <span
         aria-hidden="true"
@@ -80,7 +79,7 @@ export function DiscoveryCard({
 
       <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
         <Chip size="sm" tone="cyan">{discovery.agent_kind}</Chip>
-        {discovery.model && <Chip size="sm" tone="violet">{discovery.model}</Chip>}
+        {discovery.model && <Chip size="sm" tone="slate">{discovery.model}</Chip>}
         <span className="text-slate-300">{turnCountLabel(discovery.message_count)}</span>
         <span className="text-slate-300">{formatCost(discovery.total_cost)}</span>
         <span className="flex items-center gap-1 text-slate-300">

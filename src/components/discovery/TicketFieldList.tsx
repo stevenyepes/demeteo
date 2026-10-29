@@ -86,7 +86,7 @@ export function TicketFieldList({
         type="button"
         disabled={disabled}
         onClick={() => onChange([...values, ''])}
-        className={`mt-2 inline-flex items-center gap-1.5 self-start rounded-md border border-dashed border-white/10 px-3 py-[7px] text-xs text-slate-400 transition hover:border-violet-500/35 hover:bg-violet-500/5 hover:text-violet-300 disabled:cursor-not-allowed disabled:opacity-40 ${
+        className={`mt-2 inline-flex items-center gap-1.5 self-start rounded-md border border-dashed border-white/10 px-3 py-[7px] text-xs text-slate-400 transition hover:border-white/20 hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 ${
           numbered ? 'ml-[26px]' : ''
         }`}
       >

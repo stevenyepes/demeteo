@@ -4,6 +4,7 @@ import { CeremonyError } from '../components/CeremonyError';
 import { PlaceholderCard } from '../components/PlaceholderCard';
 import { type Session, signUp } from '../lib/auth';
 import { isUsablePasskeyLabel } from '../lib/passkeyLabel';
+import { Button } from '../../../src/components/ui/Button';
 
 interface SignUpProps {
   onSession: (session: Session) => void;
@@ -52,13 +53,11 @@ export function SignUp({ onSession }: SignUpProps) {
             className="input-field focus:border-cyan-400! focus:shadow-none!"
           />
         </div>
-        <button
+        <Button variant="primary"
           type="submit"
-          disabled={!canSubmit}
-          className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-        >
+          disabled={!canSubmit}>
           {busy ? 'Waiting for your passkey…' : 'Create passkey'}
-        </button>
+        </Button>
         {failure && <CeremonyError error={failure.error} />}
       </form>
     </PlaceholderCard>

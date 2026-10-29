@@ -386,3 +386,58 @@ fn a_column_that_was_never_written_reads_as_the_default_branch() {
         );
     }
 }
+
+// ── What the syncing_origin phase reports ────────────────────────────────────
+
+fn cut_for(origin: FeatureOrigin) -> BranchCut {
+    origin.branch_cut("main").expect("a valid origin")
+}
+
+#[test]
+fn a_clean_sync_is_completed() {
+    for origin in [
+        FeatureOrigin::DefaultBranch,
+        branch("release/2.0"),
+        pull_request(42),
+    ] {
+        assert_eq!(sync_phase_status(Some(&cut_for(origin)), None), "completed");
+    }
+}
+
+#[test]
+fn a_failed_best_effort_fetch_is_a_warning() {
+    let cut = cut_for(branch("release/2.0"));
+    assert_eq!(
+        sync_phase_status(
+            Some(&cut),
+            Some("fatal: could not read from remote repository")
+        ),
+        "warning"
+    );
+}
+
+#[test]
+fn the_default_branch_behind_the_remote_sentence_is_a_warning() {
+    let cut = cut_for(FeatureOrigin::DefaultBranch);
+    assert_eq!(
+        sync_phase_status(
+            Some(&cut),
+            Some("local main is 71 commits behind origin/main; please `git pull` manually")
+        ),
+        "warning"
+    );
+}
+
+#[test]
+fn a_failed_fetch_of_a_ref_with_no_predecessor_stays_failed() {
+    let cut = cut_for(pull_request(42));
+    assert_eq!(
+        sync_phase_status(Some(&cut), Some("fatal: couldn't find remote ref")),
+        "failed"
+    );
+}
+
+#[test]
+fn nothing_to_sync_is_skipped() {
+    assert_eq!(sync_phase_status(None, None), "skipped");
+}

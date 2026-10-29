@@ -22,9 +22,9 @@ export interface AskLifecycle {
 
 export function askLifecycle(thread: AskThread, turnRunning: boolean): AskLifecycle {
   if (thread.status === 'closed') return { label: 'Closed', tone: 'slate', live: false };
-  if (turnRunning) return { label: 'Asking', tone: 'violet', live: true };
+  if (turnRunning) return { label: 'Asking', tone: 'cyan', live: true };
   if (thread.turn_count > 0) return { label: 'Answered', tone: 'cyan', live: false };
-  return { label: 'Open', tone: 'violet', live: false };
+  return { label: 'Open', tone: 'slate', live: false };
 }
 
 /** How many turns a thread has taken. `AskThread.turn_count` counts settled

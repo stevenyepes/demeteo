@@ -1,5 +1,6 @@
 import { useCallback, useId, useMemo, useState, type ReactElement } from 'react';
 
+import { Button } from '../ui/Button';
 import { FieldLabel } from '../ui/FieldLabel';
 import { HarnessPersonalizationNote } from './HarnessPersonalizationNote';
 import { ReviewRunOptions, type ReviewRunInputs } from './ReviewRunOptions';
@@ -152,7 +153,7 @@ export function PullRequestLaunch({
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               placeholder={INSTRUCTIONS_PLACEHOLDER}
-              className="w-full resize-y rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none"
+              className="w-full resize-y rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-sm text-slate-200 placeholder:text-slate-600 focus:border-accent-ring focus:outline-none"
             />
           </div>
         </div>
@@ -177,10 +178,10 @@ export function PullRequestLaunch({
             </p>
           )}
           {pullRequest.from_fork && (
-            <div className="space-y-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2">
+            <div className="space-y-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
               <p
                 data-testid="review-fork-notice"
-                className="text-[11px] leading-relaxed text-violet-200"
+                className="text-[11px] leading-relaxed text-slate-300"
               >
                 {REVIEW_FORK_NOTICE}
               </p>
@@ -192,7 +193,7 @@ export function PullRequestLaunch({
                   onChange={(e) =>
                     setAcknowledgedFor(e.target.checked ? pullRequest.web_url : null)
                   }
-                  className="accent-violet-500"
+                  className="accent-accent"
                 />
                 {FORK_CONSENT_LABEL}
               </label>
@@ -206,24 +207,21 @@ export function PullRequestLaunch({
         </div>
 
         <div className="flex shrink-0 items-end gap-2">
-          <button
-            type="button"
+          <Button
             data-testid="review-options-toggle"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
-            className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
           >
             {togglePanelLabel(open, runOptions !== undefined)}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="primary"
             data-testid="review-this-pr"
             disabled={!plan.ok || modelGap !== null || launching || awaitingConsent}
             onClick={review}
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {launching ? 'Starting review…' : 'Review this PR'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

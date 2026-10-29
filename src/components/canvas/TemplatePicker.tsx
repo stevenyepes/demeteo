@@ -71,7 +71,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
         </header>
 
         <section className="space-y-3">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          <h2 className="text-xs font-bold text-slate-500">
             Clone an existing pipeline
           </h2>
           {loading ? (
@@ -89,14 +89,14 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
                   key={row.id}
                   type="button"
                   onClick={() => onPick({ kind: 'clone', workflowId: row.id, name: row.name })}
-                  className="flex items-start gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left transition-colors hover:border-violet-500/40 hover:bg-violet-500/5"
+                  className="flex items-start gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left transition-colors hover:border-white/15 hover:bg-white/5"
                 >
-                  <Copy className="mt-0.5 h-4 w-4 shrink-0 text-violet-400" />
+                  <Copy className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                   <span className="min-w-0">
                     <span className="flex items-center gap-2">
                       <span className="truncate font-medium text-white">{row.name}</span>
                       {row.is_starter && (
-                        <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 text-[9px] font-bold uppercase tracking-wider text-emerald-400">
+                        <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 text-[9px] font-bold text-emerald-400">
                           Starter
                         </span>
                       )}
@@ -112,7 +112,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          <h2 className="text-xs font-bold text-slate-500">
             Start from a shape
           </h2>
           <div className="grid gap-2">
@@ -121,9 +121,9 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
                 key={template.id}
                 type="button"
                 onClick={() => onPick({ kind: 'template', template })}
-                className="flex items-start gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left transition-colors hover:border-cyan-500/40 hover:bg-cyan-500/5"
+                className="flex items-start gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left transition-colors hover:border-white/15 hover:bg-white/5"
               >
-                <LayoutTemplate className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" />
+                <LayoutTemplate className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                 <span>
                   <span className="block font-medium text-white">{template.label}</span>
                   <span className="mt-1 block text-xs text-slate-400">{template.summary}</span>

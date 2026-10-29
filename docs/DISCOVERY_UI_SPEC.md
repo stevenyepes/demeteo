@@ -214,7 +214,7 @@ This is **exactly `src/components/EmptyStateCard.tsx`** — the mock reproduces
 that component's markup line for line. Reuse it, do not re-author:
 
 ```
-glass-panel p-8 rounded-2xl border border-white/5 text-center bg-black/20
+panel p-8 rounded-2xl border border-white/5 text-center bg-black/20
 flex flex-col items-center justify-center space-y-4 relative overflow-hidden
 ```
 
@@ -277,7 +277,7 @@ is the backdrop, not part of the dialog.
 
 ### 2.2 Frame
 
-Column flex, `glass-panel` surface (`rgba(18,22,30,0.92)`, `backdrop-filter:
+Column flex, `panel` surface (`rgba(18,22,30,0.92)`, `backdrop-filter:
 blur(12px)`, border `rgba(255,255,255,0.05)`, `box-shadow: 0 8px 32px 0
 rgba(0,0,0,0.4)`, radius 12px, `overflow:hidden`).
 
@@ -989,6 +989,15 @@ flight (DSC-3 waits on an open PR), **slate** when the prerequisite has not even
 started (DSC-5, DSC-7). That distinction is visible in the tint, the node border
 and the inspector verdict colour, and it is worth preserving.
 
+> **Superseded (2026-10).** As built, Ready is **amber** and every Blocked
+> ticket is **slate**, and the board lists Ready first. Decision 61 took violet
+> out of statuses, so Ready fell to slate and a startable ticket became
+> indistinguishable from a blocked one, while the only amber on the graph sat
+> on tickets nobody could act on. Amber means a human is needed (AGENTS.md
+> §4), which describes Ready and not Blocked; a blocked ticket's note still
+> names what it waits on. Landed cards keep a neutral border and their check
+> glyph. `ticketPresentation.ts` holds the mapping.
+
 Titles: DSC-1 `Session registry keyed by client id` · DSC-2 `Authenticate clients
 by ed25519 keypair` · DSC-3 `Multiplex run streams over one connection` ·
 DSC-4 `Desktop picks a runner identity per project` · DSC-5 `Fair-share
@@ -1554,7 +1563,7 @@ The mocks obey AGENTS.md §4 exactly. Restated with the Discovery meanings:
 | **ruby** `#ef4444` / `#f87171` / `#fecaca` | error / removal | the `Removed` group label, `.was` strike-through in a diff, destructive hover on `.x`, the vision warning's background and text |
 | **slate** `#64748b` / `#94a3b8` / `#475569` / `#334155` | inert / unstarted | **Dropped** bucket, blocked-with-nothing-started, secondary copy, edges, grid dots, `.lbl` |
 
-Note the two amber/slate grades of *blocked* (§3.5.5) and that ruby appears
+Note the two amber/slate grades of *blocked* (§3.5.5, since superseded: Ready is amber, Blocked slate) and that ruby appears
 **only** for removal and error — never for a blocked or dropped ticket.
 
 ### 6.2 Reusable pieces the mocks repeat
@@ -1581,8 +1590,8 @@ Note the two amber/slate grades of *blocked* (§3.5.5) and that ruby appears
 | `.h { font-family:'Outfit' }` | `font-heading` (via `--font-heading` in `@theme`) | exact |
 | `.m { font-family:'Fira Code','JetBrains Mono' }` | `font-mono` (via `--font-mono`) | exact |
 | `body { font-family:'Inter' }` | `--font-sans`, already on `body` — **UI text needs no class** | exact |
-| `.glass { … }` | `.glass-panel` | **byte-identical** values (`--bg-panel`, `blur(12px)`, `--border-glass`, `0 8px 32px 0 rgba(0,0,0,0.4)`, `--radius-panel`) |
-| `.glass:hover` | `.glass-panel-hover` | exact (`--bg-panel-hover`, `rgba(255,255,255,0.08)`) |
+| `.glass { … }` | `.panel` | **byte-identical** values (`--bg-panel`, `blur(12px)`, `--border-hairline`, `0 8px 32px 0 rgba(0,0,0,0.4)`, `--radius-panel`) |
+| `.glass:hover` | `.panel-hover` | exact (`--bg-panel-hover`, `rgba(255,255,255,0.08)`) |
 | `.btn-p` | `.btn-primary` | identical but for padding (mocks use `8px 16px`/`9px 16px`/`10px 20px` vs `10px 18px`) and `font-size:13px`, which `.btn-primary` does not set |
 | `.btn-s` (Main/NewDiscovery/Decompose/TicketEdit) | `.btn-secondary` | identical but for `font-size:13px` |
 | `.fld` | `.input-field` | identical values; `.input-field` sets `font-size:0.9rem` (14.4 px) where the mocks use 13 px |
@@ -1602,7 +1611,7 @@ Note the two amber/slate grades of *blocked* (§3.5.5) and that ruby appears
 | `.dz`, `.pick`, `.att`, `.thumb`, `.mime` | `AttachmentDropzone.tsx`, `AttachmentChip.tsx` | verbatim reproductions of the real components |
 | `.warn` | the vision-warning block in `StartFeatureModal.tsx` | verbatim |
 | Tailwind palettes `amber-*`, `cyan-*`, `emerald-*`, `violet-*`, `slate-*` | Tailwind v4 defaults | present |
-| `ruby-*` | `@theme --color-ruby-50…950` in `src/App.css` | present (`text-ruby-400` = `#f87171`, `ruby-200` = `#fecaca`, `ruby-300` = `#fca5a5`) |
+| `ruby-*` | `@theme --color-ruby-50…950` in `src/styles/tokens.css` | present (`text-ruby-400` = `#f87171`, `ruby-200` = `#fecaca`, `ruby-300` = `#fca5a5`) |
 
 ### 6.4 What does **not** exist — the gaps
 
@@ -1665,8 +1674,8 @@ does, so it is precedent, not a new problem.
    denser (`padding:2px`, `gap:2px`, `4px 10px` segments, 11 px). Either accept
    the app's cyan and reuse the component, or add a tone axis to it. **Do not
    fork it** — it is a `radiogroup` with its own arrow-key contract.
-2. **`.card` in TicketEdit is not `glass-panel`.** `rgba(18,22,30,0.55)`, no blur,
-   no shadow. `SectionCard` (`glass-panel p-5`) is heavier. A nested card inside
+2. **`.card` in TicketEdit is not `panel`.** `rgba(18,22,30,0.55)`, no blur,
+   no shadow. `SectionCard` (`panel p-5`) is heavier. A nested card inside
    a panel wanting a lighter surface is a real gap; name it once rather than
    inlining `bg-[rgba(18,22,30,0.55)]` five times.
 3. **`.btn-s` has two spellings across the mocks.** ProjectHome's is *filled*

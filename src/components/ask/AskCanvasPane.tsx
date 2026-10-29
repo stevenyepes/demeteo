@@ -10,6 +10,7 @@ import { formatError } from '../../lib/errors';
 import type { AskCanvas, AskMessageView, CanvasPathVerdict, PinnedCanvasEntry } from '../../types';
 import { ArtifactModal } from '../ArtifactModal';
 import { ArtifactRow } from '../ArtifactRow';
+import { Button } from '../ui/Button';
 import { AskActivityStrip } from './AskActivityStrip';
 import { AskCanvasNodeInspector } from './AskCanvasNodeInspector';
 import { ROLE_LABEL } from './AskCanvasNode';
@@ -184,20 +185,12 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
     <div className="flex h-full w-full flex-col">
       {held !== null && phase === null && (
         <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-3 py-2">
-          <button
-            type="button"
-            onClick={() => void handlePin()}
-            className="btn-primary font-mono text-[11px]"
-          >
+          <Button variant="primary" size="sm" onClick={() => void handlePin()}>
             Pin to Demeteo
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleExport()}
-            className="btn-secondary font-mono text-[11px]"
-          >
+          </Button>
+          <Button size="sm" onClick={() => void handleExport()}>
             Export
-          </button>
+          </Button>
         </div>
       )}
       {error && (

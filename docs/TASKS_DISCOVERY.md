@@ -119,7 +119,7 @@ no way to say.
    no action. No tone axis for a single call site, and no fork — it owns a
    `radiogroup` arrow-key contract.
 2. **The lighter nested card** — a real gap. Add exactly one named utility in
-   `src/App.css` beside `glass-panel`, and use it everywhere the mocks spell
+   `src/App.css` beside `panel`, and use it everywhere the mocks spell
    `rgba(18,22,30,0.55)`. Never inline the value.
 3. **Small buttons** — `.btn-secondary`. ProjectHome's filled variant is the
    app's own existing style, not a second one to reproduce.
@@ -279,7 +279,7 @@ Both were opened by Phase 6 and answered in Phase 7.
   bypass paragraph appears through exactly that path, the moment a force start
   lands.
 - **One new utility, `.nested-card`.** §6.5 item 2's `rgba(18,22,30,0.55)`
-  card, named once in `src/App.css` beside `glass-panel` rather than inlined at
+  card, named once in `src/App.css` beside `panel` rather than inlined at
   each of the four call sites.
 
 ## Per-ticket placement — what it decided

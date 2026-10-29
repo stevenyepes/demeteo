@@ -69,8 +69,8 @@ const KIND_META: Record<
   provider: {
     icon: ShieldAlert,
     label: "Provider",
-    accent: "text-violet-300",
-    leftBar: "border-l-violet-400/70",
+    accent: "text-slate-300",
+    leftBar: "border-l-slate-500/60",
   },
   transport: {
     icon: WifiOff,
@@ -175,13 +175,13 @@ const ErrorToastRow: React.FC<{
 
   return (
     <div
-      className={`pointer-events-auto flex items-start gap-3 rounded-xl border border-white/5 border-l-4 ${meta.leftBar} bg-[rgba(18,22,30,0.95)] backdrop-blur-md pl-3 pr-4 py-3 shadow-2xl min-w-[320px] max-w-[480px]`}
+      className={`raised pointer-events-auto flex items-start gap-3 border-l-4 ${meta.leftBar} pl-3 pr-4 py-3 min-w-[320px] max-w-[480px]`}
       role="alert"
       data-testid={`error-toast-${kind}`}
     >
       <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${meta.accent}`} />
       <div className="flex-1 min-w-0">
-        <div className={`text-xs uppercase tracking-wider ${meta.accent} font-medium`}>
+        <div className={`text-xs ${meta.accent} font-medium`}>
           {meta.label}
         </div>
         <div className="text-sm text-slate-100 break-words mt-0.5">{message}</div>
@@ -193,7 +193,7 @@ const ErrorToastRow: React.FC<{
                 action.onClick();
                 if (dismissable) dismiss(id);
               }}
-              className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+              className="inline-flex items-center gap-1 text-xs text-accent-ink hover:text-white transition-colors"
             >
               {action.label}
             </button>
@@ -203,7 +203,7 @@ const ErrorToastRow: React.FC<{
               key={cta}
               type="button"
               onClick={() => handleCta(cta)}
-              className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+              className="inline-flex items-center gap-1 text-xs text-accent-ink hover:text-white transition-colors"
             >
               <CtaIcon className="w-3 h-3" />
               {label}

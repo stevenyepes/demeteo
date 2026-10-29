@@ -33,7 +33,7 @@ export function UiZoomIndicator(): React.ReactElement | null {
       role="status"
       aria-live="polite"
       data-testid="ui-zoom-indicator"
-      className="glass-panel animate-fade-in pointer-events-none fixed left-1/2 top-6 z-[90] -translate-x-1/2 px-4 py-2 font-mono text-sm text-slate-100"
+      className="panel animate-fade-in pointer-events-none fixed left-1/2 top-6 z-[90] -translate-x-1/2 px-4 py-2 font-mono text-sm text-slate-100"
     >
       <span className="sr-only">Zoom </span>
       {uiZoomPercent(zoom)}

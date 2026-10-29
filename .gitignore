@@ -54,3 +54,7 @@ deploy/hub/openbao/data/
 deploy/hub/openbao/*.keys
 deploy/hub/openbao/*unseal*
 deploy/hub/openbao/*init*.json
+
+# Impeccable's 21MB per-platform engine; scripts/impeccable downloads a
+# version-pinned copy to ~/.impeccable when the sibling binary is absent.
+.claude/skills/impeccable/scripts/bin/

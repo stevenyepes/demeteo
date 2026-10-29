@@ -1,15 +1,15 @@
 /**
- * The card React Flow draws for one workflow node. Dark neon glassmorphism to
- * match the rest of the app; the kind icon + type chip make a graph scannable
- * without opening panels (the anti-"identical boxes" rule, PRD §6.3).
+ * The card React Flow draws for one workflow node. The kind icon + type chip
+ * make a graph scannable without opening panels (the anti-"identical boxes"
+ * rule, PRD §6.3).
  *
  * Run-mode overlay (P2.2): when `data.run` is present the card takes on the
  * run-status color language (`lib/runStatus.ts`) — a pulsing dot for in-motion
- * nodes, a tone-matched glow, the agent/model/effort the step actually spawned
+ * nodes, a tone-matched border, the agent/model/effort the step actually spawned
  * with (or, on a node still queued, the trio it is pinned to), duration+cost
  * chips on completion, and the failure class on a failed node. Animation is
- * **opacity-only** (`animate-pulse`, static box-shadows) to honor the webview
- * battery rule; no infinite transforms.
+ * **opacity-only** (`animate-pulse`) to honor the webview battery rule; no
+ * infinite transforms.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AlertTriangle, OctagonAlert, ShieldCheck } from 'lucide-react';
@@ -29,14 +29,15 @@ import type { WorkflowFlowNode } from '../flowGraph';
 
 const HANDLE_CLASS = '!h-2 !w-2 !border-slate-600 !bg-slate-800';
 
-/** Card border + glow per run tone — the run-mode equivalent of the
- *  timeline's per-status card tint. Static box-shadows only. */
+/** Card border per run tone — the run-mode equivalent of the timeline's
+ *  per-status card tint. Emerald is deliberately neutral: a finished run is
+ *  every node green at once, which drowns the amber and ruby nodes a reader
+ *  is scanning for. The dot still carries the state. */
 const TONE_CARD: Record<RunStatusTone, string> = {
-  cyan: 'border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.18)]',
-  violet: 'border-violet-500/50 shadow-[0_0_18px_rgba(139,92,246,0.18)]',
-  amber: 'border-amber-500/50 shadow-[0_0_18px_rgba(245,158,11,0.20)]',
-  emerald: 'border-emerald-500/40 shadow-lg shadow-black/30',
-  ruby: 'border-rose-500/50 shadow-[0_0_18px_rgba(244,63,94,0.22)]',
+  cyan: 'border-cyan-500/50 shadow-lg shadow-black/30',
+  amber: 'border-amber-500/50 shadow-lg shadow-black/30',
+  emerald: 'border-slate-700/60 shadow-lg shadow-black/30',
+  ruby: 'border-rose-500/50 shadow-lg shadow-black/30',
   slate: 'border-slate-700/60 shadow-lg shadow-black/30',
 };
 
@@ -45,7 +46,7 @@ const TONE_CARD: Record<RunStatusTone, string> = {
  *  loud colors. */
 const ESSENCE_CHIP: Record<EssenceKind, string> = {
   agent: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300/90',
-  model: 'border-violet-500/20 bg-violet-500/10 text-violet-300/90',
+  model: 'border-slate-600/40 bg-slate-700/20 text-slate-300',
   effort: 'border-slate-600/40 bg-slate-700/20 text-slate-300',
   capability: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300/90',
   flag: 'border-slate-600/40 bg-slate-800/40 text-slate-400',
@@ -55,11 +56,15 @@ const ESSENCE_CHIP: Record<EssenceKind, string> = {
  *  overlay competing for the border, so the diff owns it outright; a removed
  *  node is dimmed as well, since it isn't part of the graph on the right. */
 const DIFF_CARD: Record<NodeDiffMark, string> = {
-  added: 'border-emerald-400/70 shadow-[0_0_0_1px_rgba(52,211,153,0.4),0_0_18px_rgba(16,185,129,0.22)]',
-  removed:
-    'border-rose-400/60 border-dashed opacity-60 shadow-[0_0_18px_rgba(244,63,94,0.15)]',
-  changed:
-    'border-amber-400/70 shadow-[0_0_0_1px_rgba(251,191,36,0.35),0_0_18px_rgba(245,158,11,0.2)]',
+  added: 'border-emerald-400/70 shadow-lg shadow-black/30',
+  removed: 'border-rose-400/60 border-dashed opacity-60 shadow-lg shadow-black/30',
+  changed: 'border-amber-400/70 shadow-lg shadow-black/30',
+};
+
+const DIFF_LABEL: Record<NodeDiffMark, string> = {
+  added: 'Added',
+  removed: 'Removed',
+  changed: 'Changed',
 };
 
 const DIFF_CHIP: Record<NodeDiffMark, string> = {
@@ -71,7 +76,6 @@ const DIFF_CHIP: Record<NodeDiffMark, string> = {
 /** Solid status dot per run tone. */
 const TONE_DOT: Record<RunStatusTone, string> = {
   cyan: 'bg-cyan-400',
-  violet: 'bg-violet-400',
   amber: 'bg-amber-400',
   emerald: 'bg-emerald-400',
   ruby: 'bg-rose-400',
@@ -134,14 +138,16 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
     <div
       className={[
         'group flex min-w-[200px] max-w-[280px] flex-col gap-2 rounded-xl border px-3.5 py-2.5',
-        'bg-slate-900/70 backdrop-blur-sm transition-shadow',
+        'bg-surface-raised transition-shadow',
         isSkipped ? 'opacity-50' : '',
-        // The replay cone reads as a violet "will re-run" ring, distinct from
-        // the cyan selection highlight (P2.4). Selection still wins the border.
+        // The replay cone is a preview of what a confirm would re-run, not a
+        // status and not a choice, so it is a dashed neutral edge rather than
+        // a hue; the accent edge stays selection's alone (P2.4). Selection
+        // still wins the border.
         data.highlighted && !selected
-          ? 'border-violet-400/60 shadow-[0_0_0_2px_rgba(167,139,250,0.45),0_0_18px_rgba(139,92,246,0.25)]'
+          ? 'border-dashed border-slate-300/70 shadow-lg shadow-black/30'
           : selected
-            ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]'
+            ? 'border-accent-edge ring-1 ring-accent-edge shadow-lg shadow-black/30'
             : diff
               ? DIFF_CARD[diff]
               : tone
@@ -192,15 +198,15 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
                     ? `Changed: ${data.diffFields.join(', ')}`
                     : undefined
                 }
-                className={`shrink-0 rounded border px-1 py-px text-[9px] font-bold uppercase tracking-wide ${DIFF_CHIP[diff]}`}
+                className={`shrink-0 rounded border px-1 py-px text-[9px] font-bold ${DIFF_CHIP[diff]}`}
               >
-                {diff}
+                {DIFF_LABEL[diff]}
               </span>
             )}
           </div>
           <div
-            className={`text-[11px] font-medium uppercase tracking-wide ${
-              tone ? TONE_TEXT[tone] : TONE_TEXT[meta.tone]
+            className={`text-[11px] font-medium ${
+              tone === 'emerald' ? 'text-slate-400' : tone ? TONE_TEXT[tone] : TONE_TEXT[meta.tone]
             }`}
           >
             {runMeta ? runMeta.label : meta.label}
@@ -237,7 +243,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
             </span>
           )}
           {typeof run?.costUsd === 'number' && run.costUsd > 0 && (
-            <span className="text-emerald-400">{formatCost(run.costUsd)}</span>
+            <span className="text-slate-300">{formatCost(run.costUsd)}</span>
           )}
           {typeof run?.wallClockSecs === 'number' && run.wallClockSecs > 0 && (
             <span className="text-slate-400">{formatDuration(run.wallClockSecs)}</span>

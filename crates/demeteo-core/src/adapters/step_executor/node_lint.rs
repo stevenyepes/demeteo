@@ -371,12 +371,13 @@ mod tests {
         assert!(has_errors(&findings));
     }
 
-    const STARTERS: [&str; 8] = [
+    const STARTERS: [&str; 9] = [
         "bugfix-pipeline",
         "ci-fix",
         "code-review",
         "docs-update",
         "experiment",
+        "reference-feature-pipeline",
         "refactor",
         "simple-task",
         "standard-feature-pipeline",

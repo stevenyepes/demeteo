@@ -1,4 +1,5 @@
 import { AlertCircle, Cpu, Gauge, Lock, X, Zap } from 'lucide-react';
+import { Button } from '../../ui/Button';
 
 import { assignmentEffortLabel, assignmentModelLabel } from '../../../lib/runEventAssignments';
 import { isAssignable } from '../../../lib/stepAssignment';
@@ -66,11 +67,11 @@ export function AssignmentSection({
   return (
     <div className="rounded-xl border border-white/5 bg-black/20 p-3.5">
       <div className="mb-2.5 flex items-center justify-between gap-2">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        <div className="text-[10px] font-bold text-slate-500">
           Assignment
         </div>
         {readOnly && (
-          <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold text-slate-400">
             <Lock className="h-3 w-3" /> Read-only
           </span>
         )}
@@ -126,22 +127,21 @@ export function AssignmentSection({
           />
 
           <div className="mt-3 flex items-center justify-end gap-2">
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={() => void assignment.reset()}
               disabled={assignment.applying || !assignment.pinned}
-              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Reset to inherited
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => void assignment.apply()}
               disabled={assignment.applying || !assignment.dirty}
-              className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-slate-700/40 disabled:text-slate-500"
             >
               {assignment.applying ? 'Applying…' : 'Apply'}
-            </button>
+            </Button>
           </div>
         </>
       )}

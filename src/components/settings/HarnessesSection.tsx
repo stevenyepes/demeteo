@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Plus, RotateCw, Trash2, Zap } from 'lucide-react';
 import { useSettings } from './ProjectSettingsContext';
 import type { CommandProbeReport, ProbedCommand, ProbedCommandSource } from '../../lib/project';
+import { Button } from '../ui/Button';
 
 // The Strategy tab's harness half, extracted (HB6): each row now carries five
 // columns — name, command, gate checkbox, order, probe status — and both
@@ -108,10 +109,10 @@ export function HarnessesSection() {
   };
 
   return (
-    <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
+    <div className="panel p-6 md:col-span-2 space-y-4">
       <div className="flex items-center justify-between border-b border-white/5 pb-2">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-          <Zap className="w-4 h-4 text-cyan-400" /> Validation Harnesses
+        <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+          <Zap className="w-4 h-4 text-slate-400" /> Validation Harnesses
         </h3>
         <div className="flex items-center gap-3">
           {/* Which machine was asked. Not decoration: on a remote-compute
@@ -128,7 +129,7 @@ export function HarnessesSection() {
             type="button"
             onClick={s.refreshCommandProbe}
             disabled={s.isProbingCommands}
-            className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all disabled:opacity-50"
+            className="p-1 rounded text-slate-500 hover:text-white hover:bg-white/5 transition-all disabled:opacity-50"
             aria-label="Re-check commands"
           >
             <RotateCw className={`w-3.5 h-3.5 ${s.isProbingCommands ? 'animate-spin text-cyan-400' : ''}`} />
@@ -154,9 +155,9 @@ export function HarnessesSection() {
       )}
 
       <div>
-        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider" htmlFor="prepare-command">Prepare Command (optional)</label>
+        <label className="block text-xs font-mono text-slate-400 mb-1.5" htmlFor="prepare-command">Prepare Command (optional)</label>
         <div className="flex gap-2 items-center">
-          <input id="prepare-command" type="text" value={s.prepareCommand} onChange={e => s.setPrepareCommand(e.target.value)} placeholder="e.g. npm ci or cargo fetch" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <input id="prepare-command" type="text" value={s.prepareCommand} onChange={e => s.setPrepareCommand(e.target.value)} placeholder="e.g. npm ci or cargo fetch" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <ProbeStatus probe={probeFor(s.commandProbe, 'prepare')} probing={s.isProbingCommands} />
         </div>
         <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
@@ -168,9 +169,9 @@ export function HarnessesSection() {
       </div>
 
       <div>
-        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider" htmlFor="test-command">Default Test Command</label>
+        <label className="block text-xs font-mono text-slate-400 mb-1.5" htmlFor="test-command">Default Test Command</label>
         <div className="flex gap-2 items-center">
-          <input id="test-command" type="text" value={s.testCommand} onChange={e => s.setTestCommand(e.target.value)} placeholder="e.g. npm test or cargo test" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <input id="test-command" type="text" value={s.testCommand} onChange={e => s.setTestCommand(e.target.value)} placeholder="e.g. npm test or cargo test" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <ProbeStatus probe={probeFor(s.commandProbe, 'test')} probing={s.isProbingCommands} />
         </div>
         <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
@@ -179,7 +180,7 @@ export function HarnessesSection() {
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 uppercase tracking-wider border-t border-white/5 pt-3">
+        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 border-t border-white/5 pt-3">
           <span>Named harnesses</span>
           <span>{gates.length > 0 ? `${gates.length} gating validation` : 'none gating — falls back to the test command'}</span>
         </div>
@@ -187,16 +188,16 @@ export function HarnessesSection() {
           const gating = isGate(name);
           const position = gates.indexOf(name);
           return (
-            <div key={name} className={`flex gap-2 items-center p-2 rounded-lg border transition-all ${gating ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-black/20 border-white/5'}`}>
+            <div key={name} className={`flex gap-2 items-center p-2 rounded-lg border transition-all ${gating ? 'bg-accent-tint border-accent-edge' : 'bg-black/20 border-white/5'}`}>
               <label className="flex items-center gap-2 shrink-0 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={gating}
                   onChange={() => toggleGate(name)}
                   aria-label={`${name} gates validation`}
-                  className="w-4 h-4 rounded border-white/20 bg-black/40 text-emerald-500 focus:ring-emerald-500/40 focus:ring-offset-0"
+                  className="w-4 h-4 rounded border-white/20 bg-black/40 accent-accent"
                 />
-                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider hidden md:inline">gates</span>
+                <span className="text-[10px] font-mono text-slate-500 hidden md:inline">gates</span>
               </label>
               <div className="flex-1 min-w-0 font-mono text-xs text-white truncate">
                 <span className="text-cyan-400">{name}</span>: <span className="text-slate-300">{s.harnesses[name]}</span>
@@ -206,10 +207,10 @@ export function HarnessesSection() {
                   integration — and only a gate has one, since a harness that
                   never runs has no position in the run. */}
               <div className="flex flex-col shrink-0">
-                <button type="button" onClick={() => moveGate(name, -1)} disabled={!gating || position <= 0} aria-label={`Run ${name} earlier`} className="p-0.5 text-slate-500 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-slate-500">
+                <button type="button" onClick={() => moveGate(name, -1)} disabled={!gating || position <= 0} aria-label={`Run ${name} earlier`} className="p-0.5 text-slate-500 hover:text-white disabled:opacity-20 disabled:hover:text-slate-500">
                   <ChevronUp className="w-3.5 h-3.5" />
                 </button>
-                <button type="button" onClick={() => moveGate(name, 1)} disabled={!gating || position < 0 || position >= gates.length - 1} aria-label={`Run ${name} later`} className="p-0.5 text-slate-500 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-slate-500">
+                <button type="button" onClick={() => moveGate(name, 1)} disabled={!gating || position < 0 || position >= gates.length - 1} aria-label={`Run ${name} later`} className="p-0.5 text-slate-500 hover:text-white disabled:opacity-20 disabled:hover:text-slate-500">
                   <ChevronDown className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -220,18 +221,18 @@ export function HarnessesSection() {
           );
         })}
         <div className="border-t border-white/5 pt-3 flex gap-2">
-          <input type="text" placeholder="Name" id="new-harness-name" aria-label="New harness name" className="w-1/3 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-          <input type="text" placeholder="Command" id="new-harness-cmd" aria-label="New harness command" className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-          <button type="button" onClick={() => {
+          <input type="text" placeholder="Name" id="new-harness-name" aria-label="New harness name" className="w-1/3 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring font-mono" />
+          <input type="text" placeholder="Command" id="new-harness-cmd" aria-label="New harness command" className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring font-mono" />
+          <Button variant="primary" size="sm" onClick={() => {
             const nameEl = document.getElementById('new-harness-name') as HTMLInputElement;
             const cmdEl = document.getElementById('new-harness-cmd') as HTMLInputElement;
             if (nameEl && cmdEl) {
               const name = nameEl.value.trim(); const cmd = cmdEl.value.trim();
               if (name && cmd) { s.setHarnesses({ ...s.harnesses, [name]: cmd }); nameEl.value = ''; cmdEl.value = ''; }
             }
-          }} aria-label="Add harness" className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors flex items-center gap-1 font-semibold shrink-0">
+          }} aria-label="Add harness" className="shrink-0">
             <Plus className="w-3 h-3" /> Add
-          </button>
+          </Button>
         </div>
       </div>
 

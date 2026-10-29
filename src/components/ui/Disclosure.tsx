@@ -63,7 +63,7 @@ export function Disclosure({
       <div data-testid="disclosure" data-open={open ? 'true' : 'false'} className={`contents ${className}`}>
         <div
           className={`flex h-8 max-w-full min-w-0 items-center gap-2 rounded-full border pr-3 text-xs transition-colors ${
-            open ? 'border-violet-500/40 bg-violet-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
+            open ? 'border-accent-edge bg-accent-tint' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
           }`}
         >
           <button
@@ -76,7 +76,7 @@ export function Disclosure({
             className="flex h-full shrink-0 items-center gap-2 rounded-full pl-3 text-left"
           >
             {icon && <span className="shrink-0 flex items-center">{icon}</span>}
-            <span className={`font-medium ${open ? 'text-violet-200' : 'text-slate-200'}`}>{title}</span>
+            <span className={`font-medium ${open ? 'text-white' : 'text-slate-200'}`}>{title}</span>
           </button>
           {meta && <div className="flex min-w-0 items-center gap-2 overflow-hidden">{meta}</div>}
         </div>
@@ -86,7 +86,7 @@ export function Disclosure({
             data-testid="disclosure-body"
             role="region"
             aria-labelledby={triggerId}
-            className={`glass-panel animate-fade-in order-last basis-full overflow-hidden ${bodyClassName}`}
+            className={`panel animate-fade-in order-last basis-full overflow-hidden ${bodyClassName}`}
           >
             {children}
           </div>
@@ -99,7 +99,7 @@ export function Disclosure({
     <div
       data-testid="disclosure"
       data-open={open ? 'true' : 'false'}
-      className={`glass-panel overflow-hidden ${className}`}
+      className={`panel overflow-hidden ${className}`}
     >
       <div className="flex items-center gap-2">
         <button
@@ -112,7 +112,7 @@ export function Disclosure({
           className="flex-1 min-w-0 px-4 py-3 flex items-center gap-2 text-left hover:bg-white/[0.02] transition-colors"
         >
           {icon && <span className="shrink-0 flex items-center">{icon}</span>}
-          <span className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider truncate">
+          <span className="font-heading text-sm font-semibold text-slate-300 truncate">
             {title}
           </span>
           <ChevronRight

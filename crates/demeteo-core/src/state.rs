@@ -148,6 +148,11 @@ pub struct AppContext {
     /// Worktree operations (cloning, provisioning, status, branch delete, etc.).
     pub worktree_ops: Arc<dyn WorktreeOpsPort>,
 
+    /// Where the provider PAT for a git remote comes from, for the callers
+    /// that authenticate a push themselves rather than through
+    /// [`worktree_ops`](Self::worktree_ops).
+    pub git_credentials: Arc<dyn crate::ports::git_credentials::GitCredentialSource>,
+
     /// Provider HTTP operations (validation, list repos).
     pub provider_http: Arc<dyn ProviderHttpPort>,
 

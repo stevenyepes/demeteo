@@ -123,7 +123,7 @@ describe('GateView artifact picker wiring', () => {
     const rows = screen
       .getAllByText('implementation-spec.md')
       .map((el) => el.closest('button'))
-      .filter((row) => row?.classList.contains('border-violet-500/30'));
+      .filter((row) => row?.classList.contains('border-accent-edge'));
     expect(rows).toHaveLength(1);
     expect(screen.queryByText('s-gate-review')).not.toBeInTheDocument();
   });
@@ -156,7 +156,7 @@ describe('GateView artifact picker wiring', () => {
     });
 
     const row = screen.getByText('implementation-report.md').closest('button');
-    expect(row).toHaveClass('border-violet-500/30');
+    expect(row).toHaveClass('border-accent-edge');
   });
 
   it('changes the artifactPath the viewer receives when a different predecessor row is selected', async () => {
@@ -261,6 +261,43 @@ describe('GateView artifact picker wiring', () => {
     await userEvent.click(screen.getByText('research-report.md'));
     await waitFor(() => {
       expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent('artifacts/research-report.md');
+    });
+  });
+});
+
+// Gate prompts tell the reviewer to scope the work and approve, with their
+// notes carried forward — which only holds if Approve sends them.
+describe('GateView approval notes', () => {
+  it('sends the notes with an approval', async () => {
+    decideGate.mockReset().mockResolvedValue(undefined);
+    mount();
+
+    const notes = await screen.findByPlaceholderText(/anything the next steps should know/i);
+    await userEvent.type(notes, '  drop P3; U1 is per-user  ');
+    await userEvent.click(screen.getByRole('button', { name: /approve step/i }));
+
+    await waitFor(() => {
+      expect(decideGate).toHaveBeenCalledWith({
+        stepExecutionId: 'se-gate',
+        decision: 'approve',
+        feedback: 'drop P3; U1 is per-user',
+      });
+    });
+  });
+
+  it('records an approval without notes as no comment, not an empty one', async () => {
+    decideGate.mockReset().mockResolvedValue(undefined);
+    mount();
+
+    await screen.findByPlaceholderText(/anything the next steps should know/i);
+    await userEvent.click(screen.getByRole('button', { name: /approve step/i }));
+
+    await waitFor(() => {
+      expect(decideGate).toHaveBeenCalledWith({
+        stepExecutionId: 'se-gate',
+        decision: 'approve',
+        feedback: null,
+      });
     });
   });
 });

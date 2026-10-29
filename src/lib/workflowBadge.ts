@@ -4,7 +4,7 @@
  *
  * Two regressions this guards against:
  *
- *  1. A feature whose `workflow_id` is null/empty used to render a violet badge
+ *  1. A feature whose `workflow_id` is null/empty used to render a named badge
  *     with the literal word "undefined" in it, looking like a real match. Any
  *     miss must fall through to the muted "unknown" badge.
  *

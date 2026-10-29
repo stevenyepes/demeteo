@@ -109,6 +109,15 @@ distinguish "leave alone" from "set to NULL".
   the R6 cascade port was deleted as never-called).
 - **`MrPublisher`** (`ports/mr_publisher.rs`) — publish a draft MR/PR
   via the project's provider instance; returns `MrInfo`.
+- **`GitCredentialSource`** (`ports/git_credentials.rs`) — `pat_for(provider_id,
+  repo_dir)`: where the token for a git remote comes from. `GitOpsHelper` and
+  the origin-git callers in the executor, bootstrap, land and `sync_session`
+  ask it instead of reading the keyring. The desktop default
+  (`KeyringCredentialSource`) wraps the keyring and credential cache and ignores
+  `repo_dir`; the runner injects `RunnerCredentialSource`, which resolves the
+  run's in-memory PAT from the repo dir
+  ([`REMOTE_EXECUTION.md` §6.2](REMOTE_EXECUTION.md)). Wired through
+  `composition::build_core_context_with_credentials`.
 - **`ProviderHttpPort`** (`ports/provider_http.rs`) — typed wrapper
   over `reqwest` + keyring for `validate_provider_pat` /
   `fetch_provider_repos`.
@@ -203,6 +212,7 @@ src-tauri/src/
 │   ├── merge.rs
 │   ├── conflict.rs
 │   ├── mr_publisher.rs
+│   ├── git_credentials.rs         # GitCredentialSource
 │   ├── artifact_store.rs
 │   ├── attachment_store.rs
 │   ├── provider_http.rs
@@ -382,7 +392,6 @@ src/                              # React frontend
 │   ├── ProviderSettings.tsx
 │   ├── ProvidersPage.tsx
 │   ├── settings/
-│   ├── Sidebar.tsx
 │   ├── StartFeatureModal.tsx
 │   ├── TerminalStatusOverlay.tsx
 │   ├── TerminalWindow.tsx
@@ -436,7 +445,7 @@ never dials a desktop. What a `run_events` row may become on the wire is decided
 [`domain/hub_socket/projection.rs`](../crates/demeteo-core/src/domain/hub_socket/projection.rs)
 alone, and no source file but `adapters/hub/socket/ws_transport.rs` names the WebSocket crate,
 behind `demeteo-core`'s default `hub-socket` feature that `demeteo-runner` builds without. Spec:
-[HUB.md](HUB.md); decisions 61–68 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
+[HUB.md](HUB.md); decisions 62–69 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
 
 ## 4. Tauri Command Surface
 

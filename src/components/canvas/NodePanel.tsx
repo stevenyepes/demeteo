@@ -188,15 +188,15 @@ export function NodePanel({
       meta={
         <>
           <span
-            className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${TONE_CHIP[statusMeta.tone]}`}
+            className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${TONE_CHIP[statusMeta.tone]}`}
           >
             {statusMeta.label}
           </span>
-          <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+          <span className="text-[10px] font-mono text-slate-500">
             {meta.label}
           </span>
           {errorClass && (
-            <span className="rounded border border-ruby-500/20 bg-ruby-500/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ruby-400">
+            <span className="rounded border border-ruby-500/20 bg-ruby-500/10 px-1.5 py-0.5 text-[10px] font-bold text-ruby-400">
               {classLabel(errorClass)}
             </span>
           )}

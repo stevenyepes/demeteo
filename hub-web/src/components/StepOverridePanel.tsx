@@ -9,6 +9,7 @@ import {
 } from '../../../src/lib/effortLevels';
 import { isOverridable, type StepOverrideDraft } from '../lib/dispatchForm';
 import type { WorkflowGraphNode } from '../lib/fleet';
+import { Button } from '../../../src/components/ui/Button';
 
 interface StepOverridePanelProps {
   node: Pick<WorkflowGraphNode, 'id' | 'type' | 'title'>;
@@ -75,13 +76,10 @@ export function StepOverridePanel({ node, override, defaultAgentKind, onChange, 
     <div className="nested-card flex flex-col gap-3 p-4">
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="font-heading text-sm text-slate-100">{node.title}</h3>
-        <button
-          type="button"
-          onClick={onReset}
-          className="btn-secondary text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-        >
+        <Button variant="secondary" size="sm"
+          onClick={onReset}>
           Inherit all
-        </button>
+        </Button>
       </div>
       <div className="flex flex-col gap-1.5">
         <label htmlFor={agentId} className="text-xs font-medium text-slate-300">

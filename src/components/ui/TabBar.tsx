@@ -1,6 +1,5 @@
 import React, { useRef } from 'react';
 
-import { TONE_TEXT } from '../../lib/runStatus';
 import { nextIndexForKey } from './rovingIndex';
 
 export interface TabDef<T extends string = string> {
@@ -108,7 +107,7 @@ export function TabBar<T extends string>({
   );
 }
 
-const SELECTED = `border-cyan-500 ${TONE_TEXT.cyan}`;
+const SELECTED = 'border-accent-edge text-white';
 const IDLE = 'border-transparent text-slate-400 hover:text-slate-200';
 
 const SIZE: Record<TabBarSize, { strip: string; tab: string }> = {

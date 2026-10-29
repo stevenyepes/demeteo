@@ -17,6 +17,7 @@ import { getWorkspaceDir, getWorkspaceDirSetting, setWorkspaceDirSetting } from 
 import type { AgentTimeouts as AgentTimeoutsType, AppVersion } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { TimeoutField } from './ui/TimeoutField';
+import { Button } from './ui/Button';
 
 const DEFAULT_AGENT_TIMEOUTS: AgentTimeoutsType = {
   fast_timeout_s: 300,
@@ -157,7 +158,7 @@ const PreferencesScreen = () => {
         <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
           <div className="flex items-center gap-3">
             <BackButton />
-            <Settings className="w-6 h-6 text-cyan-400" />
+            <Settings className="w-6 h-6 text-slate-400" />
             <div>
               <h1 className="text-2xl font-heading font-bold text-white">Preferences</h1>
               <p className="text-sm text-slate-400">Global settings for Demeteo orchestrator</p>
@@ -179,24 +180,21 @@ const PreferencesScreen = () => {
           <MachinesView onChange={() => {}} />
         )}
         {activeTab === 'providers' && (
-          <div className="glass-panel p-6 text-center">
+          <div className="panel p-6 text-center">
             <Globe className="w-8 h-8 text-slate-500 mx-auto mb-3" />
             <h3 className="text-sm font-heading font-semibold text-white mb-1">Provider Management</h3>
             <p className="text-xs text-slate-400 mb-4">Manage Git hosting provider connections.</p>
-            <button
-              onClick={() => onNavigate('providers')}
-              className="px-4 py-2 text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-all"
-            >
+            <Button variant="primary" onClick={() => onNavigate('providers')}>
               Open Providers Page
-            </button>
+            </Button>
           </div>
         )}
         {activeTab === 'defaults' && (
           <div className="space-y-4">
             {/* Workspace Storage */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
-                <FolderOpen className="w-4 h-4 text-cyan-400" />
+                <FolderOpen className="w-4 h-4 text-slate-400" />
                 Workspace Storage
               </h3>
               <p className="text-xs text-slate-400 mb-4">
@@ -207,7 +205,7 @@ const PreferencesScreen = () => {
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+                  <label className="block text-[10px] font-mono text-slate-500 mb-1.5">
                     Active directory
                   </label>
                   <p className="font-mono text-xs text-slate-300 bg-black/40 border border-white/5 rounded-lg px-3 py-2 break-all">
@@ -216,7 +214,7 @@ const PreferencesScreen = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+                  <label className="block text-[10px] font-mono text-slate-500 mb-1.5">
                     Custom path override <span className="normal-case text-slate-600">(leave blank to use default)</span>
                   </label>
                   <div className="flex gap-2">
@@ -225,19 +223,17 @@ const PreferencesScreen = () => {
                       value={workspaceDirInput}
                       onChange={e => setWorkspaceDirInput(e.target.value)}
                       placeholder={effectiveWorkspaceDir}
-                      className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                      className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
                     />
-                    <button
-                      onClick={handleBrowseWorkspaceDir}
-                      className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 transition-all flex items-center gap-1.5 shrink-0"
-                    >
+                    <Button onClick={handleBrowseWorkspaceDir} className="shrink-0">
                       <FolderOpen className="w-3.5 h-3.5" />
                       Browse
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="primary"
                       onClick={handleSaveWorkspaceDir}
                       disabled={workspaceDirSaving}
-                      className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white transition-all flex items-center gap-1.5 shrink-0"
+                      className="shrink-0"
                     >
                       {workspaceDirSaving ? (
                         <RotateCw className="w-3 h-3 animate-spin" />
@@ -245,7 +241,7 @@ const PreferencesScreen = () => {
                         <Check className="w-3 h-3" />
                       ) : null}
                       {workspaceDirSaved ? 'Saved' : 'Save'}
-                    </button>
+                    </Button>
                   </div>
                   {workspaceDirSaved && (
                     <p className="mt-1.5 text-[10px] text-amber-400 font-mono">
@@ -257,9 +253,9 @@ const PreferencesScreen = () => {
             </div>
 
             {/* Default Agent & Model */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-3 flex items-center gap-2">
-                <Cpu className="w-4 h-4 text-violet-400" />
+                <Cpu className="w-4 h-4 text-slate-400" />
                 Default Agent & Model
               </h3>
               <p className="text-xs text-slate-400 mb-4">
@@ -278,9 +274,9 @@ const PreferencesScreen = () => {
             </div>
 
             {/* Agent Timeouts */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
-                <Timer className="w-4 h-4 text-cyan-400" />
+                <Timer className="w-4 h-4 text-slate-400" />
                 Agent Timeouts
               </h3>
               <p className="text-xs text-slate-400 mb-4">
@@ -314,24 +310,17 @@ const PreferencesScreen = () => {
               </div>
 
               <div className="flex items-center justify-between mt-4">
-                <button
-                  onClick={handleResetTimeouts}
-                  className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 transition-all"
-                >
+                <Button onClick={handleResetTimeouts}>
                   Reset to defaults
-                </button>
-                <button
-                  onClick={handleSaveTimeouts}
-                  disabled={timeoutsSaving}
-                  className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white transition-all flex items-center gap-1.5"
-                >
+                </Button>
+                <Button variant="primary" onClick={handleSaveTimeouts} disabled={timeoutsSaving}>
                   {timeoutsSaving ? (
                     <RotateCw className="w-3 h-3 animate-spin" />
                   ) : timeoutsSaved ? (
                     <Check className="w-3 h-3" />
                   ) : null}
                   {timeoutsSaved ? 'Saved' : 'Save'}
-                </button>
+                </Button>
               </div>
               {timeoutsSaved && (
                 <p className="mt-2 text-[10px] text-amber-400 font-mono">
@@ -341,9 +330,9 @@ const PreferencesScreen = () => {
             </div>
 
             {/* Run in background */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
-                <Minimize2 className="w-4 h-4 text-cyan-400" />
+                <Minimize2 className="w-4 h-4 text-slate-400" />
                 Run in background
               </h3>
               <p className="text-xs text-slate-400 mb-4">
@@ -372,7 +361,7 @@ const PreferencesScreen = () => {
                   onClick={handleToggleRunInBackground}
                   disabled={runInBackgroundSaving}
                   className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-                    runInBackground ? 'bg-cyan-600' : 'bg-white/10'
+                    runInBackground ? 'bg-accent' : 'bg-white/10'
                   }`}
                 >
                   <span
@@ -390,7 +379,7 @@ const PreferencesScreen = () => {
         {activeTab === 'mcp' && <McpGrantsTab />}
         {activeTab === 'hub' && <HubTab />}
         {activeTab === 'about' && (
-          <div className="glass-panel p-6 space-y-4">
+          <div className="panel p-6 space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center">
                 <Activity className="w-5 h-5 text-cyan-400" />
@@ -400,9 +389,9 @@ const PreferencesScreen = () => {
                   <h3 className="text-base font-heading font-bold text-white">Demeteo</h3>
                   <span
                     data-testid="channel-badge"
-                    className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${
+                    className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold ${
                       appVersion.channel === 'nightly'
-                        ? 'bg-violet-500/10 text-violet-400 border-violet-500/20 shadow-[0_0_10px_rgba(139,92,246,0.15)]'
+                        ? 'bg-white/5 text-slate-300 border-white/10'
                         : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                     }`}
                     title={

@@ -17,7 +17,7 @@ interface AttachmentChipProps {
 }
 
 /**
- * One attachment chip — glass surface, image thumbnail when a
+ * One attachment chip — raised surface, image thumbnail when a
  * previewUrl is available and the mime is image/*, file-icon glyph
  * fallback otherwise. Filename + size are stacked under the
  * thumbnail; mime is rendered as a pill on the right.
@@ -57,9 +57,9 @@ export const AttachmentChip: React.FC<AttachmentChipProps> = ({
       title={`${attachment.source_filename} · ${attachment.mime} · ${formatBytes(attachment.size)}`}
       className={[
         "group relative inline-flex items-center gap-2 rounded-lg border transition-all select-none",
-        "bg-[rgba(18,22,30,0.75)] backdrop-blur-md",
+        "bg-surface-raised",
         interactive
-          ? "border-white/10 hover:border-cyan-400/40 hover:bg-[rgba(18,22,30,0.85)] cursor-pointer"
+          ? "border-white/10 hover:border-cyan-400/40 cursor-pointer"
           : "border-white/10",
         compact ? "pr-2 pl-1 py-0.5" : "pr-2 pl-1.5 py-1",
       ].join(" ")}
@@ -103,8 +103,8 @@ export const AttachmentChip: React.FC<AttachmentChipProps> = ({
 
       <span
         className={[
-          "shrink-0 font-mono uppercase tracking-wider text-[9px] px-1.5 py-0.5 rounded-md border",
-          "border-violet-500/30 bg-violet-500/10 text-violet-300",
+          "shrink-0 font-mono text-[9px] px-1.5 py-0.5 rounded-md border",
+          "border-white/10 bg-white/5 text-slate-300",
         ].join(" ")}
       >
         {shortMime(attachment.mime)}

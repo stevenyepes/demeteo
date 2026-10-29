@@ -196,7 +196,7 @@ const CreateFromZeroWizard: React.FC = () => {
           </div>
         </header>
 
-        <div className="glass-panel p-6 rounded-2xl border-white/10 shadow-2xl space-y-6">
+        <div className="panel p-6 space-y-6">
           <CreateZeroStepHeader steps={STEP_DESCRIPTORS} activeId={step} completedIds={completedIds} />
 
           <div key={step} className="animate-fade-in">
@@ -286,7 +286,7 @@ const CreateFromZeroWizard: React.FC = () => {
 
             {step === 'workflow' && (
               <div className="space-y-3">
-                <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
+                <label className="text-[11px] font-mono text-slate-400 block">
                   Pick a workflow
                 </label>
                 <CreateZeroWorkflowStep

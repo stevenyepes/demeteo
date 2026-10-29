@@ -1,4 +1,5 @@
 import { AlertTriangle, Rocket, RotateCw } from 'lucide-react';
+import { Button } from './Button';
 
 export interface CreateZeroLaunchStepProps {
   launching: boolean;
@@ -15,7 +16,7 @@ export function CreateZeroLaunchStep(props: CreateZeroLaunchStepProps) {
   if (launching) {
     return (
       <div className="py-8 flex flex-col items-center text-center gap-3">
-        <Rocket className="w-10 h-10 text-violet-400 animate-pulse-glow" />
+        <Rocket className="w-10 h-10 text-cyan-400 animate-pulse-glow" />
         <p className="text-sm text-slate-200 font-mono">Launching feature…</p>
         <p className="text-[11px] text-slate-500 font-mono">This usually takes a few seconds.</p>
       </div>
@@ -26,13 +27,9 @@ export function CreateZeroLaunchStep(props: CreateZeroLaunchStepProps) {
       <div className="py-8 flex flex-col items-center text-center gap-3">
         <AlertTriangle className="w-10 h-10 text-ruby-400" />
         <p className="text-sm text-ruby-200 font-mono">Launch failed: {errorMessage}</p>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="px-4 py-2 text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white rounded-md transition-all flex items-center gap-1.5"
-        >
+        <Button variant="primary" onClick={onRetry}>
           <RotateCw className="w-3.5 h-3.5" /> Retry launch
-        </button>
+        </Button>
       </div>
     );
   }

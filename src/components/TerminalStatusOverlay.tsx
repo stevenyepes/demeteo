@@ -23,15 +23,15 @@ const TerminalStatusOverlay: React.FC<TerminalStatusOverlayProps> = ({ phase, ho
   const currentIndex = PHASES.findIndex((p) => p.id === phase);
 
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#050508]/70 backdrop-blur-[2px] animate-fade-in pointer-events-none">
-      <div className="pointer-events-auto min-w-[320px] max-w-[480px] rounded-xl border border-white/10 bg-[#0a0a0e]/95 shadow-2xl shadow-cyan-500/5 overflow-hidden">
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 animate-fade-in pointer-events-none">
+      <div className="raised pointer-events-auto min-w-[320px] max-w-[480px] overflow-hidden">
         <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2.5">
           {isError ? (
-            <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_2px_rgba(239,68,68,0.6)]" />
+            <div className="w-2 h-2 rounded-full bg-red-500" />
           ) : (
             <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse-glow" />
           )}
-          <span className="text-[11px] font-mono uppercase tracking-[0.15em] text-slate-300">
+          <span className="text-[11px] font-mono text-slate-300">
             {isError ? "Connection failed" : "Establishing session"}
           </span>
           {host && !isError && (
@@ -81,7 +81,7 @@ const TerminalStatusOverlay: React.FC<TerminalStatusOverlayProps> = ({ phase, ho
                         {done ? (
                           <CheckCircle2 size={12} />
                         ) : active ? (
-                          <span className="block w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_1px_rgba(6,182,212,0.7)]" />
+                          <span className="block w-1.5 h-1.5 rounded-full bg-cyan-400" />
                         ) : (
                           <span className="block w-1.5 h-1.5 rounded-full bg-slate-700" />
                         )}

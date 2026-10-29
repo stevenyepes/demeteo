@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { baseBranchLabel, baseBranchLock, resolveBaseBranchInput } from './discoveryBase';
+import {
+  LOCK_NAMES_INLINE,
+  baseBranchLabel,
+  baseBranchLock,
+  resolveBaseBranchInput,
+} from './discoveryBase';
 import type { Ticket, TicketState } from '../types';
 
 function ticket(seq: number, state: TicketState): Ticket {
@@ -31,37 +36,44 @@ function ticket(seq: number, state: TicketState): Ticket {
 }
 
 describe('baseBranchLock', () => {
+  const unlocked = { locked: false, tickets: [], summary: null, listed: false };
+
   it('is unlocked when there are no tickets', () => {
-    expect(baseBranchLock([])).toEqual({ locked: false, reason: null });
+    expect(baseBranchLock([])).toEqual(unlocked);
   });
 
   it('is unlocked while every ticket is unstarted', () => {
-    expect(baseBranchLock([ticket(1, 'unstarted'), ticket(2, 'unstarted')])).toEqual({
-      locked: false,
-      reason: null,
-    });
+    expect(baseBranchLock([ticket(1, 'unstarted'), ticket(2, 'unstarted')])).toEqual(unlocked);
   });
 
   it('locks once a ticket has started, and names it', () => {
     const lock = baseBranchLock([ticket(1, 'unstarted'), ticket(3, 'started')]);
     expect(lock.locked).toBe(true);
-    expect(lock.reason).not.toBeNull();
-    expect(lock.reason).toContain('DSC-3');
+    expect(lock.tickets).toEqual(['DSC-3']);
+    expect(lock.summary).toBe('Base branch locked: DSC-3 has left Unstarted.');
   });
 
   it('locks equally on a dropped ticket, not just a started one', () => {
     const lock = baseBranchLock([ticket(2, 'dropped')]);
     expect(lock.locked).toBe(true);
-    expect(lock.reason).toContain('DSC-2');
+    expect(lock.summary).toContain('DSC-2');
   });
 
-  it('pluralizes the reason for more than one locking ticket', () => {
+  it('names a few tickets inline', () => {
     const lock = baseBranchLock([ticket(1, 'started'), ticket(2, 'dropped')]);
-    expect(lock.locked).toBe(true);
-    expect(lock.reason).toContain('Tickets');
-    expect(lock.reason).toContain('are');
-    expect(lock.reason).toContain('DSC-1');
-    expect(lock.reason).toContain('DSC-2');
+    expect(lock.listed).toBe(true);
+    expect(lock.summary).toBe('Base branch locked: DSC-1, DSC-2 have left Unstarted.');
+  });
+
+  it('counts rather than names once there are more than fit in a line', () => {
+    const many = Array.from({ length: LOCK_NAMES_INLINE + 1 }, (_, i) => ticket(i + 1, 'started'));
+    const lock = baseBranchLock(many);
+    expect(lock.listed).toBe(false);
+    expect(lock.summary).toBe(
+      `Base branch locked: ${LOCK_NAMES_INLINE + 1} tickets have left Unstarted.`,
+    );
+    expect(lock.summary).not.toContain('DSC-1');
+    expect(lock.tickets).toHaveLength(LOCK_NAMES_INLINE + 1);
   });
 });
 

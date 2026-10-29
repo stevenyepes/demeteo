@@ -11,6 +11,7 @@ import {
   type PairingScope,
   startPairing,
 } from '../lib/pairing';
+import { Button } from '../../../src/components/ui/Button';
 
 /** What each scope allows, as `docs/HUB.md` §7 states it. */
 const ALLOWS: Record<PairingScope, string> = {
@@ -161,22 +162,20 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
             ))}
           </fieldset>
           <div className="flex items-center gap-3">
-            <button
-              type="button"
+            <Button
+              variant="primary"
               onClick={() => answer(() => approvePairing(prompt.pairingId, granted))}
               disabled={!answerable || granted.length === 0}
-              className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Approve
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger-subtle"
               onClick={() => answer(() => denyPairing(prompt.pairingId))}
               disabled={!answerable}
-              className="rounded-md border border-ruby-500/30 bg-ruby-500/10 px-3 py-1.5 text-xs font-medium text-ruby-200 transition-colors hover:bg-ruby-500/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Deny
-            </button>
+            </Button>
           </div>
         </div>
       )}

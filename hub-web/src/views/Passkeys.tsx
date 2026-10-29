@@ -12,6 +12,7 @@ import {
   type Passkey,
   revokePasskey,
 } from '../lib/passkeys';
+import { Button } from '../../../src/components/ui/Button';
 
 /**
  * `changed` is the passkey as the Hub answered it, and it is the only way a
@@ -154,13 +155,11 @@ export function Passkeys() {
                 className="input-field focus:border-cyan-400! focus:shadow-none!"
               />
             </div>
-            <button
+            <Button variant="primary"
               type="submit"
-              disabled={!canAdd}
-              className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-            >
+              disabled={!canAdd}>
               Add passkey
-            </button>
+            </Button>
           </form>
         </>
       )}
@@ -180,13 +179,12 @@ export function Passkeys() {
             </p>
           )}
           {passkeys === null && (
-            <button
-              type="button"
+            <Button variant="primary"
               onClick={retryLoad}
-              className="btn-primary mt-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-            >
+              className="mt-4"
+           >
               Try again
-            </button>
+            </Button>
           )}
         </div>
       )}

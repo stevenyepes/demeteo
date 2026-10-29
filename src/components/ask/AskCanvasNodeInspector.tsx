@@ -14,6 +14,7 @@ import { resolveNode } from '../../lib/ask';
 import { fetchActiveFeatures, listStepsForRun } from '../../lib/features';
 import type { CanvasNeighbor } from '../../lib/askCanvasEdges';
 import type { CanvasNode, Feature, NodeResolution, StepExecution } from '../../types';
+import { Button } from '../ui/Button';
 import { INSPECTOR_SURFACE } from '../ui/Inspector';
 import { ROLE_CHIP, ROLE_ICON, ROLE_LABEL, type NodePathState } from './AskCanvasNode';
 
@@ -156,7 +157,7 @@ export function AskCanvasNodeInspector({
   };
 
   const Icon = ROLE_ICON[node.role];
-  const sectionLabel = 'text-[10px] font-mono uppercase tracking-wider text-slate-500 mb-2';
+  const sectionLabel = 'text-[10px] font-mono text-slate-500 mb-2';
 
   return (
     <div data-testid="ask-canvas-node-inspector" className={INSPECTOR_SURFACE}>
@@ -170,7 +171,7 @@ export function AskCanvasNodeInspector({
           <div className="min-w-0">
             <h3 className="truncate font-heading text-sm font-semibold text-white">{node.title}</h3>
             <span
-              className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${ROLE_CHIP[node.role]}`}
+              className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] ${ROLE_CHIP[node.role]}`}
             >
               {ROLE_LABEL[node.role]}
             </span>
@@ -242,24 +243,16 @@ export function AskCanvasNodeInspector({
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-white/5 px-5 py-4">
         {resolution.status === 'ready' && resolution.result.kind === 'editor' && (
-          <button
-            type="button"
-            onClick={handleOpenInEditor}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-violet-600 to-violet-700 px-3.5 py-2 text-xs font-semibold text-white"
-          >
+          <Button variant="primary" onClick={handleOpenInEditor} className="w-full">
             <ExternalLink className="h-3.5 w-3.5" aria-hidden />
             Open in editor
-          </button>
+          </Button>
         )}
         {pipelineMatch && (
-          <button
-            type="button"
-            onClick={handleShowInPipeline}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 px-3.5 py-2 text-xs font-medium text-slate-300"
-          >
+          <Button onClick={handleShowInPipeline} className="w-full">
             <PipelineIcon className="h-3.5 w-3.5" aria-hidden />
             Show in the pipeline
-          </button>
+          </Button>
         )}
       </div>
     </div>

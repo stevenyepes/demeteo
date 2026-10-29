@@ -13,8 +13,10 @@ use crate::adapters::agent::test_stubs::StubAgentExec;
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
-use crate::domain::ids::{StepExecutionId, StepId};
-use crate::domain::models::{Availability, ConflictFile, EffortLevel, SessionInfo, StepExecution};
+use crate::domain::ids::{ProviderId, StepExecutionId, StepId};
+use crate::domain::models::{
+    Availability, ConflictFile, EffortLevel, ProviderInstance, SessionInfo, StepExecution,
+};
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::ports::agent_runtime::{
     AgentCapabilities, AgentRuntime, AgentSession, AgentStartError, PersonalizationSupport,
@@ -22,6 +24,7 @@ use crate::ports::agent_runtime::{
 use crate::ports::notification::{DomainEvent, NotificationPort};
 use crate::ports::sync_session::{SyncSession, SyncSessionPort};
 use crate::ports::worktree_ops::MergeGate;
+use crate::support::fake_credentials::FakeCredentialSource;
 use rusqlite::Connection;
 use std::pin::Pin;
 use std::time::Instant;
@@ -1434,6 +1437,50 @@ async fn a_resolution_with_nobody_to_review_it_reaches_origin() {
         session.pushed_at.is_some(),
         "a published resolution has to be recorded as one"
     );
+}
+
+/// The push a resolution makes authenticates through the source its helper was
+/// built with, asked about the tree it pushes from. The fake knows only that
+/// directory, so a push made from the clone comes back uncredentialed.
+#[tokio::test]
+async fn a_resolutions_push_asks_the_helpers_credential_source() {
+    const PAT: &str = "tok-land-publish-83ab";
+    let source = FakeCredentialSource::new(&[(WT, PAT)]);
+    let mut p = ports(
+        happy_path().with_programs(&[(REMOTE_URL, Ok("https://github.com/acme/widgets.git\n"))]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    p.git_ops = p.git_ops.clone().with_credential_source(source.clone());
+    p.app_settings
+        .add_provider_instance(ProviderInstance {
+            id: ProviderId::from("prov-land-publish"),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: "someone".to_string(),
+            avatar_url: String::new(),
+            created_at: 0,
+        })
+        .unwrap();
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let _ = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert_eq!(
+        source.asked(),
+        vec![("prov-land-publish".to_string(), WT.to_string())]
+    );
+    let requests = p.scripted.requests();
+    let push = requests
+        .iter()
+        .find(|r| r.args.iter().any(|a| a == "push"))
+        .unwrap_or_else(|| panic!("no push was issued: {:?}", p.scripted.programs()));
+    assert!(
+        push.env.iter().any(|(_, v)| v == PAT),
+        "the push must carry the injected token in its environment: {:?}",
+        push.env
+    );
+    assert!(push.args.iter().all(|a| !a.contains(PAT)));
 }
 
 /// The turn most likely to quietly drop a hunk was the only one that shipped

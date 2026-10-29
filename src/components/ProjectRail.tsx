@@ -51,7 +51,7 @@ function ProjectRail() {
     const hiddenSummary = activityTitle(hiddenActivity);
     const hiddenTitle = `${hidden.length} more project${hidden.length === 1 ? '' : 's'}`;
     return (
-      <aside className="w-14 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col items-center py-3 z-10 shrink-0 gap-3">
+      <aside className="w-14 border-r border-white/5 bg-surface-sidebar flex flex-col items-center py-3 z-10 shrink-0 gap-3">
         <button
           onClick={onToggleCollapse}
           className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
@@ -68,7 +68,7 @@ function ProjectRail() {
         </button>
         <button
           onClick={() => navigate({ kind: 'create-project' })}
-          className="p-2 text-violet-300 hover:text-white rounded-lg hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_12px_rgba(139,92,246,0.2)]"
+          className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
           title="New from zero"
         >
           <Sparkles className="w-5 h-5" />
@@ -80,7 +80,7 @@ function ProjectRail() {
             onClick={() => { setCurrentProject(p.id); setView('home'); }}
             className={`relative w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold font-mono transition-all ${
               currentProject === p.id
-                ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                ? 'bg-accent-tint text-white border border-accent-edge'
                 : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
             }`}
             title={p.name}
@@ -116,16 +116,16 @@ function ProjectRail() {
   }
 
   return (
-    <aside className="w-60 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col z-10 shrink-0">
+    <aside className="w-60 border-r border-white/5 bg-surface-sidebar flex flex-col z-10 shrink-0">
       <div className="p-3 border-b border-white/5 flex justify-between items-center">
-        <h2 className="text-[10px] font-heading font-semibold text-slate-500 tracking-wider uppercase">Workspaces</h2>
+        <h2 className="text-[10px] font-heading font-semibold text-slate-500">Workspaces</h2>
         <div className="flex gap-1">
           <button onClick={() => setView('new-project')} className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors" title="Bootstrap Project">
             <Plus className="w-4 h-4" />
           </button>
           <button
             onClick={() => navigate({ kind: 'create-project' })}
-            className="p-1 text-violet-300 hover:text-white rounded hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_10px_rgba(139,92,246,0.2)]"
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors"
             title="New from zero"
           >
             <Sparkles className="w-4 h-4" />
@@ -145,7 +145,7 @@ function ProjectRail() {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Filter projects..."
-            className="w-full bg-black/30 border border-white/5 rounded-md py-1.5 pl-8 pr-2 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/30"
+            className="w-full bg-black/30 border border-white/5 rounded-md py-1.5 pl-8 pr-2 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring"
           />
         </div>
       </div>
@@ -167,7 +167,7 @@ function ProjectRail() {
                 title={summary ? `${p.name} — ${summary}` : p.name}
                 className={`flex items-center justify-between px-3 py-2 mx-2 rounded-lg cursor-pointer transition-all duration-200 ${
                   currentProject === p.id
-                    ? 'glass-panel text-white shadow-[0_0_15px_rgba(139,92,246,0.15)]'
+                    ? 'bg-surface-panel-hover text-white'
                     : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
                 }`}
               >

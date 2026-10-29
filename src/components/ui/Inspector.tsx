@@ -52,11 +52,10 @@ export interface InspectorProps<T extends string> {
  * no radius, a sidebar fill and a heavier `backdrop-blur-xl` than any panel in
  * the app. Seated as the middle of the run's three tracks, that made the one
  * surface between two cards the only thing on screen with square corners and
- * a border on a single side. `glass-panel` brings all four decisions back to
- * the card language, and the blur down from 24px to the panel's 12 — the run
- * column already stacks translucency and the plan's §7 treats it as a budget.
+ * a border on a single side. `panel` brings all four decisions back to
+ * the card language, and drops the blur with them: a panel has none.
  */
-export const INSPECTOR_SURFACE = 'glass-panel flex h-full flex-col overflow-hidden';
+export const INSPECTOR_SURFACE = 'panel flex h-full flex-col overflow-hidden';
 
 export function Inspector<T extends string>({
   title,
@@ -86,7 +85,7 @@ export function Inspector<T extends string>({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             {icon}
-            <h3 className="truncate font-heading text-sm font-bold uppercase tracking-wider text-white">
+            <h3 className="truncate font-heading text-sm font-bold text-white">
               {title}
             </h3>
           </div>

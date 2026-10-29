@@ -372,6 +372,7 @@ fn sync_ports(ctx: &AppContext) -> crate::application::sync_session::SyncPorts<'
         features: &ctx.features,
         turns: &ctx.sync_turns,
         app_settings: &ctx.app_settings,
+        credentials: &ctx.git_credentials,
     }
 }
 

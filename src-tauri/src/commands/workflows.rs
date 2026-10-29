@@ -34,6 +34,7 @@ pub(crate) const STARTER_FILES: &[&str] = &[
     include_str!("../../workflows/simple-task.json"),
     include_str!("../../workflows/code-review.json"),
     include_str!("../../workflows/address-review.json"),
+    include_str!("../../workflows/reference-feature-pipeline.json"),
 ];
 
 /// Seed starter-pack workflows on first launch if the `workflows` table is empty.

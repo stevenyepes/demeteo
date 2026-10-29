@@ -25,6 +25,7 @@ import { blocksLaunch } from '../lib/runnerCompatibility';
 import { useRunnerCompatibility } from '../hooks/useRunnerCompatibility';
 import { RunPlacementSelect } from './discovery/RunPlacementSelect';
 import { DetachedCapsFields } from './DetachedCapsFields';
+import { Button } from './ui/Button';
 import { NO_CAP, parseDetachedCap } from '../lib/detachedCaps';
 import type { StartFeatureSeed } from '../context/UIStateContext';
 import type { WorkflowDefinitionV2 } from './canvas/types';
@@ -790,14 +791,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4 select-none"
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 select-none"
       onKeyDown={onKey}
     >
       {/* Viewport-capped panel: the form body scrolls internally while the
           header and footer stay pinned, so expanding "Customize…" (per-step
           overrides) can never grow the modal past the screen. */}
-      <div ref={modalRef} className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
-        <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-[#050508] shrink-0">
+      <div ref={modalRef} className="raised w-full max-w-2xl overflow-hidden max-h-[85vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-cyan-400" />
             <h3 className="text-sm font-semibold text-white">
@@ -821,7 +822,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               `attachments` field on `onLaunch` for the commit step. */}
           <div data-attachment-dropzone>
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+              <span className="text-[11px] font-mono text-slate-400">
                 Attachments
               </span>
               <span className="text-[10px] font-mono text-slate-500">
@@ -852,7 +853,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
           {/* Title */}
           <div>
-            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
               Title
             </label>
             <input
@@ -861,13 +862,13 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Add OAuth2 login flow"
-              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring"
             />
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
               Describe the feature
             </label>
             <textarea
@@ -875,7 +876,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               onChange={(e) => setDescription(e.target.value)}
               rows={5}
               placeholder="What does this feature do? Who uses it? Any constraints, edge cases, or non-goals? Reference repo names — the modal will auto-detect them."
-              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 resize-y"
+              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring resize-y"
             />
           </div>
 
@@ -883,7 +884,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           <div>
             <label
               htmlFor="start-feature-workflow"
-              className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+              className="block text-[11px] font-mono text-slate-400 mb-1.5"
             >
               Workflow
             </label>
@@ -891,7 +892,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               id="start-feature-workflow"
               value={workflowId}
               onChange={(e) => setWorkflowId(e.target.value)}
-              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring"
             >
               {/* Named, because no rule picked one: without an option matching
                   the empty value the select renders blank, which reads as a
@@ -916,7 +917,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
             <label
               htmlFor="start-feature-placement"
-              className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider"
+              className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5"
             >
               <Server className="w-3.5 h-3.5 text-cyan-400" />
               Where to run
@@ -987,8 +988,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           {repositories.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <GitBranch className="w-3.5 h-3.5 text-violet-400" />
-                <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+                <GitBranch className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-[11px] font-mono text-slate-400">
                   Target repositories
                 </span>
                 <span className="text-[10px] font-mono text-slate-500">
@@ -1020,7 +1021,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                         type="checkbox"
                         checked={checked}
                         onChange={toggle}
-                        className="accent-cyan-500"
+                        className="accent-accent"
                       />
                       <span className="truncate">{r.repo_path}</span>
                       {inUse && (
@@ -1053,7 +1054,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             <button
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
-              className="flex items-center gap-1.5 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+              className="flex items-center gap-1.5 text-xs text-accent-ink hover:text-white transition-colors"
             >
               {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               {showAdvanced ? 'Hide' : 'Customize…'}
@@ -1063,7 +1064,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           {showAdvanced && (
             <div className="space-y-3 pl-3 border-l border-white/5">
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Default agent, model &amp; effort — all steps
                 </label>
                 <HarnessModelPicker
@@ -1103,7 +1104,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   reviewed pipeline?" gets answered before spending anything. */}
               {graph && graph.nodes.length > 0 && (
                 <div>
-                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                     Pipeline shape
                   </label>
                   <div className="rounded-lg border border-white/5 bg-black/20 p-3 max-h-48 overflow-y-auto">
@@ -1116,7 +1117,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   default above → the workflow step → the project default. */}
               {steps.length > 0 && (
                 <div>
-                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                     Per-step overrides (optional)
                   </label>
                   <div className="space-y-2.5">
@@ -1170,7 +1171,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               )}
 
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Loop iterations (optional)
                 </label>
                 <input
@@ -1180,7 +1181,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   value={loopIterations}
                   onChange={(e) => setLoopIterations(e.target.value)}
                   placeholder="blank = project default (3)"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
                 />
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Max times a validation step loops back to implementation before giving up.
@@ -1188,7 +1189,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Per-turn budget (optional)
                 </label>
                 <input
@@ -1198,7 +1199,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   value={maxBudgetUsd}
                   onChange={(e) => setMaxBudgetUsd(e.target.value)}
                   placeholder="blank = project default ($20)"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
                 />
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>);
@@ -1208,7 +1209,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
                   Commit artifacts to PR
                 </label>
                 <div className="grid grid-cols-3 gap-1.5">
@@ -1221,9 +1222,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                       key={opt.key}
                       type="button"
                       onClick={() => setCommitArtifacts(opt.key)}
-                      className={`px-2.5 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
+                      className={`px-2.5 py-2 rounded-lg text-[11px] font-semibold border transition-colors ${
                         commitArtifacts === opt.key
-                          ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
+                          ? 'bg-accent-tint border-accent-edge text-white'
                           : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
                       }`}
                       title={opt.desc}
@@ -1252,11 +1253,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex flex-col gap-3">
+        <div className="px-6 py-4 border-t border-white/5 flex flex-col gap-3">
           {showVisionWarning && !visionWarningDismissed && (
             <div
               role="alert"
-              className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-500/40 bg-ruby-500/10 text-ruby-200"
+              className="flex items-start gap-2 px-3 py-2 rounded-lg border border-ruby-500/40 bg-ruby-500/10 text-ruby-200"
             >
               <EyeOff className="w-4 h-4 mt-0.5 shrink-0 text-ruby-300" />
               <div className="flex-1 min-w-0 text-[11px] font-mono leading-snug">
@@ -1276,7 +1277,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             </div>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-white/5 bg-[#050508] shrink-0 flex justify-between items-center">
+        <div className="px-6 py-4 border-t border-white/5 shrink-0 flex justify-between items-center">
           <span className="text-[10px] text-slate-500 font-mono">
             {canLaunch
               ? '⌘/Ctrl + Enter to launch'
@@ -1285,25 +1286,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 : 'Fill in title, description, and workflow to launch'}
           </span>
           <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
-            >
+            <Button variant="ghost" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={launch}
-              disabled={!canLaunch}
-              className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${
-                canLaunch
-                  ? 'bg-cyan-500 text-slate-950 hover:bg-cyan-400'
-                  : 'bg-white/5 text-slate-600 cursor-not-allowed'
-              }`}
-            >
+            </Button>
+            <Button variant="primary" onClick={launch} disabled={!canLaunch}>
               Launch feature
-            </button>
+            </Button>
           </div>
         </div>
       </div>

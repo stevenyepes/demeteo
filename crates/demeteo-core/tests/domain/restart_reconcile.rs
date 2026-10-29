@@ -149,6 +149,35 @@ fn only_a_cancelled_or_failed_feature_has_ended() {
     }
 }
 
+// ── The resume guard ─────────────────────────────────────────────────────────
+
+#[test]
+fn an_interrupted_node_always_passes_the_resume_guard() {
+    assert!(needs_resume_guard("interrupted", false));
+    assert!(needs_resume_guard("interrupted", true));
+}
+
+/// The guard's own park, found again by the next process: the watchdog left
+/// it alone because the feature was not `running`.
+#[test]
+fn a_node_parked_on_the_resume_question_passes_it_again() {
+    assert!(needs_resume_guard("awaiting_gate", true));
+}
+
+/// A zero-ticket rework or evidence park reads `awaiting_gate` too, and is
+/// resumed by re-dispatching it — the guard must not stand in front of it.
+#[test]
+fn a_node_parked_for_another_reason_is_dispatched_as_before() {
+    assert!(!needs_resume_guard("awaiting_gate", false));
+}
+
+#[test]
+fn a_rewound_node_is_not_guarded_by_a_question_left_on_it() {
+    for status in ["pending", "running", "completed", "failed"] {
+        assert!(!needs_resume_guard(status, true), "{status}");
+    }
+}
+
 // ── Work no run ever owned ───────────────────────────────────────────────────
 
 /// The manual sync's row escapes both passes above: it is only ever written on

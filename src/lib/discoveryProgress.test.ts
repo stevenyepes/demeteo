@@ -181,7 +181,7 @@ describe('discoveryLifecycle', () => {
   it('pulses only while a turn is actually running', () => {
     expect(discoveryLifecycle(open, 7, true)).toEqual({
       label: 'Interviewing',
-      tone: 'violet',
+      tone: 'cyan',
       live: true,
     });
     expect(discoveryLifecycle(open, 3, false)).toEqual({
@@ -191,7 +191,7 @@ describe('discoveryLifecycle', () => {
     });
     expect(discoveryLifecycle(open, 0, false)).toEqual({
       label: 'Interviewing',
-      tone: 'violet',
+      tone: 'slate',
       live: false,
     });
   });

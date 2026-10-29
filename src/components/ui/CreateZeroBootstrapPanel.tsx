@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { RotateCw, Check, AlertTriangle } from 'lucide-react';
+import { Button } from './Button';
 
 export type BootstrapPhase =
   | 'create_repo'
@@ -27,7 +28,7 @@ interface CreateZeroBootstrapPanelProps {
 }
 
 /**
- * Animated, glass-panel stepper shown while the wizard creates the
+ * Animated, panel stepper shown while the wizard creates the
  * repo, registers the project row, runs the bootstrap clone + strategy
  * detection, and persists the project settings. Pulsing status dots
  * mark the active phase; completed phases get a green check. A mono
@@ -56,9 +57,9 @@ export function CreateZeroBootstrapPanel({
   const isError = phases.some((p) => p.status === 'error');
 
   return (
-    <div className="glass-panel p-6 rounded-xl border-white/10 shadow-2xl flex flex-col gap-4">
+    <div className="panel p-6 flex flex-col gap-4">
       <div>
-        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
+        <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">
           {isError ? 'Bootstrap failed' : 'Workspace bootstrap'}
         </h3>
         <h2 className="text-xl font-bold text-white">
@@ -111,13 +112,9 @@ export function CreateZeroBootstrapPanel({
 
       {canRetry && isError && (
         <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={onRetry}
-            className="px-4 py-2 text-xs font-medium bg-ruby-600 hover:bg-ruby-500 text-white rounded-md transition-all flex items-center gap-2"
-          >
+          <Button variant="primary" onClick={onRetry}>
             <RotateCw className="w-3.5 h-3.5" /> Retry bootstrap
-          </button>
+          </Button>
         </div>
       )}
     </div>

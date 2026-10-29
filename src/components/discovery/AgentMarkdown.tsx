@@ -65,17 +65,17 @@ const COMPONENTS_DEFAULT: Components = {
     </h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mt-3 mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-wider text-violet-300 first:mt-0">
+    <h4 className="mt-3 mb-1.5 font-heading text-[11px] font-semibold text-slate-300 first:mt-0">
       {children}
     </h4>
   ),
   ul: ({ children }) => (
-    <ul className="mb-2.5 list-disc space-y-1 pl-5 marker:text-violet-400/70 last:mb-0">
+    <ul className="mb-2.5 list-disc space-y-1 pl-5 marker:text-slate-500 last:mb-0">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mb-2.5 list-decimal space-y-1 pl-5 marker:text-violet-400/70 last:mb-0">
+    <ol className="mb-2.5 list-decimal space-y-1 pl-5 marker:text-slate-500 last:mb-0">
       {children}
     </ol>
   ),
@@ -83,7 +83,7 @@ const COMPONENTS_DEFAULT: Components = {
     <li className="leading-relaxed [&>p]:mb-0 [&>ol]:mt-1 [&>ul]:mt-1">{children}</li>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="mb-2.5 rounded-r border-l-2 border-violet-400/40 bg-black/25 py-1.5 pr-2.5 pl-3 text-slate-300 italic last:mb-0">
+    <blockquote className="mb-2.5 rounded-r border-l-2 border-white/15 bg-black/25 py-1.5 pr-2.5 pl-3 text-slate-300 italic last:mb-0">
       {children}
     </blockquote>
   ),
@@ -112,7 +112,7 @@ const COMPONENTS_DEFAULT: Components = {
   thead: ({ children }) => <thead className="bg-white/[0.03]">{children}</thead>,
   tr: ({ children }) => <tr className="border-t border-white/5 first:border-t-0">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-2.5 py-1.5 font-heading text-[11px] font-semibold tracking-wider text-slate-200 uppercase">
+    <th className="px-2.5 py-1.5 font-heading text-[11px] font-semibold text-slate-200">
       {children}
     </th>
   ),
@@ -162,17 +162,17 @@ const COMPONENTS_DENSE: Components = {
     </h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mt-2 mb-1 font-heading text-[10px] font-semibold uppercase tracking-wider text-violet-300 first:mt-0">
+    <h4 className="mt-2 mb-1 font-heading text-[10px] font-semibold text-slate-300 first:mt-0">
       {children}
     </h4>
   ),
   ul: ({ children }) => (
-    <ul className="mb-1.5 list-disc space-y-0.5 pl-4 text-xs marker:text-violet-400/70 last:mb-0">
+    <ul className="mb-1.5 list-disc space-y-0.5 pl-4 text-xs marker:text-slate-500 last:mb-0">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mb-1.5 list-decimal space-y-0.5 pl-4 text-xs marker:text-violet-400/70 last:mb-0">
+    <ol className="mb-1.5 list-decimal space-y-0.5 pl-4 text-xs marker:text-slate-500 last:mb-0">
       {children}
     </ol>
   ),
@@ -182,7 +182,7 @@ const COMPONENTS_DENSE: Components = {
     </li>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="mb-1.5 rounded-r border-l-2 border-violet-400/40 bg-black/25 py-1 pr-2 pl-2.5 text-xs text-slate-300 italic last:mb-0">
+    <blockquote className="mb-1.5 rounded-r border-l-2 border-white/15 bg-black/25 py-1 pr-2 pl-2.5 text-xs text-slate-300 italic last:mb-0">
       {children}
     </blockquote>
   ),
@@ -207,7 +207,7 @@ const COMPONENTS_DENSE: Components = {
   thead: ({ children }) => <thead className="bg-white/[0.03]">{children}</thead>,
   tr: ({ children }) => <tr className="border-t border-white/5 first:border-t-0">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-2 py-1 font-heading text-[10px] font-semibold tracking-wider text-slate-200 uppercase">
+    <th className="px-2 py-1 font-heading text-[10px] font-semibold text-slate-200">
       {children}
     </th>
   ),

@@ -7,6 +7,7 @@ import { HubApiError } from '../lib/api';
 import { getInstance, type HubScope, type InstanceDetail, type RunStatus, type RunSummary } from '../lib/fleet';
 import { elapsedText, platformText, redactUserinfo } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
+import { buttonClasses } from '../../../src/components/ui/Button';
 
 interface InstanceProps {
   instanceId: string;
@@ -94,7 +95,7 @@ function Loaded({ detail, id }: { detail: InstanceDetail; id: ReactNode }) {
         <span className="text-xs text-slate-400">{platform === '' ? 'Platform not reported' : platform}</span>
         <a
           href={routeHref({ name: 'dispatch', instanceId: detail.id })}
-          className="btn-primary ml-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+          className={`${buttonClasses('primary')} ml-auto`}
         >
           Run here
         </a>

@@ -8,6 +8,7 @@ import { GeneralTab } from './GeneralTab';
 import { StrategyTab } from './StrategyTab';
 import { OverridesTab } from './OverridesTab';
 import { MemoryTab } from './MemoryTab';
+import { Button } from '../ui/Button';
 
 function Shell() {
   const s = useSettings();
@@ -20,7 +21,7 @@ function Shell() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
           <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Re-bootstrap In Progress</h2>
           <p className="text-sm text-slate-400 mb-6 leading-relaxed">Demeteo is updating your cloned repositories and analyzing codebase strategies.</p>
@@ -37,14 +38,14 @@ function Shell() {
   if (s.bootstrapStep === 'error') {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-        <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
           <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Re-bootstrap Failed</h2>
           <p className="text-sm text-slate-400 mb-6">An error occurred while re-building the project workspace.</p>
           <div className="w-full bg-black/40 border border-ruby-500/10 rounded-lg p-4 font-mono text-left text-xs text-ruby-300 overflow-x-auto mb-6">{s.bootstrapError}</div>
           <div className="flex gap-3">
-            <button onClick={() => { s.setBootstrapStep('form'); }} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all">Back to Settings</button>
-            <button onClick={s.proceedWithReBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-medium">Retry Build</button>
+            <Button size="lg" onClick={() => { s.setBootstrapStep('form'); }}>Back to Settings</Button>
+            <Button variant="primary" size="lg" onClick={s.proceedWithReBootstrap}>Retry Build</Button>
           </div>
         </div>
       </div>
@@ -56,7 +57,7 @@ function Shell() {
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-emerald-600/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-1/4 left-1/4 w-[300px] h-[300px] bg-violet-600/10 rounded-full blur-[100px] pointer-events-none" />
-        <div className="glass-panel max-w-lg w-full p-8 rounded-2xl flex flex-col items-center text-center relative border border-emerald-500/20 shadow-2xl">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-emerald-500/20">
           <div className="relative mb-6">
             <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
               <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
@@ -67,12 +68,12 @@ function Shell() {
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Ready</h2>
           <p className="text-sm text-slate-400 mb-6 leading-relaxed">{s.selectedRepos.length} repositor{s.selectedRepos.length !== 1 ? 'ies' : 'y'} bootstrapped successfully.</p>
           <div className="flex gap-3 w-full">
-            <button onClick={() => { s.setBootstrapStep('form'); s.fetchWorkspaceHealth(); }} className="flex-1 px-5 py-2.5 text-sm font-medium bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all flex items-center justify-center gap-2">
-              <Activity className="w-4 h-4 text-cyan-400" /> View Workspace Health
-            </button>
-            <button onClick={() => s.navigate({ kind: 'home' })} className="flex-1 px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all flex items-center justify-center gap-2">
+            <Button size="lg" onClick={() => { s.setBootstrapStep('form'); s.fetchWorkspaceHealth(); }} className="flex-1">
+              <Activity className="w-4 h-4" /> View Workspace Health
+            </Button>
+            <Button variant="primary" size="lg" onClick={() => s.navigate({ kind: 'home' })} className="flex-1">
               <Check className="w-4 h-4" /> Go to Project
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -83,9 +84,9 @@ function Shell() {
     return (
       <div className="flex-1 overflow-y-auto p-8 relative flex items-center justify-center">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="glass-panel max-w-xl w-full p-6 rounded-xl flex flex-col border-white/10 shadow-2xl">
+        <div className="panel max-w-xl w-full p-6 flex flex-col">
           <div className="mb-6 border-b border-white/5 pb-4">
-            <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY UPDATED</h3>
+            <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">STRATEGY UPDATED</h3>
             <h2 className="text-xl font-bold text-white">Approve Detected Worktree Strategy</h2>
           </div>
           <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
@@ -95,13 +96,13 @@ function Shell() {
               { label: 'Default Test Command', value: s.testCommand, onChange: s.setTestCommand, placeholder: 'e.g. npm test or cargo test' },
             ].map(({ label, value, onChange, placeholder }) => (
               <div key={label}>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">{label}</label>
-                <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600" />
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">{label}</label>
+                <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring placeholder-slate-600" />
               </div>
             ))}
             <div>
-              <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
-              <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50">
+              <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
+              <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring">
                 <option value="archive">Archive by default</option>
                 <option value="keep">Keep active</option>
                 <option value="auto_delete">Auto delete branch after MR merge</option>
@@ -109,16 +110,16 @@ function Shell() {
             </div>
             {s.prTemplate && (
               <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected PR Template</label>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Detected PR Template</label>
                 <div className="w-full bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-[100px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
               </div>
             )}
           </div>
           <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-4">
-            <button onClick={() => s.setBootstrapStep('form')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Back</button>
-            <button onClick={s.handleApproveStrategy} className="px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
+            <Button variant="ghost" size="lg" onClick={() => s.setBootstrapStep('form')}>Back</Button>
+            <Button variant="primary" size="lg" onClick={s.handleApproveStrategy}>
               <Check className="w-4 h-4" /> Approve & Build Workspace
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -131,15 +132,15 @@ function Shell() {
 
       {/* Repo Selection Modal */}
       {s.isRepoModalOpen && (
-        <Modal onClose={() => s.setIsRepoModalOpen(false)} className="glass-panel w-[500px] border border-white/10 rounded-xl overflow-hidden shadow-2xl flex flex-col">
-          <div className="p-4 border-b border-white/5 flex justify-between items-center bg-[#0d0f14]">
+        <Modal onClose={() => s.setIsRepoModalOpen(false)} className="raised w-[500px] overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-white/5 flex justify-between items-center">
             <h3 className="font-heading font-semibold text-white">Select Repositories</h3>
             <button onClick={() => s.setIsRepoModalOpen(false)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5"><X className="w-5 h-5" /></button>
           </div>
           <div className="p-4 border-b border-white/5 bg-[#08090c]">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-              <input type="text" value={s.repoSearch} onChange={e => s.setRepoSearch(e.target.value)} placeholder="Search repositories..." className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 pl-9 pr-4 text-sm text-white focus:outline-none focus:border-cyan-500/50" />
+              <input type="text" value={s.repoSearch} onChange={e => s.setRepoSearch(e.target.value)} placeholder="Search repositories..." className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 pl-9 pr-4 text-sm text-white focus:outline-none focus:border-accent-ring" />
             </div>
           </div>
           <div className="overflow-y-auto max-h-[300px] p-2 space-y-1 bg-[#08090c]">
@@ -150,25 +151,25 @@ function Shell() {
             ) : s.availableRepos.filter(r => r.path.toLowerCase().includes(s.repoSearch.toLowerCase())).map(repo => {
               const isSelected = s.selectedRepos.some(r => r.path === repo.path);
               return (
-                <div key={repo.path} onClick={() => s.toggleRepo(repo)} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${isSelected ? 'bg-cyan-500/10 border border-cyan-500/30' : 'hover:bg-white/5 border border-transparent'}`}>
-                  <div className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected ? 'bg-cyan-500 border-cyan-500 text-black' : 'border-slate-600'}`}>
+                <div key={repo.path} onClick={() => s.toggleRepo(repo)} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${isSelected ? 'bg-accent-tint border border-accent-edge' : 'hover:bg-white/5 border border-transparent'}`}>
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected ? 'bg-accent border-accent text-white' : 'border-slate-600'}`}>
                     {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                   </div>
-                  <Box className={`w-4 h-4 ${isSelected ? 'text-cyan-400' : 'text-slate-500'}`} />
+                  <Box className={`w-4 h-4 ${isSelected ? 'text-accent-ink' : 'text-slate-500'}`} />
                   <span className={isSelected ? 'text-white' : 'text-slate-300'}>{repo.path}</span>
                 </div>
               );
             })}
           </div>
           <div className="p-4 border-t border-white/5 flex justify-end gap-3 bg-[#0d0f14]">
-            <button onClick={() => s.setIsRepoModalOpen(false)} className="px-4 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-md transition-colors">Done</button>
+            <Button variant="primary" onClick={() => s.setIsRepoModalOpen(false)}>Done</Button>
           </div>
         </Modal>
       )}
 
       {/* Dirty Warning Modal */}
       {s.dirtyWarningRepos.length > 0 && (
-        <Modal onClose={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }} className="glass-panel w-[500px] border border-ruby-500/20 rounded-xl overflow-hidden shadow-2xl flex flex-col p-6 space-y-4">
+        <Modal onClose={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }} className="raised w-[500px] border-ruby-500/20 overflow-hidden flex flex-col p-6 space-y-4">
           <div className="flex items-center gap-3 text-ruby-400"><AlertTriangle className="w-8 h-8 shrink-0" /><h3 className="font-heading font-bold text-lg text-white">Potential Data Loss Warning</h3></div>
           <p className="text-sm text-slate-300 leading-relaxed">{s.pendingActionAfterConfirm === 'delete' ? 'The workspace has repositories with uncommitted changes or unpushed commits. Deleting the workspace will permanently erase these directories:' : 'You are about to remove the following repositories, but they contain uncommitted changes or unpushed commits on the local server. Removing them will permanently erase these folders:'}</p>
           <div className="bg-black/40 border border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
@@ -177,27 +178,27 @@ function Shell() {
                 <div className="text-white font-medium truncate mb-1">{repo.repo_path}</div>
                 <div className="flex gap-2">
                   {repo.has_uncommitted && <span className="px-1.5 py-0.5 rounded bg-ruby-500/10 border border-ruby-500/20 text-ruby-400">Uncommitted Changes</span>}
-                  {repo.has_unpushed && <span className="px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400">Unpushed Commits</span>}
+                  {repo.has_unpushed && <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300">Unpushed Commits</span>}
                 </div>
               </div>
             ))}
           </div>
           <p className="text-xs text-slate-400">Are you absolutely sure you want to proceed and permanently delete these files?</p>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }} className="px-4 py-2 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all">Cancel</button>
-            <button onClick={async () => { if (s.pendingActionAfterConfirm === 'delete') { await s.proceedWithDelete(); } else { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); await s.proceedWithReBootstrap(); } }} className="px-4 py-2 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg font-medium transition-all">Proceed Anyway</button>
+            <Button onClick={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }}>Cancel</Button>
+            <Button variant="danger" onClick={async () => { if (s.pendingActionAfterConfirm === 'delete') { await s.proceedWithDelete(); } else { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); await s.proceedWithReBootstrap(); } }}>Proceed Anyway</Button>
           </div>
         </Modal>
       )}
 
       {/* Delete Confirm Modal */}
       {s.showDeleteConfirm && (
-        <Modal onClose={() => s.setShowDeleteConfirm(false)} className="glass-panel w-[450px] border border-ruby-500/20 rounded-xl overflow-hidden shadow-2xl flex flex-col p-6 space-y-4">
+        <Modal onClose={() => s.setShowDeleteConfirm(false)} className="raised w-[450px] border-ruby-500/20 overflow-hidden flex flex-col p-6 space-y-4">
           <div className="flex items-center gap-3 text-ruby-400"><Trash2 className="w-7 h-7 shrink-0" /><h3 className="font-heading font-bold text-lg text-white">Delete Workspace</h3></div>
           <p className="text-sm text-slate-300 leading-relaxed">Are you sure you want to delete <span className="text-white font-semibold">{s.projectName}</span>? This will permanently delete the project record and remove all local workspace clones.</p>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => s.setShowDeleteConfirm(false)} className="px-4 py-2 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all">Cancel</button>
-            <button onClick={s.proceedWithDelete} className="px-4 py-2 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg font-medium transition-all">Delete Permanently</button>
+            <Button onClick={() => s.setShowDeleteConfirm(false)}>Cancel</Button>
+            <Button variant="danger" onClick={s.proceedWithDelete}>Delete Permanently</Button>
           </div>
         </Modal>
       )}
@@ -211,10 +212,10 @@ function Shell() {
           <p className="text-sm text-slate-400">Configure code isolation rules, repositories and environment configurations for <span className="text-white font-medium">{s.activeProject.name}</span>.</p>
           </div>
         </div>
-        <button onClick={s.handleSave} disabled={s.status === 'saving'} className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/50 text-white font-medium text-sm px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-2">
+        <Button variant="primary" onClick={s.handleSave} disabled={s.status === 'saving'}>
           {s.status === 'saving' ? <RotateCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           Save Changes
-        </button>
+        </Button>
       </div>
 
       {s.activeProject.status === 'error' && (

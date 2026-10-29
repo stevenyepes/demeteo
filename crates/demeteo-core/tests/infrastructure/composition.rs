@@ -155,3 +155,36 @@ async fn one_sync_registry_is_shared_by_everything_that_reads_a_live_turn() {
 
     let _ = std::fs::remove_dir_all(tmp);
 }
+
+/// The supplied source is the one the context carries, and `build_core_context`
+/// is the same composition with the desktop's keyring source rather than a
+/// second wiring that could drift from it.
+#[tokio::test]
+async fn the_supplied_credential_source_is_the_one_the_context_carries() {
+    let tmp = scratch("credential_source");
+    let source = crate::support::fake_credentials::FakeCredentialSource::new(&[("/repo", "tok")]);
+    let ctx = super::build_core_context_with_credentials(
+        super::CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: super::ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+        source.clone(),
+    );
+
+    assert_eq!(
+        ctx.git_credentials.pat_for("prov", "/repo"),
+        Ok("tok".to_string())
+    );
+    assert!(ctx.git_credentials.pat_for("prov", "/elsewhere").is_err());
+    assert_eq!(
+        source.asked(),
+        vec![
+            ("prov".to_string(), "/repo".to_string()),
+            ("prov".to_string(), "/elsewhere".to_string()),
+        ]
+    );
+
+    let _ = std::fs::remove_dir_all(tmp);
+}

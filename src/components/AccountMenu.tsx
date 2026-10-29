@@ -104,7 +104,7 @@ export function AccountMenu({
         type="button"
         ref={triggerRef}
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center rounded-full transition-colors hover:opacity-90 focus-visible:outline focus-visible:outline-1 focus-visible:outline-cyan-400"
+        className="flex items-center rounded-full transition-colors hover:opacity-90"
         title={username ? `Account — ${username}` : 'Account'}
         aria-label={username ? `Account — ${username}` : 'Account'}
         aria-haspopup="menu"
@@ -116,7 +116,7 @@ export function AccountMenu({
           <img
             src={connectedProvider.avatarUrl}
             alt={connectedProvider.username}
-            className="w-8 h-8 rounded-full border-2 border-cyan-500/50 object-cover"
+            className="w-8 h-8 rounded-full border-2 border-white/10 object-cover"
           />
         ) : (
           <span
@@ -129,7 +129,7 @@ export function AccountMenu({
       {open && (
         <div
           data-testid="topbar-account-menu"
-          className="glass-panel absolute right-0 top-full mt-2 w-56 rounded-lg border border-white/10 shadow-2xl overflow-hidden z-50"
+          className="raised absolute right-0 top-full mt-2 w-56 overflow-hidden z-50"
         >
           {/* Outside the `menu` role deliberately: a screen reader announcing a
               menu of two items, one of which is inert text, is worse than the

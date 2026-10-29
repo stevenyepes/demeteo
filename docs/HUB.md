@@ -20,20 +20,20 @@
 
 ## 1. Summary
 
-Decisions [61–68](DECISIONS.md#1-the-locked-decisions) are the short form of what
+Decisions [62–69](DECISIONS.md#1-the-locked-decisions) are the short form of what
 follows. Each row here has a section below that states the rejected alternative in
 full.
 
 | # | Decision | Rejected | Why |
 |---|----------|----------|-----|
-| 61 | A browser control plane (the Hub) is in scope; reverses [`OPEN_QUESTIONS.md` §17](OPEN_QUESTIONS.md#17-other-captured-items) | keeping a web companion out of scope | one view over a fleet, and a gate decided away from the machine, are needs the desktop cannot meet |
-| 62 | Hosted, multi-tenant; a tenant is one person with one fleet | self-hosted single-tenant; teams in v1 | the user wants a hosted service; the passkey endorsement chain has no notion of membership |
-| 63 | Desktops pair and hold one outbound `wss`; the Hub never dials a desktop; runners are not paired | the runner dialing out; the Hub storing PATs or long-lived SSH keys | a Hub token at rest on a host with no keyring, plus a second transport; standing credentials for every tenant — see [decision 63](DECISIONS.md#63--hub-instances-detail) |
-| 64 | The Hub builds future runner `RunSpec`s from desktop-reported snapshots with local paths stripped | Hub-side authoring of Projects and Workflows; Workflows read from repo files | a second editor plus drift; a new concept |
-| 65 | A Gate may be decided from the Hub by a WebAuthn assertion the desktop verifies against pinned passkeys | a session plus a step-up for some gates; read-only gates; manual per-desktop passkey acceptance | a compromised Hub could approve ordinary gates; see §8 |
-| 66 | Scopes `read` / `spend` / `gates`, toggled and enforced on the instance; local per-run and rolling-24-hour ceilings | a `logs` scope; MCP's `configure`; toggle-only scopes | transcripts and diffs never leave an instance; a Hub-supplied cap is a cap the Hub can raise — see §7 |
-| 67 | Postgres plus OpenBao (Transit) as Docker Compose: `hub`, `postgres`, `openbao`, `caddy` | HashiCorp Vault; Cosmian/Eviden KMS | BSL is not open source; source-available licensing — see §9 |
-| 68 | `demeteo-hub`, `demeteo-hub-protocol` and `hub-web/` | the Hub linking `demeteo-core` in v1 | it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls |
+| 62 | A browser control plane (the Hub) is in scope; reverses [`OPEN_QUESTIONS.md` §17](OPEN_QUESTIONS.md#17-other-captured-items) | keeping a web companion out of scope | one view over a fleet, and a gate decided away from the machine, are needs the desktop cannot meet |
+| 63 | Hosted, multi-tenant; a tenant is one person with one fleet | self-hosted single-tenant; teams in v1 | the user wants a hosted service; the passkey endorsement chain has no notion of membership |
+| 64 | Desktops pair and hold one outbound `wss`; the Hub never dials a desktop; runners are not paired | the runner dialing out; the Hub storing PATs or long-lived SSH keys | a Hub token at rest on a host with no keyring, plus a second transport; standing credentials for every tenant — see [decision 64](DECISIONS.md#64--hub-instances-detail) |
+| 65 | The Hub builds future runner `RunSpec`s from desktop-reported snapshots with local paths stripped | Hub-side authoring of Projects and Workflows; Workflows read from repo files | a second editor plus drift; a new concept |
+| 66 | A Gate may be decided from the Hub by a WebAuthn assertion the desktop verifies against pinned passkeys | a session plus a step-up for some gates; read-only gates; manual per-desktop passkey acceptance | a compromised Hub could approve ordinary gates; see §8 |
+| 67 | Scopes `read` / `spend` / `gates`, toggled and enforced on the instance; local per-run and rolling-24-hour ceilings | a `logs` scope; MCP's `configure`; toggle-only scopes | transcripts and diffs never leave an instance; a Hub-supplied cap is a cap the Hub can raise — see §7 |
+| 68 | Postgres plus OpenBao (Transit) as Docker Compose: `hub`, `postgres`, `openbao`, `caddy` | HashiCorp Vault; Cosmian/Eviden KMS | BSL is not open source; source-available licensing — see §9 |
+| 69 | `demeteo-hub`, `demeteo-hub-protocol` and `hub-web/` | the Hub linking `demeteo-core` in v1 | it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls |
 
 ---
 
@@ -180,7 +180,7 @@ parameter is required. One the Hub does not name is ignored — there is no
 | `dpop_jkt` | the device key's RFC 7638 thumbprint: unpadded base64url of 32 bytes |
 | `scope` | one or more of `read`, `spend`, `gates` (§7), separated by single spaces, none repeated |
 | `state` | 1–128 characters of `A-Z a-z 0-9 - . _ ~` |
-| `instance_name` | 1–64 characters after trimming |
+| `instance_name` | 1–65 characters after trimming |
 | `os`, `arch`, `app_version` | 1–32 characters each after trimming |
 
 `instance_name`, `os`, `arch` and `app_version` are **self-asserted**: they are
@@ -418,7 +418,7 @@ lifetime (15 minutes) after the Hub-side revoke.
 ## 5. The socket
 
 **One outbound `wss` per instance.** The instance opens it; the Hub never dials a
-desktop (decision 63). Events travel up, requests travel down, over the same
+desktop (decision 64). Events travel up, requests travel down, over the same
 connection. The access token and a DPoP proof are presented on the upgrade.
 
 <!-- EXAMPLE: new -->
@@ -612,7 +612,7 @@ left. Transcripts, diffs and file contents are not on it (§3).
 ### Snapshots
 
 Paired desktops report **Project and Workflow snapshots with local paths
-stripped** (decision 64). A `Snapshot` is one struct carrying the instance's
+stripped** (decision 65). A `Snapshot` is one struct carrying the instance's
 Projects, Workflow versions and run-shape settings together. **The Hub holds one
 row per instance and each snapshot replaces it wholesale**, so there is one
 current copy and nothing to merge. A snapshot is sent after `hello` and whenever
@@ -1405,7 +1405,7 @@ the second today:
 - **`passkey_endorsement`** would add one. The desktop consumes and refuses every
   one as `unknown_kind` without reading its assertion (§11 item 20). The rule it
   is designed to, that of
-  [decision 65](DECISIONS.md#65--hub-gate-decisions-detail), is this: it carries
+  [decision 66](DECISIONS.md#66--hub-gate-decisions-detail), is this: it carries
   the new credential's id and public key and an assertion, **by an
   already-trusted passkey, over the new credential's id and public key**
   (challenge prefix `demeteo-hub/v1/endorse`). The new key is
@@ -1671,7 +1671,7 @@ by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
 `access_verdict` in [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs).
 
 **Runner dispatch is out of scope for this ticket set,** and a separate discovery
-owns it. A `demeteo-runner` host is not paired with the Hub (decision 63), and no
+owns it. A `demeteo-runner` host is not paired with the Hub (decision 64), and no
 request kind in §6 targets one.
 
 What that discovery would pursue, recorded so it is not re-derived and **not
@@ -1778,12 +1778,12 @@ what a desktop client implements.
     Its loopback callback binds `127.0.0.1:0`, takes the port the OS assigns,
     and serves one random path; nothing configures either.
 11. **Whether a step's `command` and prompt templates may cross at all.** They
-    travel inside a Workflow snapshot's documents, and decision 64 needs them:
+    travel inside a Workflow snapshot's documents, and decision 65 needs them:
     a `RunSpec` cannot be built without the command and the prompt (§10). But
     both are user-authored text that may embed a local path or a credential
     (`curl -H "Authorization: Bearer …"`), which no field-level strip can
     detect. Sending them, redacting them, or sending a projection without them
-    — the last re-decides decision 64 — is open. Until it is decided the
+    — the last re-decides decision 65 — is open. Until it is decided the
     desktop sends them, scrubbed (§11 *The desktop socket's carried defaults*).
     The snapshot builder's settled obligations, `cwd` and `remote_url`
     userinfo, are in §5.
@@ -2032,7 +2032,7 @@ uploads within one TTL.
 
 ## 12. Related
 
-- [`DECISIONS.md`](DECISIONS.md) — decisions 61–68, the short form of this document
+- [`DECISIONS.md`](DECISIONS.md) — decisions 62–69, the short form of this document
 - [`hub-design/README.md`](hub-design/README.md) — the mockup, and where it is superseded
 - [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) — the other external surface; §5 for the OAuth shape this one differs from, §8 for decision 50
 - [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) — §17, the web-companion bullet this reverses

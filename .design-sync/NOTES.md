@@ -58,7 +58,7 @@ Repo-specific gotchas for future syncs. Read this before re-running anything.
 
   Classes confirmed absent despite looking plausible: `demeteo-scrollarea`
   (`ScrollArea` sets it as a styling hook, but no rule ships), `animate-fadeIn`,
-  `glass-panel-hover` as a standalone rule (it exists only as `:hover`),
+  `panel-hover` as a standalone rule (it exists only as `:hover`),
   `h-64`/`h-72` (the app tops out around `h-56`).
 - `package-capture.mjs` shoots a fixed **900×700** viewport with
   `fullPage:false`. The large empty area below short content is the harness,
@@ -86,7 +86,7 @@ alone does not re-stamp.
 ## A finding about the repo itself (not a sync issue)
 
 `font-outfit` is used **80 times across 31 files** under `src/`, but Tailwind
-generates font utilities from the `--font-*` theme keys, and `App.css` defines
+generates font utilities from the `--font-*` theme keys, and `src/styles/tokens.css` defines
 `--font-heading` (not `--font-outfit`). So `.font-outfit` has no rule anywhere
 and every one of those headings silently falls back to the body font (Inter)
 instead of Outfit. The design-system previews use `font-heading`, which does

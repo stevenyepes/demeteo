@@ -23,22 +23,10 @@ import type { HeaderDensity } from '../../lib/headerLayout';
 // its own no matter how it is marked up — the name has to carry the count, and
 // `title` cannot stand in because it loses to a published name too.
 
-export type HeaderNavAccent = 'violet' | 'cyan' | 'amber';
-
-const ACCENT_CLASS: Record<HeaderNavAccent, string> = {
-  violet: 'text-violet-400',
-  cyan: 'text-cyan-400',
-  amber: 'text-amber-400',
-};
-
 export interface HeaderNavItemProps {
   icon: LucideIcon;
   label: string;
   density: HeaderDensity;
-  /** Icon tint, per the header's accent mapping — violet is primary, cyan is
-   *  interactive, amber is actionable. Omitted, the icon inherits the button's
-   *  own text colour. */
-  accent?: HeaderNavAccent;
   active?: boolean;
   /** Amber actionable count — rendered as a corner badge when > 0. */
   count?: number;
@@ -67,7 +55,6 @@ export function HeaderNavItem({
   icon: Icon,
   label,
   density,
-  accent,
   active = false,
   count,
   activity = false,
@@ -101,7 +88,7 @@ export function HeaderNavItem({
           : 'text-slate-400 hover:bg-white/5 hover:text-white',
       )}
     >
-      <Icon className={cx('w-4 h-4 shrink-0', accent && ACCENT_CLASS[accent])} />
+      <Icon className="w-4 h-4 shrink-0" />
       {density === 'labels' && <span className="font-mono whitespace-nowrap">{label}</span>}
       {hasCount ? (
         <span

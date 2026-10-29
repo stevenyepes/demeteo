@@ -1213,3 +1213,61 @@ async fn an_older_runner_without_the_method_fails_the_assignment_verbatim() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+/// The run row and the shadow feature are read together, from the stores the
+/// view will be rendered from: a row the runner parked `failed` does not
+/// settle a shadow whose feature a later poll can still move.
+#[tokio::test]
+async fn a_terminal_mirror_row_does_not_settle_a_shadow_still_in_flight() {
+    use crate::application::remote_runs::mirrored_run_view;
+    use crate::ports::db::FeaturePatch;
+
+    let rpc = Arc::new(AssignmentRpc {
+        calls: Mutex::new(Vec::new()),
+        feature: serde_json::Value::Null,
+        set_assignment: Err("no RPC is part of this decision".to_string()),
+        assignment_params: Mutex::new(Vec::new()),
+    });
+    let (ctx, temp_dir) = assignment_fixture("settled", rpc, Vec::new());
+    ctx.remote_run_mirror
+        .update_status(
+            "m-assign",
+            "r-assign",
+            "failed",
+            Some("unstable host: exceeded reboot-retry budget"),
+            None,
+            None,
+            None,
+            0,
+            paths::now_ms(),
+        )
+        .unwrap();
+    let view = || {
+        let row = ctx
+            .remote_run_mirror
+            .get("m-assign", "r-assign")
+            .unwrap()
+            .expect("the mirror row");
+        mirrored_run_view(ctx.features.as_ref(), row)
+    };
+
+    let frozen = view();
+    assert_eq!(frozen.run.status, "failed");
+    assert!(
+        !frozen.shadow_settled,
+        "the shadow feature is still `running`"
+    );
+
+    ctx.features
+        .update(
+            &FeatureId::from("f-assign"),
+            &FeaturePatch {
+                status: Some("awaiting_mr".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(view().shadow_settled);
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}

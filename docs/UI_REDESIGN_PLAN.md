@@ -1,8 +1,9 @@
 # UI Redesign Plan — Pipeline View & Project View
 
 > Source of the visual direction: `ui-mocks/orchestrator_mockup.tsx`.
-> Design language, token values and colour semantics: **AGENTS.md §4** and
-> `src/App.css` — this plan defers to both and never restates them.
+> Design language, token values and colour semantics: **AGENTS.md §4**,
+> `src/App.css` and `src/styles/tokens.css` — this plan defers to all three and
+> never restates them.
 > Existing UX defects it folds in: [`docs/ux-audit/findings.md`](ux-audit/findings.md).
 
 The mock is a *direction*, not an implementation. It is untyped JS on a GitHub-dark
@@ -90,18 +91,18 @@ both cheaper and lower-risk.
 
 ## 2. Design translation
 
-Token values live in `src/App.css`; colour *semantics* are AGENTS.md §4. Mapping:
+Token values live in `src/styles/tokens.css`; colour *semantics* are AGENTS.md §4. Mapping:
 
 | Mock literal | Use instead | Why |
 |---|---|---|
 | `#0d1117`, `#090c10` | `--bg-app`, `--bg-well` | App shell / sunk wells |
 | `#161b22`, `#1c2128` | `--bg-panel`, `--bg-panel-hover` | Glass card surfaces |
-| `#30363d`, `#484f58` | `--border-glass` (+ hover variant) | One border language |
+| `#30363d`, `#484f58` | `--border-hairline` (+ hover variant) | One border language |
 | `teal-400/500` | `--accent-cyan` | Cyan = terminal streams, interactive states |
 | `purple-600` | `--accent-purple` (violet) | Violet = active connections, primary actions |
 | `green-500` | `--accent-emerald` | Emerald = running agents, healthy status |
 | `red-400/500` | `--accent-ruby` / `ruby-*` scale | Ruby = errors, stopped, failures |
-| Flat card + `border-l-4` | `.glass-panel` + tone accent bar | Glassmorphism is the card language; `TONE_ACCENT` in `ProjectHome.tsx:28` already implements the bar |
+| Flat card + `border-l-4` | `.panel` + tone accent bar | Glassmorphism is the card language; `TONE_ACCENT` in `ProjectHome.tsx:28` already implements the bar |
 | Ad-hoc chip colours | `TONE_CHIP` from `lib/runStatus.ts` | F27 fixed status-colour drift once; do not re-open it |
 
 **Rule for the whole redesign:** every status colour resolves through
@@ -109,11 +110,15 @@ Token values live in `src/App.css`; colour *semantics* are AGENTS.md §4. Mappin
 re-introducing F27. New surfaces get a tone from `runStatusMeta()` and read the class
 out of `TONE_CHIP` / `TONE_TEXT` / `TONE_BORDER_L`.
 
-**WebKitGTK caveat.** The `WEBKITGTK / TAURI COMPATIBILITY LAYER` block in `src/App.css`
-carries an `!important` safelist of specific utility classes for the Linux webview. Any *new* arbitrary-value colour utility is
-outside it. Either express the colour as a token or verify it renders under
-`npm run dev:tauri` on Linux before calling the phase done — a class that silently
-no-ops there is invisible to `npm run checks`.
+**Cascade caveat.** A utility does nothing when an unlayered rule sets the same
+property, whatever the specificity, because Tailwind v4 emits utilities into
+`@layer utilities`. That is why `src/App.css` keeps its rules in `@layer base` and
+`@layer components` (see the note at the top of that file). Its old `!important`
+"WebKitGTK" safelist was a workaround for the same thing rather than for the
+webview: on WebKitGTK 2.52, v4's oklch and `color-mix()` render natively. What remains is the
+`PINNED UTILITY COLOURS` block, which holds some colours at their v3 values until
+the token rewrite. A class that silently no-ops is still invisible to
+`npm run checks`, so look at new surfaces under `npm run dev:tauri`.
 
 ---
 
@@ -601,9 +606,9 @@ density, last view mode and filter. Audit *Opportunity 2* notes
 
 **Risks:**
 
-- **WebKitGTK invisibility.** `npm run checks` compiles for the host and never renders.
-  A new arbitrary-value utility outside the `App.css` safelist can silently no-op on
-  Linux. Every phase with new colour classes needs a `dev:tauri` look on Linux.
+- **Render invisibility.** `npm run checks` compiles for the host and never renders.
+  A utility beside an unlayered rule that sets the same property silently no-ops.
+  Every phase with new colour classes needs a `dev:tauri` look on Linux.
 - **Glassmorphism cost.** `backdrop-filter: blur(12px)` is cheap once and expensive
   nested. The inspector sitting inside the run column must not stack a third blur
   layer over the two already there. `App.css` records a real WKWebView GPU incident;
@@ -741,12 +746,12 @@ it, and spent no new height at all.**
 - **The surface pass, same day.** Three tracks side by side made the app's card
   vocabulary legible for the first time, and it was four languages: a sunken well
   (graph), a borderless sidebar blurred at 24px (inspector), glass cards, and an
-  8px-radius banner. The cause is that `.glass-panel` bakes `border` and
+  8px-radius banner. The cause is that `.panel` bakes `border` and
   `border-radius` into CSS, so it cannot be composed — **39 call sites add a
   `border` on top of the one it already sets**, and the harness panel's
   `border-white/10` was a silent departure from the card language that read as
   "heavier" without saying why. `--radius-panel` is the token now; the graph and
-  the inspector are `glass-panel` like their neighbour, and the canvas inside the
+  the inspector are `panel` like their neighbour, and the canvas inside the
   graph is `panel-field` — the same well the terminal uses, previously spelled as
   a raw `#050608` (a hex of a token that already existed, AGENTS.md §4).
 - **A measure caps the line, not the box.** `max-w-[96ch]` sat on the
@@ -759,7 +764,7 @@ it, and spent no new height at all.**
   `px-6`; the run column was `p-8`, so the view stepped in by 8px exactly where the
   eye tracks a vertical edge. Aligned down, because five blocks already agreed.
 - **A metric strip is chrome inside chrome.** `MetricStrip` gains an `inset`
-  variant and the feature header uses it: a `glass-panel` inside a `backdrop-blur-md`
+  variant and the feature header uses it: a `panel` inside a `backdrop-blur-md`
   header is a blur reading a blur — invisible, and §7 treats stacked translucency
   as a budget.
 - **The `Graph | Timeline` chrome row sits above all three tracks, not inside one.**

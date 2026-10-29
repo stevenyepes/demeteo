@@ -1,5 +1,5 @@
 //! The desktop's check of a WebAuthn assertion by one of its trusted passkeys
-//! (docs/HUB.md §8, DECISIONS 65). It mirrors the Hub's
+//! (docs/HUB.md §8, DECISIONS 66). It mirrors the Hub's
 //! `crates/demeteo-hub/src/auth/assertion.rs`, which this crate must not
 //! depend on. Where the desktop is the authority it differs from it: it finds
 //! the key from the credential id itself, and it refuses a counter that does

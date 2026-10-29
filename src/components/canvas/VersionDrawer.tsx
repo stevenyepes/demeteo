@@ -229,14 +229,14 @@ export function VersionDrawer({
 
   return (
     <aside
-      className={`flex h-full w-[340px] shrink-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl ${className}`}
+      className={`flex h-full w-[340px] shrink-0 flex-col border-l border-white/5 bg-surface-panel ${className}`}
       data-testid="version-drawer"
       aria-label="Version history"
     >
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/5 px-4 py-3">
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-slate-400" aria-hidden />
-          <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-white">
+          <h3 className="font-heading text-sm font-bold text-white">
             Version history
           </h3>
         </div>
@@ -259,7 +259,7 @@ export function VersionDrawer({
           id="compare-target"
           value={target}
           onChange={(e) => retarget(e.target.value)}
-          className="min-w-0 flex-1 rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-1 text-[11px] text-slate-200 outline-none focus:border-cyan-500/50"
+          className="min-w-0 flex-1 rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-1 text-[11px] text-slate-200 outline-none focus:border-accent-ring"
         >
           <option value="working">Working copy</option>
           {versions.map((v) => (
@@ -309,7 +309,7 @@ export function VersionDrawer({
                       v{row.version}
                     </span>
                     {isLatest && (
-                      <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-cyan-300">
+                      <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1 py-px text-[9px] font-bold text-cyan-300">
                         Current
                       </span>
                     )}

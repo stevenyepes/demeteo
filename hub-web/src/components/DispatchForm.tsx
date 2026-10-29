@@ -26,6 +26,7 @@ import { CeremonyError } from './CeremonyError';
 import { DispatchCapsFields } from './DispatchCapsFields';
 import { DispatchPipeline } from './DispatchPipeline';
 import { RequestStatusCard } from './RequestStatusCard';
+import { Button } from '../../../src/components/ui/Button';
 
 interface DispatchFormProps {
   /** An instance `dispatchBlocker` passed, or blocked only on `no-spend`. */
@@ -309,13 +310,13 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
           this Hub on the machine to dispatch here.
         </p>
       )}
-      <button
+      <Button variant="primary"
         type="submit"
         disabled={!spendGranted || sending}
-        className="btn-primary self-start focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-      >
+        className="self-start"
+     >
         {instance.present ? 'Start feature' : 'Queue feature'}
-      </button>
+      </Button>
     </form>
   );
 }

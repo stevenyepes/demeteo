@@ -75,7 +75,7 @@ function NodeTypeRow({ entry, draggable, active, onSelect }: NodeTypeRowProps) {
         disabled
           ? 'cursor-not-allowed border-slate-800/60 bg-slate-900/40 opacity-50'
           : active
-            ? 'border-cyan-400/60 bg-slate-800/70'
+            ? 'border-accent-edge bg-accent-tint'
             : 'border-slate-700/50 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-800/60',
       ].join(' ')}
     >
@@ -110,7 +110,7 @@ export function Palette({ entries, onSelect, className = '' }: PaletteProps) {
 
   return (
     <div
-      className={`flex w-56 flex-col gap-2 rounded-xl border border-slate-700/60 bg-slate-900/85 p-2.5 backdrop-blur-sm ${className}`}
+      className={`raised flex w-56 flex-col gap-2 p-2.5 ${className}`}
       data-testid="node-palette"
     >
       <div className="relative">
@@ -124,7 +124,7 @@ export function Palette({ entries, onSelect, className = '' }: PaletteProps) {
           onChange={(evt) => setQuery(evt.target.value)}
           placeholder="Search nodes"
           aria-label="Search node types"
-          className="w-full rounded-lg border border-slate-700/60 bg-slate-950/60 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/50 focus:outline-none"
+          className="w-full rounded-lg border border-slate-700/60 bg-slate-950/60 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-500 focus:border-accent-ring focus:outline-none"
         />
       </div>
 
@@ -201,8 +201,8 @@ export function NodeTypePicker({
       <div
         className={
           anchor
-            ? 'absolute w-64 rounded-xl border border-slate-700/60 bg-slate-900/95 p-2.5 shadow-2xl shadow-black/50 backdrop-blur-sm'
-            : 'absolute left-1/2 top-24 w-80 -translate-x-1/2 rounded-xl border border-slate-700/60 bg-slate-900/95 p-2.5 shadow-2xl shadow-black/50 backdrop-blur-sm'
+            ? 'raised absolute w-64 p-2.5'
+            : 'raised absolute left-1/2 top-24 w-80 -translate-x-1/2 p-2.5'
         }
         style={anchor ? { left: anchor.x, top: anchor.y } : undefined}
         onClick={(evt) => evt.stopPropagation()}
@@ -210,7 +210,7 @@ export function NodeTypePicker({
         aria-label={title}
         data-testid="node-type-picker"
       >
-        <p className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+        <p className="px-1 pb-2 text-[11px] font-medium text-slate-400">
           {title}
         </p>
         <input
@@ -235,7 +235,7 @@ export function NodeTypePicker({
           }}
           placeholder="Search node types"
           aria-label="Search node types"
-          className="mb-2 w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/50 focus:outline-none"
+          className="mb-2 w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-accent-ring focus:outline-none"
         />
         <div role="listbox" aria-label={title} className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
           {shown.map((entry, i) => (

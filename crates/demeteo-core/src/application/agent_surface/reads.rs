@@ -2,10 +2,14 @@
 //! function delegates to [`RunView`](crate::application::run_view::RunView)
 //! or a repository port — none re-derive state those already expose.
 
+use std::collections::HashSet;
+
 use serde::Serialize;
 
+use crate::application::remote_runs::{refresh_run_for_feature, FeatureRunRefresh};
 use crate::application::run_view::FailureExplanation;
 use crate::application::tickets;
+use crate::domain::gate::pending::awaiting_unrecorded_gate;
 use crate::domain::ids::{DiscoveryId, FeatureId, MachineId, ProjectId, StepExecutionId};
 use crate::domain::models::{
     Discovery, DiscoveryStatus, Feature, GateDecision, Machine, Project, StepAttempt, StepExecution,
@@ -20,6 +24,16 @@ use crate::state::AppContext;
 pub struct FeatureWithSteps {
     pub feature: Feature,
     pub steps: Vec<StepExecution>,
+}
+
+/// [`get_feature`]'s answer after [`refresh_run`] went to the runner.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefreshedRun {
+    #[serde(flatten)]
+    pub run: FeatureWithSteps,
+    /// `false` when there was no runner to ask; `note` says so.
+    pub refreshed: bool,
+    pub note: Option<String>,
 }
 
 /// One project's one pending gate, named — [`list_pending_gates`] is
@@ -134,6 +148,41 @@ pub fn get_feature(
     Ok(Some(FeatureWithSteps { feature, steps }))
 }
 
+/// [`get_feature`] after pulling the feature's detached run from its runner
+/// ([`refresh_run_for_feature`]), for a caller that would otherwise read a
+/// shadow only a viewer of the feature keeps current.
+///
+/// A feature that is not a detached run is returned as it is, with a note:
+/// there is nothing to pull, which is not a failure. A runner that does not
+/// answer is an error, because the alternative is a stale shadow that reads
+/// as current.
+pub async fn refresh_run(ctx: &AppContext, feature_id: &FeatureId) -> Result<RefreshedRun, String> {
+    if ctx.run_view.feature(feature_id)?.is_none() {
+        return Err("feature not found".to_string());
+    }
+    let (refreshed, note) = match refresh_run_for_feature(ctx, feature_id.as_str())
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        FeatureRunRefresh::Refreshed => (true, None),
+        FeatureRunRefresh::NotDetached => (
+            false,
+            Some("not a detached run: it runs on this machine, so there is no runner to refresh from".to_string()),
+        ),
+        FeatureRunRefresh::RunnerUnreachable { machine_id } => {
+            return Err(format!(
+                "runner on machine {machine_id} could not be reached; get_feature shows the state as of the last successful refresh"
+            ))
+        }
+    };
+    let run = get_feature(ctx, feature_id)?.ok_or_else(|| "feature not found".to_string())?;
+    Ok(RefreshedRun {
+        run,
+        refreshed,
+        note,
+    })
+}
+
 /// Per-attempt history for a step, ordered by attempt number.
 pub fn list_step_attempts(
     ctx: &AppContext,
@@ -145,17 +194,35 @@ pub fn list_step_attempts(
 /// Every gate awaiting a decision across a project's — or, when
 /// `project_id` is `None`, every project's — active features.
 ///
-/// Composes [`list_features`] with the sync `GateRepository` port's
-/// `pending_for_feature` directly, one call per feature, rather than the
-/// async `StepExecutor::gate_pending_for_run` presenter wrapper: a read
-/// needs no executor dependency.
+/// A gate with a pending `gate_decisions` row is reported from that row. One
+/// without — a run on a remote machine, whose decisions live on the runner —
+/// is reported from its mirrored `awaiting_gate` step, the status the UI's
+/// Decide Gate strip reads, so this list and the UI cannot disagree. Either
+/// way `step_execution_id` is what `step_control::redirect_gate` accepts.
+///
+/// Reads the sync repository ports directly, one feature at a time, rather
+/// than the async `StepExecutor::gate_pending_for_run` presenter wrapper: a
+/// read needs no executor dependency.
 pub fn list_pending_gates(
     ctx: &AppContext,
     project_id: Option<&ProjectId>,
 ) -> Result<Vec<PendingGate>, String> {
     let mut pending = Vec::new();
     for feature in list_features(ctx, project_id)? {
-        if let Some(decision) = ctx.gates.pending_for_feature(&feature.id)? {
+        let decision = match ctx.gates.pending_for_feature(&feature.id)? {
+            Some(recorded) => Some(recorded),
+            None => {
+                let steps = ctx.features.steps_for_feature(&feature.id)?;
+                let mut recorded = HashSet::new();
+                for step in &steps {
+                    if ctx.gates.latest_for_step(&step.id)?.is_some() {
+                        recorded.insert(step.id.clone());
+                    }
+                }
+                awaiting_unrecorded_gate(&steps, &recorded)
+            }
+        };
+        if let Some(decision) = decision {
             pending.push(PendingGate {
                 project_id: feature.project_id.clone(),
                 feature_id: feature.id.clone(),

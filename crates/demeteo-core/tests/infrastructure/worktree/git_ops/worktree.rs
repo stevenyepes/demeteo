@@ -3481,16 +3481,13 @@ mod credentialed_fetches {
         programs: &[(String, Result<String, String>)],
     ) -> (Arc<ScriptedExec>, GitOpsHelper) {
         crate::credential_cache::set(PROVIDER, PAT);
-        let db = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
-        db.add_provider_instance(ProviderInstance {
-            id: ProviderId::from(PROVIDER),
-            kind: "github".to_string(),
-            host: "github.com".to_string(),
-            username: "someone".to_string(),
-            avatar_url: String::new(),
-            created_at: 0,
-        })
-        .unwrap();
+        helper_without_cache(programs)
+    }
+
+    fn helper_without_cache(
+        programs: &[(String, Result<String, String>)],
+    ) -> (Arc<ScriptedExec>, GitOpsHelper) {
+        let db = provider_db();
         let script: Vec<(&str, Result<&str, &str>)> = programs
             .iter()
             .map(|(k, v)| {
@@ -3504,6 +3501,24 @@ mod credentialed_fetches {
         let helper =
             GitOpsHelper::new(Arc::new(db) as Arc<dyn AppSettingsRepository>, exec.clone());
         (exec, helper)
+    }
+
+    fn provider_db() -> SqliteAdapter {
+        provider_db_for_host("github.com")
+    }
+
+    fn provider_db_for_host(host: &str) -> SqliteAdapter {
+        let db = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+        db.add_provider_instance(ProviderInstance {
+            id: ProviderId::from(PROVIDER),
+            kind: "github".to_string(),
+            host: host.to_string(),
+            username: "someone".to_string(),
+            avatar_url: String::new(),
+            created_at: 0,
+        })
+        .unwrap();
+        db
     }
 
     fn origin_probe() -> (String, Result<String, String>) {
@@ -3525,6 +3540,10 @@ mod credentialed_fetches {
     }
 
     fn assert_carries_credential(fetch: &ProgramRequest) {
+        assert_carries_pat(fetch, PAT);
+    }
+
+    fn assert_carries_pat(fetch: &ProgramRequest, pat: &str) {
         let before_fetch: Vec<&str> = fetch
             .args
             .iter()
@@ -3536,13 +3555,137 @@ mod credentialed_fetches {
             "{:?}",
             fetch.args
         );
-        assert!(fetch.args.iter().all(|a| !a.contains(PAT)));
+        assert!(fetch.args.iter().all(|a| !a.contains(pat)));
         assert!(
-            fetch.env.iter().any(|(k, v)| k == PAT_ENV_VAR && v == PAT),
+            fetch.env.iter().any(|(k, v)| k == PAT_ENV_VAR && v == pat),
             "{:?}",
             fetch.env
         );
         assert!(fetch.env.iter().any(|(k, _)| k == USER_ENV_VAR));
+    }
+
+    const INJECTED_PAT: &str = "tok-injected-91d4f7";
+
+    fn refspec() -> Refspec {
+        Refspec::try_from("refs/pull/7/head".to_string()).expect("a plain ref is a refspec")
+    }
+
+    #[tokio::test]
+    async fn an_injected_source_authenticates_a_refspec_fetch_without_the_credential_cache() {
+        let (exec, helper) = helper_without_cache(&[
+            origin_probe(),
+            (
+                credentialed("fetch --no-recurse-submodules origin -- refs/pull/7/head"),
+                Ok(String::new()),
+            ),
+        ]);
+        let source = FakeCredentialSource::new(&[("/repo", INJECTED_PAT)]);
+        let helper = helper.with_credential_source(source.clone());
+
+        helper
+            .fetch_origin_refspec(None, "/repo", &refspec())
+            .await
+            .expect("the scripted fetch succeeds");
+
+        let fetches = fetches(&exec);
+        assert_eq!(fetches.len(), 1, "{:?}", exec.programs());
+        assert_carries_pat(&fetches[0], INJECTED_PAT);
+        assert_eq!(
+            source.asked(),
+            vec![(PROVIDER.to_string(), "/repo".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_source_that_knows_no_credential_leaves_the_fetch_bare() {
+        let (exec, helper) = helper_without_cache(&[
+            origin_probe(),
+            (
+                "git -C /repo fetch origin -- refs/pull/7/head".to_string(),
+                Ok(String::new()),
+            ),
+        ]);
+        let helper = helper.with_credential_source(FakeCredentialSource::new(&[]));
+
+        helper
+            .fetch_origin_refspec(None, "/repo", &refspec())
+            .await
+            .expect("the scripted fetch succeeds");
+
+        let fetches = fetches(&exec);
+        assert_eq!(fetches.len(), 1, "{:?}", exec.programs());
+        assert!(fetches[0]
+            .args
+            .iter()
+            .all(|a| !a.starts_with("credential.helper")));
+        assert!(fetches[0].env.iter().all(|(k, _)| k != PAT_ENV_VAR));
+    }
+
+    #[tokio::test]
+    async fn no_recorded_request_carries_the_token_in_its_args() {
+        let (exec, helper) = helper_without_cache(&[
+            origin_probe(),
+            (
+                credentialed("fetch --no-recurse-submodules origin -- refs/pull/7/head"),
+                Ok(String::new()),
+            ),
+        ]);
+        let helper =
+            helper.with_credential_source(FakeCredentialSource::new(&[("/repo", INJECTED_PAT)]));
+
+        helper
+            .fetch_origin_refspec(None, "/repo", &refspec())
+            .await
+            .expect("the scripted fetch succeeds");
+
+        let requests = exec.requests();
+        assert!(requests.len() >= 2);
+        for request in requests {
+            assert!(
+                request.args.iter().all(|a| !a.contains(INJECTED_PAT)),
+                "{:?}",
+                request.args
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_credentialed_fetch_leaves_the_token_out_of_the_clones_config_and_origin() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free local port");
+        let port = listener.local_addr().expect("a bound address").port();
+        drop(listener);
+        let (dir, _) = make_repo("injected_fetch_leaves_no_token").await;
+        let repo = dir.to_string_lossy().to_string();
+        let exec = fresh_exec();
+        let origin = format!("http://x-access-token@127.0.0.1:{port}/acme/widgets");
+        exec.run_command(
+            "local",
+            &format!("git -C \"{repo}\" remote add origin {origin}"),
+        )
+        .await
+        .expect("origin is added");
+        let db = provider_db_for_host("127.0.0.1");
+        let helper = GitOpsHelper::new(
+            Arc::new(db) as Arc<dyn AppSettingsRepository>,
+            Arc::new(exec),
+        )
+        .with_credential_source(FakeCredentialSource::new(&[(&repo, INJECTED_PAT)]));
+
+        let failure = helper
+            .fetch_origin_refspec(None, &repo, &refspec())
+            .await
+            .expect_err("nothing listens on that port");
+
+        assert!(failure.contains("127.0.0.1"), "{failure}");
+        assert!(!failure.contains(INJECTED_PAT), "{failure}");
+        let config = std::fs::read_to_string(dir.join(".git").join("config")).expect("a config");
+        assert!(!config.contains(INJECTED_PAT), "{config}");
+        let recorded = fresh_exec()
+            .run_command("local", &format!("git -C \"{repo}\" remote get-url origin"))
+            .await
+            .expect("origin is readable");
+        assert_eq!(recorded.trim(), origin);
+        assert!(!recorded.contains(INJECTED_PAT));
     }
 
     #[tokio::test]

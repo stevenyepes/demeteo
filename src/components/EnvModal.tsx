@@ -11,6 +11,7 @@ import {
   updateMachine,
 } from "../lib/machines";
 import { formatError } from "../lib/errors";
+import { Button } from './ui/Button';
 
 
 interface EnvFormState {
@@ -241,15 +242,15 @@ const EnvModal: React.FC<EnvModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 select-none">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 select-none">
       {/* Bounded to the viewport (the backdrop's p-4 is the 2rem) and laid out
           as a column so the field list — which outgrew the container once the
           shell-environment and webhook sections landed — scrolls on its own
           instead of overflowing the panel. Header and action row stay pinned. */}
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-md max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl overflow-hidden animate-fade-in">
-        <div className="shrink-0 px-6 py-4 border-b border-white/5 flex justify-between items-center bg-[#050508]">
+      <div className="raised w-full max-w-md max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden animate-fade-in">
+        <div className="shrink-0 px-6 py-4 border-b border-white/5 flex justify-between items-center">
           <h3 className="text-sm font-semibold text-white flex items-center">
-            <Server size={16} className="mr-2 text-cyan-400" /> Configure Environment
+            <Server size={16} className="mr-2 text-slate-400" /> Configure Environment
           </h3>
           <button type="button" onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
             <X size={16} />
@@ -261,29 +262,29 @@ const EnvModal: React.FC<EnvModalProps> = ({
               shrink below its content height and the overflow never engages. */}
           <div className="p-6 flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Environment Name</label>
+              <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Environment Name</label>
               <input
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g., prod-db-cluster"
-                className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-accent-ring"
               />
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Connection Details (User@Host:Port)</label>
+              <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Connection Details (User@Host:Port)</label>
               <input
                 type="text"
                 value={form.connection}
                 onChange={(e) => setForm({ ...form, connection: e.target.value })}
                 placeholder="e.g., ubuntu@10.0.5.12:22"
-                className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring"
               />
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold flex items-center">
+              <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold flex items-center">
                 <Key size={10} className="mr-1" /> Auth Method
               </label>
               <div className="flex flex-col gap-1">
@@ -300,7 +301,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
                       onClick={() => setForm({ ...form, authType: method })}
                       className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all border ${
                         form.authType === method
-                          ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400 font-medium"
+                          ? "bg-accent-tint border-accent-edge text-white font-medium"
                           : "bg-[#050508] border-white/5 text-slate-400 hover:border-white/15 hover:text-slate-300"
                       }`}
                     >
@@ -314,25 +315,18 @@ const EnvModal: React.FC<EnvModalProps> = ({
             {form.authType === "key" && (
               <div className="flex flex-col gap-3">
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Private Key Path</label>
+                  <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Private Key Path</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={form.keyPath}
                       onChange={(e) => setForm({ ...form, keyPath: e.target.value })}
                       placeholder="~/.ssh/id_ed25519"
-                      className={`flex-1 bg-[#050508] border rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 ${
+                      className={`flex-1 bg-[#050508] border rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-accent-ring ${
                         form.keyPath.endsWith(".pub") ? "border-amber-500/60" : "border-white/10"
                       }`}
                     />
-                    <button
-                      type="button"
-                      onClick={handleBrowseKeyClick}
-                      className="btn-secondary"
-                      style={{ padding: "0 12px", fontSize: "0.8rem" }}
-                    >
-                      Browse
-                    </button>
+                    <Button onClick={handleBrowseKeyClick}>Browse</Button>
                   </div>
                   {form.keyPath.endsWith(".pub") && (
                     <p className="mt-1.5 text-[11px] text-amber-400 flex items-center gap-1">
@@ -341,14 +335,14 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   )}
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Key Passphrase (Optional)</label>
+                  <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">Key Passphrase (Optional)</label>
                   <input
                     type="password"
                     value={form.secret}
                     onChange={(e) => setForm({ ...form, secret: e.target.value })}
                     placeholder="Leave blank to keep the existing passphrase"
                     autoComplete="off"
-                    className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-accent-ring"
                   />
                   <p className="mt-1 text-[10px] text-slate-500">
                     Stored in the OS keyring. Only re-enter to change it.
@@ -359,14 +353,14 @@ const EnvModal: React.FC<EnvModalProps> = ({
 
             {form.authType === "password" && (
               <div>
-                <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">SSH Password</label>
+                <label className="block text-[10px] text-slate-500 mb-1.5 font-semibold">SSH Password</label>
                 <input
                   type="password"
                   value={form.secret}
                   onChange={(e) => setForm({ ...form, secret: e.target.value })}
                   placeholder="Leave blank to keep the existing password"
                   autoComplete="off"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-accent-ring"
                 />
               </div>
             )}
@@ -379,7 +373,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2 font-semibold flex items-center">
+              <label className="block text-[10px] text-slate-500 mb-2 font-semibold flex items-center">
                 <Cpu size={10} className="mr-1" /> Enabled Agents
               </label>
               <div className="flex flex-wrap gap-2">
@@ -390,7 +384,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
                     onClick={() => toggleAgent(agent.kind)}
                     className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-all ${
                       form.agents?.includes(agent.kind)
-                        ? "bg-cyan-500/10 border-cyan-500/50 text-cyan-400"
+                        ? "bg-accent-tint border-accent-edge text-white"
                         : "bg-[#050508] border-white/5 text-slate-500 hover:border-white/10"
                     }`}
                   >
@@ -401,7 +395,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
 
             <div className="border-t border-white/5 pt-4 space-y-3">
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1 font-semibold flex items-center">
+              <label className="block text-[10px] text-slate-500 mb-1 font-semibold flex items-center">
                 <Server size={10} className="mr-1" /> Shell Environment
               </label>
 
@@ -410,7 +404,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   type="checkbox"
                   checked={form.useLoginShell}
                   onChange={e => setForm({ ...form, useLoginShell: e.target.checked })}
-                  className="w-4 h-4 rounded border-white/10 bg-[#050508] text-cyan-500 focus:ring-cyan-500/50"
+                  className="w-4 h-4 rounded border-white/10 bg-[#050508] accent-accent"
                 />
                 <span className="text-xs text-slate-300">
                   Source .bashrc / .profile (login shell)
@@ -429,7 +423,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   onChange={e => setForm({ ...form, setupCommands: e.target.value })}
                   placeholder={`mise trust /path/to/mise.toml`}
                   rows={3}
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 resize-none"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring resize-none"
                 />
               </div>
 
@@ -442,7 +436,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   value={form.notifyWebhookUrl}
                   onChange={e => setForm({ ...form, notifyWebhookUrl: e.target.value })}
                   placeholder="https://hooks.slack.com/services/..."
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring"
                 />
                 <p className="text-[10px] text-slate-600 mt-1">
                   Notified when an unattended run on this machine finishes, fails, or parks while you're disconnected.
@@ -457,7 +451,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
             )}
           </div>
 
-          <div className="shrink-0 px-6 py-4 border-t border-white/5 bg-[#050508] flex flex-col gap-3">
+          <div className="shrink-0 px-6 py-4 border-t border-white/5 flex flex-col gap-3">
             {/* Connection test result */}
             {connStatus === "ok" && (
               <div className="flex items-center text-emerald-400 text-xs bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
@@ -469,32 +463,22 @@ const EnvModal: React.FC<EnvModalProps> = ({
               <div className="flex items-start text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
                 <WifiOff size={13} className="mr-2 flex-shrink-0 mt-0.5" />
                 <div className="flex-1 break-all">{connError}</div>
-                <button
-                  type="button"
-                  onClick={handleTestConnection}
-                  className="ml-2 px-2 py-1 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors text-[10px]"
-                >
+                <Button size="sm" onClick={handleTestConnection} className="ml-2">
                   Retry
-                </button>
+                </Button>
               </div>
             )}
 
             <div className="flex justify-between gap-3">
               {form.id && (
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  className="px-4 py-2 rounded-lg text-xs font-medium text-red-400 border border-red-500/20 hover:bg-red-500/10 transition-colors"
-                >
+                <Button variant="danger-subtle" onClick={handleDelete}>
                   Delete Node
-                </button>
+                </Button>
               )}
               <div className="flex gap-2 ml-auto">
-                <button
-                  type="button"
+                <Button
                   onClick={handleTestConnection}
                   disabled={connStatus === "testing" || saving}
-                  className="px-4 py-2 rounded-lg text-xs font-medium border border-white/10 text-slate-300 hover:border-cyan-500/40 hover:text-cyan-400 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                 >
                   {connStatus === "testing" ? (
                     <Loader size={12} className="animate-spin" />
@@ -502,22 +486,14 @@ const EnvModal: React.FC<EnvModalProps> = ({
                     <Wifi size={12} />
                   )}
                   Test Connection
-                </button>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
-                >
+                </Button>
+                <Button variant="ghost" onClick={onClose}>
                   Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-5 py-2 rounded-lg text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all disabled:opacity-50 flex items-center gap-1.5"
-                >
+                </Button>
+                <Button variant="primary" type="submit" disabled={saving}>
                   {saving && <Loader size={12} className="animate-spin" />}
                   {form.id ? "Save Changes" : "Create Machine"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

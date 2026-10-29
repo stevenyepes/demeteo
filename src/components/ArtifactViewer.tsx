@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Loader2, AlertCircle, ExternalLink } from 'lucide-react';
 import { MONACO_RESIZE_SAFE } from '../lib/monaco';
+import { Button } from './ui/Button';
 
 interface ArtifactViewerProps {
   artifactPath: string | null;
@@ -208,8 +209,8 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   if (loading) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
-        <Loader2 className="w-8 h-8 text-violet-500 animate-spin" />
-        <span className="text-xs uppercase font-bold tracking-widest text-slate-500">Loading output contents...</span>
+        <Loader2 className="w-8 h-8 text-slate-400 animate-spin" />
+        <span className="text-xs font-bold text-slate-500">Loading output contents...</span>
       </div>
     );
   }
@@ -230,7 +231,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   // Blank state
   if (!content && viewType !== 'worktree-ref') {
     return (
-      <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-center text-xs uppercase font-bold tracking-wider">
+      <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-center text-xs font-bold">
         No output content generated for this step.
       </div>
     );
@@ -245,17 +246,16 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         <div className="text-xs text-slate-400 font-mono bg-white/5 px-3 py-1.5 rounded-lg">
           {worktreeRef.path}
         </div>
-        <button
+        <Button
           onClick={() => {
             if (onOpenEditorForPath) {
               onOpenEditorForPath(worktreeRef.path);
             }
           }}
           disabled={!onOpenEditorForPath}
-          className="px-5 py-2 bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-cyan-600/30 transition duration-150 disabled:opacity-40"
         >
           Open in Editor
-        </button>
+        </Button>
       </div>
     );
   }
@@ -267,20 +267,17 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
     >
       {viewType === 'markdown' ? (
         <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 shrink-0">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500 mb-2 shrink-0">
             <span className="flex items-center gap-2 truncate">
-              <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
+              <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
                 {artifactPath ? artifactPath.split('/').pop() : ''}
               </span>
               <span className="text-slate-600">·</span>
               <span>Markdown</span>
             </span>
-            <button
-              onClick={() => navigator.clipboard.writeText(content)}
-              className="hover:text-white transition duration-150 shrink-0"
-            >
+            <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(content)} className="shrink-0">
               Copy Complete Output
-            </button>
+            </Button>
           </div>
           <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pr-2 space-y-1 font-sans">
           <ReactMarkdown
@@ -303,7 +300,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </h3>
               ),
               h4: ({ children }) => (
-                <h4 className="text-sm font-semibold font-heading text-violet-300 mt-4 mb-2 uppercase tracking-wider select-text break-words">
+                <h4 className="text-sm font-semibold font-heading text-slate-200 mt-4 mb-2 select-text break-words">
                   {children}
                 </h4>
               ),
@@ -326,13 +323,13 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               ),
               li: ({ children }) => (
                 <li className="flex items-start gap-2.5 text-slate-300 text-sm leading-relaxed my-1.5 break-words">
-                  <span className="mt-2 w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)] shrink-0" />
+                  <span className="mt-2 w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" />
                   <span className="select-text break-words">{children}</span>
                 </li>
               ),
               // Blockquote
               blockquote: ({ children }) => (
-                <blockquote className="border-l-4 border-violet-500 bg-violet-950/10 backdrop-blur-md px-4 py-3 rounded-r-xl my-4 text-slate-400 text-sm leading-relaxed italic border-r border-y border-white/[0.02] select-text break-words">
+                <blockquote className="border-l-4 border-slate-600 bg-white/[0.02] px-4 py-3 rounded-r-xl my-4 text-slate-400 text-sm leading-relaxed italic border-r border-y border-white/[0.02] select-text break-words">
                   {children}
                 </blockquote>
               ),
@@ -348,7 +345,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               // fits and wraps. The scroll wrapper stays as the last resort
               // for a table too column-heavy to fit at any wrapping.
               table: ({ children }) => (
-                <div className="w-full overflow-x-auto my-6 rounded-xl border border-white/5 bg-[#0d0f14]/40 backdrop-blur-md">
+                <div className="nested-card w-full overflow-x-auto my-6">
                   <table className="w-full border-collapse text-left text-xs font-sans">
                     {children}
                   </table>
@@ -370,7 +367,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </tr>
               ),
               th: ({ children }) => (
-                <th className="px-4 py-3 font-semibold font-heading uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
+                <th className="px-4 py-3 font-semibold font-heading text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
                   {children}
                 </th>
               ),
@@ -397,14 +394,11 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                   const codeHeight = Math.min(codeContent.split('\n').length * 18 + 24, 350);
                   return (
                     <div className="rounded-xl border border-white/5 overflow-hidden my-4 shadow-lg bg-[#050608]/85">
-                      <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                      <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500">
                         <span>{lang}</span>
-                        <button 
-                          onClick={() => navigator.clipboard.writeText(codeContent)}
-                          className="hover:text-white transition duration-150"
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(codeContent)}>
                           Copy
-                        </button>
+                        </Button>
                       </div>
                       <Editor
                         height={`${codeHeight}px`}
@@ -454,20 +448,17 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         </div>
       ) : viewType === 'task-list' && taskPlan ? (
         <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
-          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider shrink-0">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500 shrink-0">
             <span className="flex items-center gap-2 truncate">
-              <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
+              <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
                 {artifactPath ? artifactPath.split('/').pop() : ''}
               </span>
               <span className="text-slate-600">·</span>
               <span>Ticket List</span>
             </span>
-            <button
-              onClick={() => navigator.clipboard.writeText(content)}
-              className="hover:text-white transition duration-150 shrink-0"
-            >
+            <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(content)} className="shrink-0">
               Copy Complete Output
-            </button>
+            </Button>
           </div>
           <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3">
             <TaskListArtifact plan={taskPlan} />
@@ -483,20 +474,17 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         />
       ) : (
         <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
-          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] font-bold text-slate-500">
             <span className="flex items-center gap-2 truncate">
-              <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
+              <span className="text-slate-300 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
                 {artifactPath ? artifactPath.split('/').pop() : ''}
               </span>
               <span className="text-slate-600">·</span>
               <span>{viewType === 'diff' ? 'Unified Diff' : `${language} Code`}</span>
             </span>
-            <button
-              onClick={() => navigator.clipboard.writeText(content)}
-              className="hover:text-white transition duration-150 shrink-0"
-            >
+            <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(content)} className="shrink-0">
               Copy Complete Output
-            </button>
+            </Button>
           </div>
           {/* `min-h-0` so this host takes the space the header leaves rather
               than the editor's content height — `height="100%"` below only

@@ -6,6 +6,7 @@ use crate::adapters::git_push::{fetch_request, GitCredential};
 use crate::domain::upstream_feature::FeatureUpstream;
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
+use crate::ports::git_credentials::GitCredentialSource;
 use crate::ports::worktree_ops::BranchDivergence;
 
 /// Ceiling on the fetch behind a drift reading.
@@ -180,11 +181,12 @@ pub(crate) async fn measured_divergence(
 pub(crate) async fn refresh_base_ref(
     exec: &dyn ExecutionPort,
     app_settings: &dyn AppSettingsRepository,
+    credentials: &dyn GitCredentialSource,
     machine_id: &str,
     repo_dir: &str,
     base_branch: &str,
 ) -> bool {
-    let credential = prepare_origin(exec, app_settings, machine_id, repo_dir).await;
+    let credential = prepare_origin(exec, app_settings, credentials, machine_id, repo_dir).await;
     exec.run_program(
         machine_id,
         base_fetch_request(repo_dir, base_branch, credential.as_ref()),

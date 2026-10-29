@@ -20,6 +20,7 @@ import { AskSection } from './ask/AskSection';
 import { DiscoverySection } from './discovery/DiscoverySection';
 import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
+import { Button } from './ui/Button';
 import { DensityToggle } from './ui/DensityToggle';
 import { TabBar, type TabDef } from './ui/TabBar';
 import { DEFAULT_DENSITY, pipelineDensityClasses } from '../lib/density';
@@ -451,7 +452,7 @@ const ProjectHome = () => {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
-                <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
+                <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -479,7 +480,7 @@ const ProjectHome = () => {
     if (currentStep === 'error') {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-                <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
+                <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
                     <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -491,12 +492,12 @@ const ProjectHome = () => {
                         </div>
                     )}
                     <div className="flex gap-3">
-                        <button onClick={() => navigate({ kind: 'project-settings' })} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all flex items-center gap-1.5 font-medium">
+                        <Button size="lg" onClick={() => navigate({ kind: 'project-settings' })}>
                             <Settings className="w-4 h-4" /> Configure Workspace
-                        </button>
-                        <button onClick={handleRetryBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] flex items-center gap-1.5">
+                        </Button>
+                        <Button variant="primary" size="lg" onClick={handleRetryBootstrap}>
                             <RotateCw className="w-4 h-4" /> Retry Bootstrap
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -507,51 +508,51 @@ const ProjectHome = () => {
         return (
             <div className="flex-1 overflow-y-auto p-8 relative flex items-center justify-center bg-[#08090c]">
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
-                <div className="glass-panel max-w-xl w-full p-6 rounded-xl flex flex-col border-white/10 shadow-2xl text-left">
+                <div className="panel max-w-xl w-full p-6 flex flex-col text-left">
                     <div className="mb-6 border-b border-white/5 pb-4">
-                        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                        <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">STRATEGY DETECTED</h3>
                         <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                     </div>
 
                     <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Branch</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Default Branch</label>
                             <input 
                                 type="text" 
                                 value={defaultBranch} 
                                 onChange={e => setDefaultBranch(e.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Branch Prefix</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Branch Prefix</label>
                             <input 
                                 type="text" 
                                 value={branchPrefix} 
                                 onChange={e => setBranchPrefix(e.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Test Command</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Default Test Command</label>
                             <input 
                                 type="text" 
                                 value={testCommand} 
                                 onChange={e => setTestCommand(e.target.value)}
                                 placeholder="e.g. npm test or cargo test"
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring placeholder-slate-600"
                             />
                         </div>
 
 
                         <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
                             <select 
                                 value={featureLifecycle} 
                                 onChange={e => setFeatureLifecycle(e.target.value)}
-                                className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                             >
                                 <option value="archive">Archive by default</option>
                                 <option value="keep">Keep active</option>
@@ -561,7 +562,7 @@ const ProjectHome = () => {
 
                         {prTemplate && (
                             <div>
-                                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected PR Template</label>
+                                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Detected PR Template</label>
                                 <div className="w-full bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-[100px] overflow-y-auto leading-relaxed">
                                     {prTemplate}
                                 </div>
@@ -570,10 +571,10 @@ const ProjectHome = () => {
                     </div>
 
                     <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-4">
-                        <button onClick={() => setLocalBootstrapStep('idle')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
-                        <button onClick={handleApproveStrategy} className="px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
+                        <Button variant="ghost" size="lg" onClick={() => setLocalBootstrapStep('idle')}>Cancel</Button>
+                        <Button variant="primary" size="lg" onClick={handleApproveStrategy}>
                             <Check className="w-4 h-4" /> Approve & Build Workspace
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -628,13 +629,13 @@ const ProjectHome = () => {
                 <div className="flex items-end gap-3 shrink-0">
                     {repositories.length > 1 && (
                         <div className="min-w-0">
-                            <span className="block pb-1 pl-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-500">
+                            <span className="block pb-1 pl-0.5 text-[9px] font-mono text-slate-500">
                                 Repository
                             </span>
                             <select
                                 value={activeRepositoryId}
                                 onChange={(e) => setActiveRepositoryId(e.target.value)}
-                                className="w-52 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[11.5px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-cyan-500/50"
+                                className="w-52 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[11.5px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-accent-ring"
                                 aria-label="Repository"
                                 data-testid="project-home-repo-select"
                             >
@@ -669,15 +670,15 @@ const ProjectHome = () => {
                         ariaLabel="Project sections"
                         className="min-w-0 flex-1"
                     />
-                    <button
-                        type="button"
+                    <Button
+                        size="sm"
                         data-testid="open-code-review"
                         onClick={() => navigate({ kind: 'code-review' })}
-                        className="mb-1 flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-slate-100"
+                        className="mb-1 shrink-0"
                     >
                         <GitPullRequest className="w-3.5 h-3.5" />
                         Code Review
-                    </button>
+                    </Button>
                 </div>
 
                 {activeTab === 'ask' ? (
@@ -715,10 +716,10 @@ const ProjectHome = () => {
                             Feature modal, which owns every launch knob
                             and the actual start_feature call. Ctrl/Cmd+T
                             opens the same modal with no seed. */}
-                        <div className="glass-panel rounded-2xl p-4 relative group overflow-hidden">
+                        <div className="panel p-4 relative group overflow-hidden">
                             <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
                             <div className="relative flex items-start gap-4">
-                                <div className="mt-2 ml-1 text-violet-400 shrink-0">
+                                <div className="mt-2 ml-1 text-slate-400 shrink-0">
                                     <Zap className="w-5 h-5" />
                                 </div>
                                 <div
@@ -744,7 +745,7 @@ const ProjectHome = () => {
                                         ride along into the modal seed. Use the
                                         modal to add more once it opens. */}
                                     <div className="px-2 pb-1 flex flex-wrap items-center gap-2">
-                                        <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Attachments</span>
+                                        <span className="text-[10px] font-mono text-slate-500">Attachments</span>
                                         <AttachmentDropzone
                                             mode="launch"
                                             compact
@@ -762,12 +763,9 @@ const ProjectHome = () => {
                                         <span className="text-[11px] text-slate-500 font-mono">
                                             Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">Enter</kbd> to configure &amp; launch · paste an image to attach
                                         </span>
-                                        <button
-                                            onClick={openStartFeature}
-                                            className="px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-1.5"
-                                        >
+                                        <Button variant="primary" onClick={openStartFeature}>
                                             Continue <ChevronRight className="w-4 h-4" />
-                                        </button>
+                                        </Button>
                                     </div>
                                 </div>
                             </div>
@@ -778,7 +776,7 @@ const ProjectHome = () => {
                     failed and gated runs are here too, each wearing its own chip. */}
                 <div>
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                        <h2 className="font-heading text-sm font-semibold text-slate-400 uppercase tracking-widest">Feature Pipelines</h2>
+                        <h2 className="font-heading text-sm font-semibold text-slate-400">Feature Pipelines</h2>
                         {features.length > 0 && (
                             <DensityToggle value={density} onChange={setDensity} ariaLabel="Pipeline list density" />
                         )}

@@ -7,6 +7,7 @@ import { deleteProviderInstance } from '../lib/providers';
 import ProviderSettings from './ProviderSettings';
 import { OverlayPortal } from './ui/OverlayPortal';
 import { BackButton } from './ui/BackButton';
+import { Button } from './ui/Button';
 
 export default function ProvidersPage() {
   const { state: { providers, projects, reposByProject }, dispatch: projDispatch } = useProject();
@@ -56,25 +57,25 @@ export default function ProvidersPage() {
           <p className="text-sm text-slate-400">Manage Git hosting endpoints for cloning repositories and creating merge requests.</p>
           </div>
         </div>
-        <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })} className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-2">
+        <Button variant="primary" onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })}>
           <Plus className="w-4 h-4" /> Connect Provider
-        </button>
+        </Button>
       </div>
 
       <div className="space-y-4 z-10">
         {providers.length === 0 ? (
-          <div className="glass-panel p-12 text-center flex flex-col items-center justify-center">
+          <div className="panel p-12 text-center flex flex-col items-center justify-center">
             <Globe className="w-12 h-12 text-slate-500 mb-4" />
             <h3 className="text-lg font-heading font-semibold text-white mb-2">No Providers Mapped</h3>
             <p className="text-sm text-slate-400 max-w-md mb-6">Connect your GitHub or GitLab workspace to enable repository cloning, branch management, and automatic pull requests.</p>
-            <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })} className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+            <Button variant="primary" size="lg" onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })}>
               Connect Your First Account
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {providers.map(prov => (
-              <div key={prov.id} className="glass-panel p-5 flex items-start justify-between border-l-2 border-l-cyan-500 hover:border-l-cyan-400 transition-all">
+              <div key={prov.id} className="panel p-5 flex items-start justify-between border-l-2 border-l-cyan-500 hover:border-l-cyan-400 transition-all">
                 <div className="flex gap-4">
                   {prov.avatarUrl ? (
                     <img src={prov.avatarUrl} alt={prov.username} className="w-12 h-12 rounded-full object-cover border border-white/10" />
@@ -93,7 +94,7 @@ export default function ProvidersPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true, editing: prov })} className="text-slate-500 hover:text-cyan-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Edit Provider">
+                  <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true, editing: prov })} className="text-slate-500 hover:text-white p-2 rounded-lg hover:bg-white/5 transition-all" title="Edit Provider">
                     <Edit2 className="w-4 h-4" />
                   </button>
                   <button onClick={() => handleDeleteClick(prov.id)} className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Disconnect Provider">
@@ -116,8 +117,8 @@ export default function ProvidersPage() {
 
       {pendingDelete && (
         <OverlayPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="glass-panel p-6 max-w-md w-full mx-4 border border-amber-500/30">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="raised p-6 max-w-md w-full mx-4 border-amber-500/30">
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
               <div>
@@ -137,12 +138,12 @@ export default function ProvidersPage() {
               ))}
             </ul>
             <div className="flex gap-3 justify-end">
-              <button onClick={() => setPendingDelete(null)} className="px-4 py-2 text-sm text-slate-300 hover:text-white rounded-lg hover:bg-white/5 transition-all">
+              <Button variant="ghost" onClick={() => setPendingDelete(null)}>
                 Cancel
-              </button>
-              <button onClick={() => confirmDelete(pendingDelete.provId)} className="px-4 py-2 text-sm bg-red-600/80 hover:bg-red-500 text-white rounded-lg transition-all">
+              </Button>
+              <Button variant="danger" onClick={() => confirmDelete(pendingDelete.provId)}>
                 Disconnect anyway
-              </button>
+              </Button>
             </div>
           </div>
         </div>

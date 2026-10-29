@@ -33,17 +33,18 @@ const LANE_ICON: Record<TicketLane, LucideIcon> = {
   dropped: CircleMinus,
 };
 
+/** Landed takes the neutral border: on a plan that is mostly done, an
+ *  emerald edge on every card drowns the amber of what is ready to start. The
+ *  check glyph still says it landed. */
 const TONE_BORDER: Record<RunStatusTone, string> = {
-  emerald: 'border-emerald-500/40',
-  cyan: 'border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.18)]',
-  violet: 'border-violet-500/50 shadow-[0_0_18px_rgba(139,92,246,0.18)]',
-  amber: 'border-amber-500/50 shadow-[0_0_18px_rgba(245,158,11,0.20)]',
+  emerald: 'border-slate-700/60',
+  cyan: 'border-cyan-500/50',
+  amber: 'border-amber-500/50',
   ruby: 'border-ruby-500/50',
   slate: 'border-slate-700/60',
 };
 
-const SELECTED =
-  'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]';
+const SELECTED = 'border-accent-edge';
 
 interface TicketGraphNodeProps {
   view: TicketView;
@@ -83,7 +84,7 @@ export function TicketGraphNode({
       // The one legitimate inline style here: a computed coordinate is the
       // datum, and no utility can express "wherever this plan's shape put it".
       style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
-      className={`absolute flex flex-col overflow-hidden rounded-xl border bg-slate-900/70 px-3.5 py-2.5 text-left shadow-[0_10px_15px_-3px_rgba(0,0,0,0.35)] backdrop-blur-[4px] transition-colors ${
+      className={`absolute flex flex-col overflow-hidden rounded-xl border bg-surface-raised px-3.5 py-2.5 text-left shadow-[0_10px_15px_-3px_rgba(0,0,0,0.35)] transition-colors ${
         selected ? SELECTED : TONE_BORDER[tone]
       } ${dropped ? 'border-dashed opacity-50' : ''}`}
     >
@@ -105,8 +106,8 @@ export function TicketGraphNode({
             className={`line-clamp-2 block text-[13px] leading-snug font-medium ${
               dropped
                 ? 'text-slate-500 line-through'
-                : lane === 'landed'
-                  ? 'text-slate-300'
+                : lane === 'landed' || lane === 'blocked'
+                  ? 'text-slate-400'
                   : 'text-slate-100'
             }`}
           >

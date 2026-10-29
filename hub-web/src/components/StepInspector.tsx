@@ -8,6 +8,7 @@ import type { RunDetail } from '../lib/runs';
 import { AssignmentForm } from './AssignmentForm';
 import { GatePanel } from './GatePanel';
 import { RequestStatus } from './RequestStatus';
+import { Button } from '../../../src/components/ui/Button';
 
 /**
  * A gate decision the Hub queued; the run holds these by the gate's
@@ -63,9 +64,9 @@ export function StepInspector({
         <h2 id={headingId} className="font-heading text-lg font-semibold text-white">
           Step
         </h2>
-        <button type="button" onClick={onClose} className="btn-secondary ml-auto px-3 py-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400">
+        <Button variant="secondary" size="sm" onClick={onClose} className="ml-auto">
           Close
-        </button>
+        </Button>
       </div>
       <dl aria-label="Step details" className="mt-2 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
         <dt>Id</dt>

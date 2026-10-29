@@ -7,7 +7,14 @@ import { BOOTSTRAP_PHASE_ORDER } from '../types';
 export interface BootstrapPhaseView {
   id: string;
   label: string;
-  status: 'running' | 'completed' | 'failed' | 'skipped' | 'pending' | string;
+  status:
+    | 'running'
+    | 'completed'
+    | 'warning'
+    | 'failed'
+    | 'skipped'
+    | 'pending'
+    | string;
   detail?: string | null;
 }
 
@@ -29,7 +36,8 @@ export function orderBootstrapPhases(
  * Inline, animated "phase 0" stepper shown at the top of the feature detail
  * timeline while a feature is `bootstrapping` — the window between "Launch"
  * and the first DAG step running. Pulsing dots mark the active phase,
- * completed phases get a green check, a failed phase turns red and shows its
+ * completed phases get a green check, a warning phase turns amber and shows
+ * its detail, a failed phase turns red and shows its
  * error. Cross-fades in via `animate-fade-in`; the parent unmounts it (which
  * cross-fades the real step timeline in) once the first step leaves `pending`.
  *
@@ -41,8 +49,8 @@ export function BootstrapStepper({ phases }: { phases: BootstrapPhaseView[] }) {
   const failed = phases.some((p) => p.status === 'failed');
 
   return (
-    <div className="glass-panel p-4 mb-6 animate-fade-in">
-      <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-[11px] mb-3">
+    <div className="panel p-4 mb-6 animate-fade-in">
+      <h3 className="font-heading font-semibold text-cyan-400 text-[11px] mb-3">
         {failed ? 'Bootstrap failed' : 'Bringing your pipeline online'}
       </h3>
       <div className="space-y-2">
@@ -60,7 +68,11 @@ export function BootstrapStepper({ phases }: { phases: BootstrapPhaseView[] }) {
               {p.detail && (
                 <div
                   className={`text-[11px] mt-0.5 break-words whitespace-pre-wrap ${
-                    p.status === 'failed' ? 'text-ruby-300' : 'text-slate-500'
+                    p.status === 'failed'
+                      ? 'text-ruby-300'
+                      : p.status === 'warning'
+                        ? 'text-amber-500'
+                        : 'text-slate-500'
                   }`}
                 >
                   {p.detail}
@@ -69,6 +81,9 @@ export function BootstrapStepper({ phases }: { phases: BootstrapPhaseView[] }) {
             </div>
             {p.status === 'completed' && (
               <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-1" />
+            )}
+            {p.status === 'warning' && (
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-1" />
             )}
             {p.status === 'failed' && (
               <AlertTriangle className="w-3.5 h-3.5 text-ruby-400 shrink-0 mt-1" />
@@ -83,6 +98,7 @@ export function BootstrapStepper({ phases }: { phases: BootstrapPhaseView[] }) {
 function StepDot({ status }: { status: BootstrapPhaseView['status'] }) {
   const base = 'block w-2 h-2 rounded-full shrink-0 mt-1.5';
   if (status === 'completed') return <span className={`${base} bg-emerald-400`} />;
+  if (status === 'warning') return <span className={`${base} bg-amber-500`} />;
   if (status === 'running')
     return <span className={`${base} bg-cyan-400 animate-pulse-glow`} />;
   if (status === 'failed') return <span className={`${base} bg-ruby-400`} />;

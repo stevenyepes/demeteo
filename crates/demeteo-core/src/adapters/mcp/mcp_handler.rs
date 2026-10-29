@@ -320,6 +320,10 @@ async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Valu
                 &FeatureId::from(args.feature_id),
             ))
         }
+        "refresh_run" => {
+            let args: GetFeatureArgs = parse(arguments)?;
+            to_json(agent_surface::refresh_run(ctx, &FeatureId::from(args.feature_id)).await)
+        }
         "list_step_attempts" => {
             let args: ListStepAttemptsArgs = parse(arguments)?;
             to_paged_json(
@@ -738,6 +742,11 @@ fn tool_catalog() -> Value {
         tool_descriptor(
             "get_feature",
             "Get a feature and its step executions.",
+            schemars::schema_for!(GetFeatureArgs),
+        ),
+        tool_descriptor(
+            "refresh_run",
+            "Pull a detached (remote) run's state from its runner now and return the feature and its steps as get_feature does. The desktop's copy of a detached run is otherwise refreshed only while someone views the feature, so use this before trusting get_feature, list_pending_gates or run_events_since on a run nobody is watching. A feature that runs on this machine is returned unchanged with refreshed false and a note. An unreachable runner is an error, and the state is then as of the last successful refresh. Spends nothing.",
             schemars::schema_for!(GetFeatureArgs),
         ),
         tool_descriptor(

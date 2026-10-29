@@ -57,7 +57,7 @@ export function DecomposeChangeCard({
       <span
         aria-hidden="true"
         className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border ${
-          accepted ? 'border-violet-500 bg-violet-500 text-white' : 'border-white/15 text-transparent'
+          accepted ? 'border-accent bg-accent text-white' : 'border-white/15 text-transparent'
         }`}
       >
         <Check className="h-3 w-3" strokeWidth={3} />
@@ -75,7 +75,7 @@ export function DecomposeChangeCard({
           <span className="mt-2.5 flex flex-col gap-1.5 rounded-lg border border-white/[0.04] bg-[#050608]/70 px-3 py-2.5">
             {change.fields.map((field) => (
               <span key={field.field} className="flex items-baseline gap-2.5">
-                <span className="w-[92px] shrink-0 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <span className="w-[92px] shrink-0 font-mono text-[10px] font-bold text-slate-500">
                   {field.field}
                 </span>
                 <span className="min-w-0 flex-1 font-mono text-[11px] leading-relaxed">
@@ -96,7 +96,7 @@ export function DecomposeChangeCard({
         {dependency && (
           <span className="mt-2 flex flex-wrap items-center gap-1.5">
             {change.workflow_name && (
-              <Chip size="sm" tone="violet" maxWidth="12rem">
+              <Chip size="sm" tone="slate" maxWidth="12rem">
                 {change.workflow_name}
               </Chip>
             )}

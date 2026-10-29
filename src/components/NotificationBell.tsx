@@ -29,7 +29,7 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
-  // A toast carries a message plus an accent color so the
+  // A toast carries a message plus a status tone so the
   // warning variant (`retry_budget_exhausted`) can render in
   // amber instead of the default emerald used for the
   // `mr_merged` success case.
@@ -165,16 +165,16 @@ export function NotificationBell() {
           {unread > 0 && (
             <span
               data-testid="notif-badge"
-              className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[10px] font-mono font-bold text-black flex items-center justify-center shadow-[0_0_8px_rgba(16,185,129,0.5)]"
+              className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[10px] font-mono font-bold text-black flex items-center justify-center"
             >
               {unread > 99 ? "99+" : unread}
             </span>
           )}
         </button>
         {open && (
-          <div className="absolute right-0 top-full mt-2 w-80 glass-panel border border-white/10 rounded-lg shadow-2xl overflow-hidden z-50">
+          <div className="raised absolute right-0 top-full mt-2 w-80 overflow-hidden z-50">
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
-              <span className="font-heading text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <span className="font-heading text-xs font-semibold text-slate-400">
                 Notifications
               </span>
               <span className="text-[10px] font-mono text-slate-500">
@@ -202,7 +202,7 @@ export function NotificationBell() {
       {toast && (
         <div
           data-testid="notif-toast"
-          className={`fixed bottom-6 right-6 z-50 glass-panel border-l-2 rounded-lg px-4 py-3 shadow-2xl flex items-start gap-3 max-w-md animate-[fadeIn_120ms_ease-out] ${
+          className={`raised fixed bottom-6 right-6 z-50 border-l-2 px-4 py-3 flex items-start gap-3 max-w-md animate-[fadeIn_120ms_ease-out] ${
             toast.accent === "amber"
               ? "border-l-amber-400"
               : toast.accent === "ruby"
@@ -249,7 +249,7 @@ function NotificationRow({
       }`}
     >
       <span
-        className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${accent.dot} ${item.read ? "" : "shadow-[0_0_6px_currentColor]"}`}
+        className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${accent.dot}`}
       />
       <div className="flex-1 min-w-0">
         <div className="text-sm text-slate-200 leading-snug">
@@ -293,18 +293,17 @@ function kindAccent(kind: string): { dot: string } {
     case "mr_merged":
     case "feature_completed":
     case "caches_reclaimed":
-      return { dot: "bg-emerald-400 text-emerald-400" };
-    case "gate_pending":
-      return { dot: "bg-cyan-400 text-cyan-400" };
+      return { dot: "bg-emerald-400" };
     case "step_failed":
     case "merge_conflict":
-      return { dot: "bg-ruby-400 text-ruby-400" };
+      return { dot: "bg-ruby-400" };
+    case "gate_pending":
     case "retry_budget_exhausted":
     case "environment_not_ready":
     case "runner_branch_stale":
-      return { dot: "bg-amber-400 text-amber-400" };
+      return { dot: "bg-amber-400" };
     default:
-      return { dot: "bg-slate-400 text-slate-400" };
+      return { dot: "bg-slate-400" };
   }
 }
 

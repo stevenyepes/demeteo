@@ -24,6 +24,7 @@ import type {
   TicketView,
   WorkflowWithSteps,
 } from '../../types';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { Modal } from '../ui/Modal';
 import { FieldLabel } from '../ui/FieldLabel';
@@ -188,18 +189,10 @@ export function TicketEditorModal({
 
   const saveControls = !locked && (
     <>
-      <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-        Discard
-      </button>
-      <button
-        type="button"
-        data-testid="ticket-save"
-        disabled={!dirty || disabled}
-        onClick={() => void save()}
-        className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
-      >
+      <Button onClick={onClose}>Discard</Button>
+      <Button data-testid="ticket-save" disabled={!dirty || disabled} onClick={() => void save()}>
         {saving ? 'Saving…' : 'Save ticket'}
-      </button>
+      </Button>
     </>
   );
 
@@ -210,10 +203,10 @@ export function TicketEditorModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Edit ${ticketLabel(ticket.seq)}`}
-      className="flex max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0f14] shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
+      className="flex max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] flex-col overflow-hidden raised"
     >
       <ColumnSubHeader title={ticketLabel(ticket.seq)}>
-        <Chip size="sm" tone={ticketTone(view, index)} dot>
+        <Chip size="sm" tone={ticketTone(view)} dot>
           {stateLabel(view)}
         </Chip>
         <Chip size="sm" tone="slate">
@@ -396,7 +389,7 @@ export function TicketEditorModal({
       </div>
       </div>
 
-      <div className="shrink-0 border-t border-white/5 bg-[#0b0d12] px-5 py-3.5">
+      <div className="shrink-0 border-t border-white/5 px-5 py-3.5">
         <TicketForceStart
           view={view}
           index={index}

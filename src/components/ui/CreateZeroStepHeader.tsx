@@ -17,7 +17,7 @@ interface CreateZeroStepHeaderProps {
 
 /**
  * Horizontal step indicator for the Create-From-Zero wizard. One
- * pill per logical decision; the active one glows violet, completed
+ * pill per logical decision; the active one takes the accent, completed
  * ones show a green check, pending ones stay muted. Renders as a row
  * of nodes + connectors that flexes to fit the container; collapses
  * to a single label on very narrow widths.
@@ -38,9 +38,9 @@ export function CreateZeroStepHeader({
           return (
             <React.Fragment key={s.id}>
               <li
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-[11px] font-mono uppercase tracking-wider transition-all duration-300 shrink-0 ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-[11px] font-mono transition-all duration-300 shrink-0 ${
                   isActive
-                    ? 'bg-violet-500/10 border-violet-500/50 text-violet-200 shadow-[0_0_15px_rgba(139,92,246,0.25)]'
+                    ? 'bg-accent-tint border-accent-edge text-white'
                     : isDone
                       ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
                       : 'bg-black/30 border-white/10 text-slate-500'
@@ -49,7 +49,7 @@ export function CreateZeroStepHeader({
                 <span
                   className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold shrink-0 ${
                     isActive
-                      ? 'bg-violet-500/30 text-violet-100'
+                      ? 'bg-accent text-white'
                       : isDone
                         ? 'bg-emerald-500/30 text-emerald-100'
                         : 'bg-white/5 text-slate-500'

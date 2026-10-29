@@ -211,6 +211,14 @@ export interface RemoteRunMirror {
   last_notified_status: string | null;
 }
 
+/** A mirror row as the feature view reads it — mirrors
+ *  `demeteo_core::application::remote_runs::MirroredRunView`. */
+export interface MirroredRunView extends RemoteRunMirror {
+  /** The runner can no longer change this run's shadow. Decided in core from
+   *  the row *and* the shadow feature; `status` alone does not say it. */
+  shadow_settled: boolean;
+}
+
 /** One entry in a remote run's append-only event log (M3.3/M6.4) —
  *  mirrors `demeteo_core::ports::run_events::RunEvent`. */
 export interface RunEvent {
@@ -226,12 +234,13 @@ export interface RunEvent {
  *  a Tauri `bootstrap_progress` event (local) or a `bootstrap_progress`
  *  {@link RunEvent} in the durable log (remote/detached). `phase` is a stable
  *  id the UI orders by; `label` is rendered verbatim; `status` drives the
- *  status dot. */
+ *  status dot. `warning` marks a best-effort phase that did not do its job but
+ *  did not stop the bootstrap; `detail` carries the reason. */
 export interface BootstrapProgressPayload {
   feature_id?: string;
   phase: string;
   label: string;
-  status: 'running' | 'completed' | 'failed' | 'skipped' | string;
+  status: 'running' | 'completed' | 'warning' | 'failed' | 'skipped' | string;
   detail?: string | null;
 }
 

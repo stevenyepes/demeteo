@@ -92,7 +92,7 @@ export function InterviewColumn({
           {discovery.agent_kind}
         </Chip>
         {discovery.model && (
-          <Chip size="sm" tone="violet" maxWidth="10rem">
+          <Chip size="sm" tone="slate" maxWidth="10rem">
             {discovery.model}
           </Chip>
         )}
@@ -135,7 +135,7 @@ export function InterviewColumn({
           data-testid="interview-advisory"
           className="mx-4 mb-2.5 flex shrink-0 items-center gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 text-[11px] text-slate-400"
         >
-          <Info className="h-3.5 w-3.5 shrink-0 text-violet-400" aria-hidden="true" />
+          <Info className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
           The interviewer sees nothing left to settle. Decompose whenever you want — or keep going.
         </div>
       )}

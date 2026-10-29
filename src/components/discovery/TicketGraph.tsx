@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 
 import { layoutTicketGraph } from '../../lib/ticketGraphLayout';
-import { ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
+import { LANE_DOT, TICKET_LANES, ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
 import type { TicketView } from '../../types';
 import { useCanvasViewport } from '../../hooks/useCanvasViewport';
 import { CanvasZoomControls } from '../ui/CanvasZoomControls';
@@ -13,15 +13,6 @@ interface TicketGraphProps {
   selectedId: string | null;
   onSelect: (ticketId: string) => void;
 }
-
-/** The five buckets, in the order §3.5.3 lists them. */
-const LEGEND: readonly { label: string; dot: string }[] = [
-  { label: 'Blocked', dot: 'bg-amber-400' },
-  { label: 'Ready', dot: 'bg-violet-400' },
-  { label: 'In flight', dot: 'bg-cyan-400' },
-  { label: 'Landed', dot: 'bg-emerald-400' },
-  { label: 'Dropped', dot: 'bg-slate-500' },
-];
 
 /**
  * What depends on what.
@@ -95,12 +86,16 @@ export function TicketGraph({
                     d={edge.path}
                     fill="none"
                     strokeWidth={incident ? 2 : 1.5}
+                    // A met edge no longer constrains anything, so it recedes;
+                    // an unmet one is dashed because it is what still holds a
+                    // ticket back. Selection is the accent, never a status hue.
+                    strokeDasharray={!incident && !edge.met ? '5 4' : undefined}
                     className={
                       incident
-                        ? 'stroke-cyan-400'
+                        ? 'stroke-accent-edge'
                         : edge.met
-                          ? 'stroke-emerald-500/45'
-                          : 'stroke-slate-700'
+                          ? 'stroke-slate-800'
+                          : 'stroke-slate-500'
                     }
                   />
                 );
@@ -115,7 +110,7 @@ export function TicketGraph({
                   key={node.id}
                   view={view}
                   index={index}
-                  tone={ticketTone(view, index)}
+                  tone={ticketTone(view)}
                   selected={selectedId === node.id}
                   x={node.x}
                   y={node.y}
@@ -129,16 +124,16 @@ export function TicketGraph({
 
       <div className="pointer-events-none absolute inset-0">
         <div className="pointer-events-auto absolute bottom-4 left-4 flex items-center gap-3 rounded-full border border-white/5 bg-slate-900/90 px-3 py-1.5 text-[10px] backdrop-blur-md">
-          {LEGEND.map((entry) => (
+          {TICKET_LANES.map((meta) => (
             <span
-              key={entry.label}
+              key={meta.lane}
               className="flex items-center gap-1.5 text-slate-400"
             >
               <span
                 aria-hidden="true"
-                className={`h-1.5 w-1.5 rounded-full ${entry.dot}`}
+                className={`h-1.5 w-1.5 rounded-full ${LANE_DOT[meta.lane]}`}
               />
-              {entry.label}
+              {meta.label}
             </span>
           ))}
         </div>

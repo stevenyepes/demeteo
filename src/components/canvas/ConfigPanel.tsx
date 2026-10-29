@@ -64,7 +64,7 @@ import type {
 } from './types';
 
 const INPUT_CLASS =
-  'w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none';
+  'w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-accent-ring focus:outline-none';
 
 const MONACO_OPTIONS = {
   ...MONACO_RESIZE_SAFE,
@@ -173,20 +173,20 @@ export function ConfigPanel({
 
   return (
     <div
-      className={`flex h-full w-[62%] min-w-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl ${className}`}
+      className={`flex h-full w-[62%] min-w-0 flex-col border-l border-white/5 bg-surface-panel ${className}`}
       data-testid="config-panel"
     >
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/5 px-5 py-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <TypeIcon className={`h-4 w-4 shrink-0 ${TONE_TEXT[meta.tone]}`} aria-hidden />
-            <h3 className="truncate font-heading text-sm font-bold uppercase tracking-wider text-white">
+            <h3 className="truncate font-heading text-sm font-bold text-white">
               {node.title || node.id}
             </h3>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${TONE_CHIP[meta.tone]}`}
+              className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${TONE_CHIP[meta.tone]}`}
             >
               {type?.label ?? meta.label}
             </span>
@@ -314,7 +314,7 @@ function supportsVerifier(type: NodeTypeInfo | null): boolean {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="space-y-3">
-      <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{title}</h4>
+      <h4 className="text-[10px] font-bold text-slate-500">{title}</h4>
       {children}
     </section>
   );
@@ -443,7 +443,7 @@ function FieldControlView({
             type="checkbox"
             checked={value === true}
             onChange={(evt) => onChange(evt.target.checked)}
-            className="h-3.5 w-3.5 accent-violet-500"
+            className="h-3.5 w-3.5 accent-accent"
           />
           {value === true ? 'Enabled' : 'Disabled'}
         </label>
@@ -596,7 +596,7 @@ function VerifierForm({
           type="checkbox"
           checked={enabled}
           onChange={(evt) => onChange(evt.target.checked ? { ...VERIFIER_DEFAULTS } : null)}
-          className="h-3.5 w-3.5 accent-violet-500"
+          className="h-3.5 w-3.5 accent-accent"
         />
         <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" aria-hidden />
         Verify this node&rsquo;s output with a second agent turn
@@ -796,7 +796,7 @@ function RetryForm({
                         type="checkbox"
                         checked={rule.feedback !== false}
                         onChange={(evt) => setRule(cls, { ...rule, feedback: evt.target.checked })}
-                        className="h-3.5 w-3.5 accent-violet-500"
+                        className="h-3.5 w-3.5 accent-accent"
                       />
                       Pass the failure back as feedback
                     </label>

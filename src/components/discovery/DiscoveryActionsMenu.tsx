@@ -98,7 +98,7 @@ export function DiscoveryActionsMenu({ actions }: DiscoveryActionsMenuProps): Re
         data-testid="discovery-actions-trigger"
         className={`inline-flex h-10 w-10 items-center justify-center rounded-md border transition-colors hover:text-slate-100 ${
           open
-            ? 'border-violet-500/45 bg-violet-500/10 text-slate-100'
+            ? 'border-accent-edge bg-accent-tint text-slate-100'
             : 'border-white/5 text-slate-400 hover:border-white/15'
         }`}
       >
@@ -112,7 +112,7 @@ export function DiscoveryActionsMenu({ actions }: DiscoveryActionsMenuProps): Re
           aria-label="Discovery actions"
           data-testid="discovery-actions-menu"
           onKeyDown={onMenuKeyDown}
-          className="glass-panel absolute right-0 top-full z-50 mt-2 flex w-72 flex-col rounded-lg border border-white/10 p-1.5 shadow-2xl"
+          className="raised absolute right-0 top-full z-50 mt-2 flex w-72 flex-col p-1.5"
         >
           {actions.map((action, i) => {
             const body = (

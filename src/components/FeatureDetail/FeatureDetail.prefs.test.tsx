@@ -38,7 +38,7 @@ import {
   runViewModePref,
   UI_PREF_WRITE_DEBOUNCE_MS,
 } from '../../lib/uiPrefs';
-import type { HarnessBaseline, RemoteRunMirror, RunEvent, StepExecution } from '../../types';
+import type { HarnessBaseline, MirroredRunView, RunEvent, StepExecution } from '../../types';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
 import { FeatureDetail } from './FeatureDetail';
 
@@ -70,7 +70,7 @@ const GRAPH: WorkflowDefinitionV2 = {
   edges: [],
 };
 
-const LIVE_MIRROR: RemoteRunMirror = {
+const LIVE_MIRROR: MirroredRunView = {
   machine_id: 'machine-1',
   run_id: 'runner-run-1',
   project_id: null,
@@ -84,6 +84,7 @@ const LIVE_MIRROR: RemoteRunMirror = {
   created_at: 0,
   updated_at: 0,
   last_notified_status: null,
+  shadow_settled: false,
 };
 
 const RUN_EVENT: RunEvent = {
@@ -101,15 +102,15 @@ let stored: Record<string, string> = {};
 /** The workflow definition the feature's run was pinned to, or none. */
 let graphDef: WorkflowDefinitionV2 | null = null;
 /** The detached run behind the feature, or none for a local run. */
-let remoteMirror: RemoteRunMirror | null = null;
+let remoteMirror: MirroredRunView | null = null;
 /** What the runner answers on the next shadow refresh. */
-let refreshedMirror: RemoteRunMirror | null = null;
+let refreshedMirror: MirroredRunView | null = null;
 /** The feature's `harness_baseline` column, or none measured. */
 let harnessBaseline: HarnessBaseline | undefined;
 /** What `OTHER_FEATURE_ID` answers with; unset, it is not asked for. */
 let otherFeature: {
   runStep: StepExecution;
-  remoteMirror: RemoteRunMirror | null;
+  remoteMirror: MirroredRunView | null;
   harnessBaseline?: HarnessBaseline;
 } | null = null;
 /** Pushes one row into the local run feed, which is what makes the activity
@@ -312,7 +313,7 @@ describe('the run view restores what was stored for it', () => {
   it('keeps the user’s activity choice when the run under it finishes', async () => {
     runStep = { ...STEP, status: 'running' };
     remoteMirror = LIVE_MIRROR;
-    refreshedMirror = { ...LIVE_MIRROR, status: 'completed', updated_at: 1 };
+    refreshedMirror = { ...LIVE_MIRROR, status: 'completed', updated_at: 1, shadow_settled: true };
     mount();
 
     // Open for a live detached run, but only once its mirror has landed.
@@ -406,7 +407,7 @@ describe('a choice made on one feature stays on that feature', () => {
       { name: 'unit', command: 'npm test', exit_ok: true, measured_at: 1, producer: 'node' },
     ],
   };
-  const OTHER_LIVE_MIRROR: RemoteRunMirror = {
+  const OTHER_LIVE_MIRROR: MirroredRunView = {
     ...LIVE_MIRROR,
     run_id: 'runner-run-2',
     feature_id: OTHER_FEATURE_ID,

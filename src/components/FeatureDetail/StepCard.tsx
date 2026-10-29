@@ -5,9 +5,9 @@ import {
 import type { StepExecution } from '../../types';
 import type { DensityClasses } from '../../lib/density';
 import type { EffortLevel } from '../../lib/effortLevels';
-import { TONE_CHIP } from '../../lib/runStatus';
 import { showsPlanned } from '../../lib/stepAssignment';
 import { AssignmentChips, observedAssignment } from '../ui/AssignmentChips';
+import { Button } from '../ui/Button';
 import { StepMetrics } from './StepMetrics';
 import { humanizeStepId } from './stepIdentity';
 
@@ -60,13 +60,13 @@ function StepCardInner({
     statusBg = 'border-rose-500/20 bg-rose-950/5';
   } else if (step.status === 'running') {
     icon = <Cpu className="w-4 h-4 text-cyan-400 animate-spin" />;
-    statusBg = 'border-cyan-500/30 bg-cyan-950/10 shadow-[0_0_15px_rgba(6,182,212,0.05)]';
+    statusBg = 'border-cyan-500/30 bg-cyan-950/10';
   } else if (step.status === 'verifying') {
-    icon = <RefreshCw className="w-4 h-4 text-violet-400 animate-spin" />;
-    statusBg = 'border-violet-500/30 bg-violet-950/10 shadow-[0_0_15px_rgba(139,92,246,0.05)]';
+    icon = <RefreshCw className="w-4 h-4 text-cyan-400 animate-spin" />;
+    statusBg = 'border-cyan-500/30 bg-cyan-950/10';
   } else if (step.status === 'awaiting_gate') {
     icon = <ShieldAlert className="w-4 h-4 text-amber-400" />;
-    statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
+    statusBg = 'border-amber-500/40 bg-amber-950/10';
   }
 
   const selectSelf = useCallback(() => onSelect(step.id), [onSelect, step.id]);
@@ -109,7 +109,7 @@ function StepCardInner({
               aria-current={isSelected ? 'step' : undefined}
               onClick={selectSelf}
               className={`-mx-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2 py-1 text-left transition ${
-                isSelected ? TONE_CHIP.cyan : 'border-transparent hover:bg-white/5'
+                isSelected ? 'border-accent-edge bg-accent-tint' : 'border-transparent hover:bg-white/5'
               }`}
             >
               <span className="shrink-0">{icon}</span>
@@ -162,15 +162,12 @@ function StepCardInner({
             at a time (§3.1). */}
         {step.status === 'awaiting_gate' && (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="min-w-0 flex-1 text-xs text-amber-400 font-semibold uppercase tracking-wide">
+            <span className="min-w-0 flex-1 text-xs text-amber-400 font-semibold">
               Pipeline paused. Awaiting manual review.
             </span>
-            <button
-              onClick={decideGate}
-              className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition"
-            >
+            <Button variant="primary" size="sm" onClick={decideGate} className="shrink-0 whitespace-nowrap">
               Decide Gate <ArrowRight className="w-3 h-3" />
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -183,7 +180,7 @@ function StepCardInner({
  *  looking. Two rings on one card read as one indeterminate colour. */
 function ring(isActiveGate: boolean, isSelected: boolean): string {
   if (isActiveGate) return 'ring-2 ring-amber-500/40';
-  return isSelected ? 'ring-1 ring-cyan-500/40' : '';
+  return isSelected ? 'ring-1 ring-accent-edge' : '';
 }
 
 /**

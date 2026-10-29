@@ -152,6 +152,22 @@ pub(crate) fn critic_step<'a>(
         ))
 }
 
+/// The store keys the critic's review may sit under, most likely first.
+///
+/// A run executed on this machine files its artifacts under the workflow step
+/// id; a detached run's are mirrored here under the step-execution id
+/// (`application/remote_runs/reconcile.rs`). Asking only one key finds the
+/// review for one transport and reports it missing for the other.
+pub(crate) fn review_store_keys(execs: &[StepExecution], critic: &StepConfig) -> Vec<String> {
+    let mut keys: Vec<String> = execs
+        .iter()
+        .filter(|exec| exec.step_id == critic.id)
+        .map(|exec| exec.id.as_ref().to_string())
+        .collect();
+    keys.push(critic.id.as_ref().to_string());
+    keys
+}
+
 /// Decide a rework request. `Ok` carries the feedback to redirect with.
 pub(crate) fn plan(req: &ReworkRequest<'_>) -> Result<ReworkPlan, ReworkRefusal> {
     critic_step(req.workflow_id, req.steps, req.gate)?;

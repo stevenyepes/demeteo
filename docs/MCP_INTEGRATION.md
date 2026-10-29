@@ -3,7 +3,7 @@
 > **Scope:** how an external MCP client reaches Demeteo — the transport, the
 > protocol revision, who may call what, which operations exist, and which are
 > deliberately absent. **Built:** the listener, the OAuth 2.1 authorization
-> server, the consent screen, and the eighteen-tool surface. What is *not* built
+> server, the consent screen, and the nineteen-tool surface. What is *not* built
 > is marked where it appears (§9). [`ARCHITECTURE.md`](ARCHITECTURE.md) owns the
 > hexagon this sits on, [`DDD_MODEL.md`](DDD_MODEL.md) owns the entities the
 > tools return, [decision 35](DECISIONS.md#1-the-locked-decisions) and
@@ -294,7 +294,7 @@ Three scopes, split by **consequence**, not by resource.
 
 | Scope | What it lets a client do | What it costs |
 |---|---|---|
-| `read` | Observe projects, features, steps, failure verdicts, pending gates, discoveries and their boards, registered machines, run events | nothing — no spend, and no state change but one: `refresh_discovery_prs` records what the forge says about a pull request (§7) |
+| `read` | Observe projects, features, steps, failure verdicts, pending gates, discoveries and their boards, registered machines, run events | nothing — no spend, and no state change but two: `refresh_discovery_prs` records what the forge says about a pull request, and `refresh_run` records what a runner says about a detached run (§7) |
 | `spend` | Start a Feature or a Ticket's attempt, here or on any registered machine; retry a step, choose a step's agent and model, and send a Standard-pipeline run back from its final gate (§7.3) | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
 | `configure` | Create a Project; change a Project's run shape | **future behaviour** — how later runs are shaped, never their ceiling (§7.1) |
 
@@ -318,7 +318,7 @@ three consequence classes answer what a user is asking before ticking a box:
 
 ## 7. The operation surface
 
-Eighteen tools. The table is `required_scope` in `domain/oauth/tools.rs`; the two
+Nineteen tools. The table is `required_scope` in `domain/oauth/tools.rs`; the two
 must not drift.
 
 | Tool | Scope | What it does |
@@ -326,6 +326,7 @@ must not drift.
 | `list_projects` | `read` | Every workspace Project |
 | `list_features` | `read` | Active Features — for one Project, or across all of them |
 | `get_feature` | `read` | A Feature and its step executions in one round trip |
+| `refresh_run` | `read` | Pull one detached run's state from its runner now, hydrating status, steps and gates into the desktop's copy, and return the Feature and its steps as `get_feature` does |
 | `list_step_attempts` | `read` | A step's attempts, ordered by attempt number |
 | `get_failure_verdict` | `read` | Why a step failed, for an agent asking about its own failed run |
 | `list_pending_gates` | `read` | Every Gate awaiting a decision, named by Project and Feature |
@@ -356,6 +357,18 @@ choose a placement, and a webhook URL is a credential in all but name.
 `list_machines` does not probe a runner — whether one is installed, reachable
 and this build's version takes an SSH round trip per machine, which a launch
 makes for the one machine it names and refuses on (below).
+
+**`refresh_run` is `read`, and it writes.** Every other read tool answers from the
+desktop's local copy of a detached run, which the desktop refreshes only when
+something looks: app startup, the Remote Runs inbox, and the Feature view's poll
+while it is visible. With nobody viewing, an orchestrating client read hours-old
+state and could not tell a stalled run from a stale copy. `refresh_run` takes a
+`feature_id` and runs the same reconcile the Feature view's poll runs, then
+returns `get_feature`'s shape plus `refreshed` and `note`. A Feature that runs on
+the desktop's own compute has no runner: it comes back unchanged with
+`refreshed: false` and a note, not an error. A runner that does not answer is an
+error, and the copy is then as of its last successful refresh. It is `read` for
+the reason below: it spends nothing and writes only what the poll writes unasked.
 
 **`refresh_discovery_prs` is `read`, and it writes.** The MR monitor polls every
 Feature whose pull request is `open` every two minutes
@@ -751,7 +764,7 @@ The desktop refuses every endorsement, so a substituted ceremony cannot get a ke
 the Hub holds trusted ([`HUB.md` §11 item 20](HUB.md#11-what-is-not-decided)). If a future change would let a
 token do what the assertion does, it reopens this section; one that leaves the assertion in place does not. Mechanism:
 [`HUB.md` §8](HUB.md#8-gate-decisions); decision:
-[decision 65](DECISIONS.md#65--hub-gate-decisions-detail).
+[decision 66](DECISIONS.md#66--hub-gate-decisions-detail).
 
 **A redirect is not an approval.** `rework_from_critic` (§7.3) sends one gate
 back; it lets nothing through, so it is not the operation the first row

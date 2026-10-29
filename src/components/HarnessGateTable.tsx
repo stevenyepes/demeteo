@@ -247,7 +247,7 @@ export function HarnessGateTable({ baseline, evidence, open, onOpenChange, varia
               </div>
               <div className="mt-2.5 grid grid-cols-2 gap-3">
                 <div className="min-w-0">
-                  <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  <div className="mb-1 font-sans text-[10px] font-bold text-slate-500">
                     At the base commit
                   </div>
                   <StatusChip chip={baselineChip(row.baseline)} />
@@ -258,7 +258,7 @@ export function HarnessGateTable({ baseline, evidence, open, onOpenChange, varia
                   )}
                 </div>
                 <div className="min-w-0">
-                  <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  <div className="mb-1 font-sans text-[10px] font-bold text-slate-500">
                     This run
                   </div>
                   <StatusChip chip={nowChip(row.now)} />

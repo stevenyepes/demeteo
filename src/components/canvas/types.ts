@@ -123,9 +123,11 @@ export interface PlannedAssignment {
   effort?: EffortLevel | null;
 }
 
-/** Display metadata for a node type: card icon, label, and accent tone drawn
- *  from the shared run-status vocabulary (`lib/runStatus.ts`) so the canvas
- *  can't invent a color language of its own. */
+/** Display metadata for a node type: card icon, label, and tone drawn from
+ *  the shared run-status vocabulary (`lib/runStatus.ts`) so the canvas can't
+ *  invent a color language of its own. A kind is neither a status nor an
+ *  action, so kinds are slate and told apart by icon; the gate keeps amber
+ *  because a gate is, by definition, where a human is needed. */
 export interface NodeTypeMeta {
   label: string;
   icon: LucideIcon;
@@ -133,13 +135,13 @@ export interface NodeTypeMeta {
 }
 
 const NODE_TYPE_META: Record<string, NodeTypeMeta> = {
-  agent: { label: 'Agent', icon: Bot, tone: 'cyan' },
+  agent: { label: 'Agent', icon: Bot, tone: 'slate' },
   gate: { label: 'Gate', icon: ShieldCheck, tone: 'amber' },
-  sequence: { label: 'Sequence', icon: ListChecks, tone: 'violet' },
+  sequence: { label: 'Sequence', icon: ListChecks, tone: 'slate' },
   sync: { label: 'Sync', icon: GitMerge, tone: 'slate' },
-  finalize: { label: 'Finalize', icon: Flag, tone: 'emerald' },
+  finalize: { label: 'Finalize', icon: Flag, tone: 'slate' },
   command: { label: 'Command', icon: Terminal, tone: 'slate' },
-  subworkflow: { label: 'Sub-workflow', icon: Boxes, tone: 'violet' },
+  subworkflow: { label: 'Sub-workflow', icon: Boxes, tone: 'slate' },
 };
 
 /** Metadata for a node type, with a graceful fallback for unknown/registry

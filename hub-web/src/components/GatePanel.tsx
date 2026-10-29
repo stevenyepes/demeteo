@@ -5,6 +5,7 @@ import type { HubScope } from '../lib/fleet';
 import { decideGate, type GateDecision } from '../lib/gates';
 import type { RequestTicket } from '../lib/requests';
 import { CeremonyError } from './CeremonyError';
+import { Button } from '../../../src/components/ui/Button';
 
 interface GatePanelProps {
   instanceId: string;
@@ -102,28 +103,17 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
       >
         <p className="text-xs text-slate-400">Feedback can only be given on the desktop.</p>
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => decide('approve')}
-            className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <Button variant="primary" onClick={() => decide('approve')}>
             Approve
-          </button>
-          <button
-            type="button"
-            onClick={() => decide('cancel')}
-            className="btn-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          </Button>
+          <Button variant="secondary" onClick={() => decide('cancel')}>
             Cancel
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button variant="secondary"
             disabled
-            aria-describedby={redirectNoteId}
-            className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
-          >
+            aria-describedby={redirectNoteId}>
             Redirect
-          </button>
+          </Button>
           <span id={redirectNoteId} className="text-xs text-slate-400">
             Redirect is not available from the Hub yet.
           </span>

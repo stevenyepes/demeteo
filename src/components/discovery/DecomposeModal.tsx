@@ -19,6 +19,7 @@ import { formatError } from '../../lib/errors';
 import { TONE_TEXT } from '../../lib/runStatus';
 import { stateLabel, ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
 import type { DecomposeProposal, DiscoveryBoard } from '../../types';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { Modal } from '../ui/Modal';
 import { DecomposeChangeCard } from './DecomposeChangeCard';
@@ -100,11 +101,11 @@ export function DecomposeModal({
         role="dialog"
         aria-modal="true"
         aria-label="Proposed changes"
-        className="glass-panel flex max-h-[88vh] flex-col overflow-hidden"
+        className="raised flex max-h-[88vh] flex-col overflow-hidden"
       >
         <header className="flex shrink-0 items-start justify-between gap-5 border-b border-white/5 px-6 py-5">
           <div className="min-w-0">
-            <p className="m-0 mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
+            <p className="m-0 mb-1.5 font-heading text-[11px] font-semibold text-cyan-400">
               {passEyebrow(proposal.first_pass)}
             </p>
             <h2 className="m-0 font-heading text-[22px] font-bold text-white">Proposed changes</h2>
@@ -114,14 +115,9 @@ export function DecomposeModal({
               interviewer worked around.
             </p>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="btn-secondary shrink-0 px-2.5 py-1.5"
-          >
+          <Button size="sm" aria-label="Close" onClick={onClose} className="shrink-0">
             <X className="h-4 w-4" aria-hidden="true" />
-          </button>
+          </Button>
         </header>
 
         <div
@@ -152,7 +148,7 @@ export function DecomposeModal({
             <section key={group.kind}>
               <div className="mb-2.5 flex items-center gap-2.5">
                 <span
-                  className={`font-mono text-[10px] font-bold uppercase tracking-[0.08em] ${TONE_TEXT[group.tone]}`}
+                  className={`font-mono text-[10px] font-bold ${TONE_TEXT[group.tone]}`}
                 >
                   {group.label}
                 </span>
@@ -177,7 +173,7 @@ export function DecomposeModal({
           {proposal.locked.length > 0 && (
             <section>
               <div className="mb-2.5 flex items-center gap-2.5">
-                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <span className="font-mono text-[10px] font-bold text-slate-500">
                   Locked
                 </span>
                 <span className="font-mono text-[10px] text-slate-600">
@@ -216,7 +212,7 @@ export function DecomposeModal({
                         )}
                       </div>
                       {live && (
-                        <Chip size="sm" tone={ticketTone(live, index)}>
+                        <Chip size="sm" tone={ticketTone(live)}>
                           {stateLabel(live)}
                         </Chip>
                       )}
@@ -238,23 +234,20 @@ export function DecomposeModal({
           </p>
         )}
 
-        <footer className="flex shrink-0 items-center justify-between gap-5 border-t border-white/5 bg-[#0d0f14]/90 px-6 py-4">
+        <footer className="flex shrink-0 items-center justify-between gap-5 border-t border-white/5 px-6 py-4">
           <p className="m-0 text-[11px] text-slate-500">
             {renumberNote(proposal)}
           </p>
           <div className="flex shrink-0 items-center gap-2.5">
-            <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-              Keep talking
-            </button>
-            <button
-              type="button"
+            <Button onClick={onClose}>Keep talking</Button>
+            <Button
+              variant="primary"
               data-testid="decompose-apply"
               disabled={!applicable}
               onClick={() => void apply()}
-              className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
             >
               {applying ? 'Applying…' : applyLabel(accepted.size, proposal.changes.length)}
-            </button>
+            </Button>
           </div>
         </footer>
       </div>

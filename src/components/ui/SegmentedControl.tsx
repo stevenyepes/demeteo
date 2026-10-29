@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import React from 'react';
 
-import { TONE_CHIP, TONE_TEXT, type RunStatusTone } from '../../lib/runStatus';
+import { TONE_TEXT, type RunStatusTone } from '../../lib/runStatus';
 import { nextIndexForKey } from './rovingIndex';
 
 export interface SegmentedOption<T extends string | number> {
@@ -105,14 +105,14 @@ export function SegmentedControl<T extends string | number>({
             aria-label={hasCount ? `${option.label}, ${option.count}` : undefined}
             tabIndex={selected || (selectedIndex < 0 && index === 0) ? 0 : -1}
             onClick={() => select(index)}
-            className={`flex items-center gap-1.5 rounded-md border font-semibold transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50 ${density.segment} ${selected ? TONE_CHIP.cyan : IDLE}`}
+            className={`flex items-center gap-1.5 rounded-md border font-semibold transition ${density.segment} ${selected ? SELECTED : IDLE}`}
           >
             {Icon && <Icon className={density.icon} />}
             {option.label}
             {hasCount && (
               <span
                 aria-hidden="true"
-                className={`rounded-full bg-white/10 px-1.5 font-mono text-[10px] ${TONE_TEXT[option.countTone ?? (selected ? 'cyan' : 'slate')]}`}
+                className={`rounded-full bg-white/10 px-1.5 font-mono text-[10px] ${option.countTone ? TONE_TEXT[option.countTone] : selected ? 'text-white' : TONE_TEXT.slate}`}
               >
                 {option.count}
               </span>
@@ -124,6 +124,7 @@ export function SegmentedControl<T extends string | number>({
   );
 }
 
+const SELECTED = 'border-accent-edge bg-accent-tint text-white';
 const IDLE = 'border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200';
 
 const SIZE: Record<SegmentedSize, { group: string; segment: string; icon: string }> = {

@@ -11,7 +11,7 @@
 //! 2. Life 2 (`build_core_context` again) runs the watchdog (interrupted
 //!    + synthetic gate) and auto-arms the driver.
 //!    * **mutated** workspace → the P1.14 guard parks: the step must
-//!      still be `interrupted` after a grace window, and only a human
+//!      read `awaiting_gate` after a grace window, and only a human
 //!      `gate_decide("approve")` lets it re-run to completion;
 //!    * **untouched** workspace → fingerprints match and the run
 //!      auto-resumes with no human in the loop (pre-P1.14 behavior).
@@ -287,8 +287,16 @@ async fn assert_parks_until_approved(crashed: &Crashed) {
         .expect("step read")
         .expect("step exists");
     assert_eq!(
-        step.status, "interrupted",
-        "a mismatched workspace must hold the step at the synthetic gate, not re-run it"
+        step.status, "awaiting_gate",
+        "a mismatched workspace must hold the step at the synthetic gate, not re-run it — \
+         and say so on the row, which is all a gate card or a runner's mirror can read"
+    );
+    assert!(
+        step.error_message
+            .as_deref()
+            .is_some_and(|m| m.contains("Workspace changed")),
+        "the park's reason must reach the person before they decide; got {:?}",
+        step.error_message
     );
     let feature = ctx2
         .features
@@ -311,18 +319,24 @@ async fn assert_parks_until_approved(crashed: &Crashed) {
     );
 }
 
-/// The P1.14 exit test: a human checked the feature branch out in the
-/// project clone — what a terminal opened on a pipeline does — and left an
-/// edit there. The run parks; the edit survives the re-run's merge-back.
-#[tokio::test]
-async fn edited_feature_checkout_parks_at_synthetic_gate_until_approved() {
-    let crashed = run_then_forge_crash("edited").await;
+/// What a terminal opened on a pipeline does: check the feature branch out
+/// in the project clone and leave an edit there.
+fn edit_feature_checkout(crashed: &Crashed) {
     git(&crashed.repo_dir, &["checkout", &crashed.branch]);
     std::fs::write(
         crashed.repo_dir.join("meddled.txt"),
         "changed while stopped\n",
     )
     .expect("mutate worktree");
+}
+
+/// The P1.14 exit test: a human checked the feature branch out in the
+/// project clone and left an edit there. The run parks; the edit survives
+/// the re-run's merge-back.
+#[tokio::test]
+async fn edited_feature_checkout_parks_at_synthetic_gate_until_approved() {
+    let crashed = run_then_forge_crash("edited").await;
+    edit_feature_checkout(&crashed);
 
     assert_parks_until_approved(&crashed).await;
     assert_eq!(
@@ -416,6 +430,85 @@ async fn a_fingerprint_from_the_old_scheme_auto_resumes() {
     assert!(
         matches!(status.as_str(), "completed" | "awaiting_mr"),
         "an old-scheme fingerprint must not park the run; got {status}"
+    );
+
+    let _ = std::fs::remove_dir_all(&crashed.app_data_dir);
+}
+
+/// A second restart while the guard is still parked must ask again.
+///
+/// The watchdog only reconciles a `running` feature, so a parked one comes
+/// back with its rows exactly as the park wrote them: the step
+/// `awaiting_gate`, the resume question still open, and no `interrupted`
+/// anywhere. Keying the guard on `interrupted` alone re-ran the step blindly
+/// over the workspace the question was about.
+#[tokio::test]
+async fn a_second_restart_while_parked_still_asks() {
+    let crashed = run_then_forge_crash("restarted-twice").await;
+    edit_feature_checkout(&crashed);
+
+    let ctx = ctx_for(&crashed.app_data_dir);
+    let step_exec_id = crate::domain::ids::StepExecutionId::from(crashed.step_exec_id.clone());
+    crate::adapters::step_executor::gate_park::pose_synthetic_gate(&*ctx.gates, &step_exec_id)
+        .expect("pose the resume question");
+    ctx.features
+        .step_update(
+            &step_exec_id,
+            &StepExecutionPatch {
+                status: Some("awaiting_gate".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("forge the parked step");
+    ctx.features
+        .update(
+            &crashed.feature_id,
+            &FeaturePatch {
+                status: Some("awaiting_gate".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("forge the parked feature");
+    drop(ctx);
+
+    assert_parks_until_approved(&crashed).await;
+
+    let _ = std::fs::remove_dir_all(&crashed.app_data_dir);
+}
+
+/// Replaying a step the guard has parked re-runs it.
+///
+/// The parked driver is alive, so a replay that only stopped a `running`
+/// feature left it waiting on its question; the replay's own driver then
+/// found one already registered and never started. The rows read `pending`
+/// and nothing would ever move them.
+#[tokio::test]
+async fn replaying_a_step_parked_at_the_resume_gate_reruns_it() {
+    let crashed = run_then_forge_crash("replayed").await;
+    edit_feature_checkout(&crashed);
+
+    let ctx2 = ctx_for(&crashed.app_data_dir);
+    let step_exec_id = crate::domain::ids::StepExecutionId::from(crashed.step_exec_id.clone());
+    // The same grace window as `assert_parks_until_approved`: the
+    // watchdog poses the question before the driver arms, so the row alone
+    // does not prove a driver is parked on it.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        ctx2.gates
+            .latest_for_step(&step_exec_id)
+            .expect("gate read")
+            .is_some_and(|row| row.decision.is_none()),
+        "life 2 must be parked at the resume gate before the replay"
+    );
+
+    ctx2.executor
+        .replay_from_step(&crashed.step_exec_id, None, None, None)
+        .await
+        .expect("replay the parked step");
+    let status = poll_terminal(&ctx2, &crashed.feature_id).await;
+    assert!(
+        matches!(status.as_str(), "completed" | "awaiting_mr"),
+        "a replay must re-run the parked step with no approval; got {status}"
     );
 
     let _ = std::fs::remove_dir_all(&crashed.app_data_dir);

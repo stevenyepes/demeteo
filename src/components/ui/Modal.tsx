@@ -30,7 +30,7 @@ export function Modal({ onClose, children, className = '', backdropClassName = '
   return (
     <OverlayPortal>
       <div
-        className={`fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/85 ${backdropClassName}`}
+        className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 ${backdropClassName}`}
         onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
       >
         <div className={className}>

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Machine, Project, RemoteRunMirror, RunEvent, StepExecution } from "../types";
+import type { Machine, MirroredRunView, Project, RunEvent, StepExecution } from "../types";
 import type { PathContainment } from "./pathContainment";
 import type { WorkflowDefinitionV2 } from "../components/canvas/types";
 
@@ -112,16 +112,16 @@ export async function getFeatureWorkflowGraph(
  */
 export async function remoteRunForFeature(
   featureId: string,
-): Promise<RemoteRunMirror | null> {
-  return invoke<RemoteRunMirror | null>("remote_run_for_feature", { featureId });
+): Promise<MirroredRunView | null> {
+  return invoke<MirroredRunView | null>("remote_run_for_feature", { featureId });
 }
 
 /** Re-hydrate a detached run's shadow from its runner over the tunnel. */
 export async function remoteRefreshRun(input: {
   machineId: string;
   runId: string;
-}): Promise<RemoteRunMirror | null> {
-  return invoke<RemoteRunMirror | null>("remote_refresh_run", {
+}): Promise<MirroredRunView | null> {
+  return invoke<MirroredRunView | null>("remote_refresh_run", {
     machineId: input.machineId,
     runId: input.runId,
   });

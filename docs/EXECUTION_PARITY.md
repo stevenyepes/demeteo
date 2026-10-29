@@ -87,6 +87,24 @@ machine's runner — so the match chooses *who drives* the run, never *how a
 command reaches the machine*. Two launch surfaces given the same placement
 therefore produce the same run, and a refusal reads the same on each.
 
+## Credentials are injected, not branched on
+
+Who holds the git token differs by process: the desktop reads the keyring, the
+runner holds each run's token in memory. That difference sits behind the
+`GitCredentialSource` port (`crates/demeteo-core/src/ports/git_credentials.rs`),
+injected when the context is built, so calling code asks the same question and
+never inspects which transport or process it is in. Desktop-over-SSH uses the
+desktop source, since the desktop is where the token lives; `demeteo-runner`
+installs its own. A caller that tested "am I on a runner?" before reading a
+token would be the §2 transport branch in a new place.
+
+The same rule covers what a degraded fetch looks like. When the `syncing_origin`
+bootstrap phase fails but the branch cut can carry on from a possibly stale ref,
+the phase ends `warning` (`domain::feature_origin::sync_phase_status`), not
+`completed`, and the stepper renders it distinctly. Only a cut with nothing to
+fall back to ends `failed`. The status is computed in `domain/`, so local, SSH
+and runner runs report the same one for the same outcome.
+
 ## Platform is not transport
 
 The guarantee quantifies over **transports**, not over machines. Two transports

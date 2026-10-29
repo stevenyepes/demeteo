@@ -6,6 +6,7 @@ import { useSettings } from './ProjectSettingsContext';
 import { UNSET_DEFAULT_WORKFLOW_HINT } from '../../lib/workflowDefault';
 import { DEFAULT_CACHE_IDLE_TTL_DAYS, parseCacheIdleTtlDays } from '../../lib/cacheIdleTtl';
 import { isGateAutonomy } from '../../lib/gateAutonomy';
+import { Button } from '../ui/Button';
 
 export function StrategyTab() {
   const s = useSettings();
@@ -21,9 +22,9 @@ export function StrategyTab() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Git Isolation */}
-      <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-          <GitBranch className="w-4 h-4 text-violet-400" /> Git Isolation & Strategy
+      <div className="panel p-6 space-y-4">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+          <GitBranch className="w-4 h-4 text-slate-400" /> Git Isolation & Strategy
         </h3>
         {/* The test command moved to `HarnessesSection`: it is the harness
             resolution chain's fallback tier, so it belongs beside the named
@@ -33,8 +34,8 @@ export function StrategyTab() {
           { label: 'Branch Prefix', value: s.branchPrefix, onChange: s.setBranchPrefix },
         ].map(({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) => (
           <div key={label}>
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">{label}</label>
-            <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600" />
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">{label}</label>
+            <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring placeholder-slate-600" />
           </div>
         ))}
       </div>
@@ -42,13 +43,13 @@ export function StrategyTab() {
       <HarnessesSection />
 
       {/* Automation Policies */}
-      <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-          <Settings className="w-4 h-4 text-cyan-400" /> Automation Policies
+      <div className="panel p-6 space-y-4">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+          <Settings className="w-4 h-4 text-slate-400" /> Automation Policies
         </h3>
         <div>
-          <label htmlFor="gate-autonomy" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Gate approvals</label>
-          <select id="gate-autonomy" value={s.gateAutonomy} onChange={e => { const v = e.target.value; if (isGateAutonomy(v)) s.setGateAutonomy(v); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50">
+          <label htmlFor="gate-autonomy" className="block text-xs font-mono text-slate-400 mb-1.5">Gate approvals</label>
+          <select id="gate-autonomy" value={s.gateAutonomy} onChange={e => { const v = e.target.value; if (isGateAutonomy(v)) s.setGateAutonomy(v); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring">
             <option value="attended">Ask at every gate</option>
             <option value="review">Auto-approve review gates, ask before shipping</option>
             <option value="clean">Auto-approve review gates, ship when the review is clean</option>
@@ -57,33 +58,33 @@ export function StrategyTab() {
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Which gates let a run continue without you. The ship gate — the one its workflow marks dangerous — is what opens the pull request; every other gate is a review gate. An automatic approval never redirects or rejects, so the run's own validation and critic steps are the only check left. A run on a remote runner always approves review gates on its own, since nobody is attached to answer them. Shipping on a clean review approves the ship gate only when the review step just before it reports no critical and no major issue; a review that reports one, cannot be read, or is missing leaves the gate waiting for you. The Standard Feature Pipeline has that review step, and a custom workflow gets one by naming a review artifact on a step.</p>
         </div>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
-          <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50">
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Completed Feature Lifecycle</label>
+          <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring">
             <option value="archive">Archive by default</option>
             <option value="keep">Keep active</option>
             <option value="auto_delete">Auto delete branch after MR merge</option>
           </select>
         </div>
         <div>
-          <label htmlFor="cache-idle-ttl-days" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Release Idle Dependency Caches After (Days)</label>
-          <input id="cache-idle-ttl-days" type="number" min={0} step={1} value={s.cacheIdleTtlDays} onChange={e => s.setCacheIdleTtlDays(e.target.value)} placeholder={`${DEFAULT_CACHE_IDLE_TTL_DAYS} (engine default)`} className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <label htmlFor="cache-idle-ttl-days" className="block text-xs font-mono text-slate-400 mb-1.5">Release Idle Dependency Caches After (Days)</label>
+          <input id="cache-idle-ttl-days" type="number" min={0} step={1} value={s.cacheIdleTtlDays} onChange={e => s.setCacheIdleTtlDays(e.target.value)} placeholder={`${DEFAULT_CACHE_IDLE_TTL_DAYS} (engine default)`} className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           {!cacheIdleTtl.ok && <p className="text-[11px] text-ruby-400 mt-1.5">{cacheIdleTtl.message}</p>}
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">A failed, cancelled, interrupted or awaiting-MR feature — or a completed one whose PR is still open — has its dependency cache released once it sits idle this long, as does the default branch's cache Ask and Discovery share once no session holds it. The next run reseeds it. <span className="font-mono">0</span> never releases on idleness; leave blank for the engine default ({DEFAULT_CACHE_IDLE_TTL_DAYS}).</p>
         </div>
         <div>
-          <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Code review entrypoint</label>
-          <input id="review-entrypoint" type="text" value={s.reviewEntrypoint} onChange={e => s.setReviewEntrypoint(e.target.value)} placeholder="e.g. /code-review" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5">Code review entrypoint</label>
+          <input id="review-entrypoint" type="text" value={s.reviewEntrypoint} onChange={e => s.setReviewEntrypoint(e.target.value)} placeholder="e.g. /code-review" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Run this instead of asking the agent to review in its own way. Leave blank to let the agent choose — Demeteo does not supply review criteria either way.</p>
         </div>
       </div>
 
       {/* Default AI Executor */}
-      <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-          <Zap className="w-4 h-4 text-violet-400" /> Default AI Executor Settings
+      <div className="panel p-6 space-y-4">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+          <Zap className="w-4 h-4 text-slate-400" /> Default AI Executor Settings
         </h3>
         <div>
-          <label htmlFor="default-workflow" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Workflow</label>
+          <label htmlFor="default-workflow" className="block text-xs font-mono text-slate-400 mb-1.5">Default Workflow</label>
           {s.workflowsError ? (
             <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-ruby-300">Workflows could not be listed ({s.workflowsError}).</div>
           ) : !s.workflowsLoaded ? (
@@ -91,7 +92,7 @@ export function StrategyTab() {
               <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" /><span>Loading workflows...</span>
             </div>
           ) : (
-            <select id="default-workflow" value={s.defaultWorkflowId} onChange={e => s.setDefaultWorkflowId(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50">
+            <select id="default-workflow" value={s.defaultWorkflowId} onChange={e => s.setDefaultWorkflowId(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring">
               <option value="">Not set</option>
               {s.workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
@@ -102,37 +103,37 @@ export function StrategyTab() {
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">{UNSET_DEFAULT_WORKFLOW_HINT}</p>
         </div>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Coding Agent</label>
-          <select value={s.defaultAgentKind} onChange={e => { const k = e.target.value; s.setDefaultAgentKind(k); s.setDefaultModel(''); s.setDefaultEffort(reconcileEffort(s.defaultEffort, s.effortLevelsFor(k))); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize">
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Coding Agent</label>
+          <select value={s.defaultAgentKind} onChange={e => { const k = e.target.value; s.setDefaultAgentKind(k); s.setDefaultModel(''); s.setDefaultEffort(reconcileEffort(s.defaultEffort, s.effortLevelsFor(k))); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring capitalize">
             <option value="">No default (Prompt on feature creation)</option>
             {s.agentConfigs.filter(a => a.enabled && a.available).map(a => <option key={a.kind} value={a.kind}>{a.display_label}</option>)}
           </select>
         </div>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Model</label>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Model</label>
           {s.isLoadingModelsForDefault ? (
             <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-400 flex items-center gap-2">
               <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" /><span>Probing available models...</span>
             </div>
           ) : (
             <div className="flex gap-2">
-              <select value={s.defaultModel} onChange={e => s.setDefaultModel(e.target.value)} className="flex-1 min-w-0 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50" disabled={!s.defaultAgentKind}>
+              <select value={s.defaultModel} onChange={e => s.setDefaultModel(e.target.value)} className="flex-1 min-w-0 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring" disabled={!s.defaultAgentKind}>
                 <option value="">No default model</option>
                 {s.availableModelsForDefault.map(m => <option key={m.value} value={m.value}>{m.name}</option>)}
                 {s.defaultModel && !s.availableModelsForDefault.some(m => m.value === s.defaultModel) && <option value={s.defaultModel}>{s.defaultModel} (custom)</option>}
               </select>
-              <input type="text" value={s.defaultModel} onChange={e => s.setDefaultModel(e.target.value)} placeholder="Custom override" className="w-1/3 shrink-0 min-w-[140px] bg-black/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" disabled={!s.defaultAgentKind} />
+              <input type="text" value={s.defaultModel} onChange={e => s.setDefaultModel(e.target.value)} placeholder="Custom override" className="w-1/3 shrink-0 min-w-[140px] bg-black/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" disabled={!s.defaultAgentKind} />
             </div>
           )}
           <div className="mt-4">
-            <label htmlFor="default-effort" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Effort</label>
+            <label htmlFor="default-effort" className="block text-xs font-mono text-slate-400 mb-1.5">Default Effort</label>
             <select
               id="default-effort"
               value={s.defaultEffort}
               onChange={e => s.setDefaultEffort(e.target.value as EffortLevel | '')}
               disabled={effortLevels.length === 0}
               title={effortLevels.length === 0 ? `${s.defaultAgentKind.replace(/-/g, ' ')} does not support effort selection` : undefined}
-              className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <option value="">{effortLevels.length === 0 ? 'Not supported' : `Engine default (${EFFORT_LABELS[DEFAULT_EFFORT]})`}</option>
               {effortLevels.map(l => <option key={l} value={l}>{EFFORT_LABELS[l]}</option>)}
@@ -140,17 +141,17 @@ export function StrategyTab() {
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">How much reasoning budget every step asks its agent for, unless a workflow, an override or the launch modal pins something more specific. Leave blank for the engine default ({EFFORT_LABELS[DEFAULT_EFFORT]}).</p>
           </div>
           <div className="mt-4">
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Loop Iterations</label>
-            <input type="number" min={1} max={10} value={s.defaultLoopIterations} onChange={e => s.setDefaultLoopIterations(e.target.value)} placeholder="3 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Loop Iterations</label>
+            <input type="number" min={1} max={10} value={s.defaultLoopIterations} onChange={e => s.setDefaultLoopIterations(e.target.value)} placeholder="3 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">How many times a validation step may loop back to implementation before giving up. Leave blank to use the engine default (3). Overridable per run.</p>
           </div>
           <div className="mt-4">
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Per-Turn Budget (USD)</label>
-            <input type="number" min={0} step={0.5} value={s.defaultMaxBudgetUsd} onChange={e => s.setDefaultMaxBudgetUsd(e.target.value)} placeholder="20 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">Default Per-Turn Budget (USD)</label>
+            <input type="number" min={0} step={0.5} value={s.defaultMaxBudgetUsd} onChange={e => s.setDefaultMaxBudgetUsd(e.target.value)} placeholder="20 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>). The coding turn gets the full amount; shorter role turns get a fraction. Anti-runaway guard, not a whole-run cap. Leave blank for the engine default ($20). Overridable per run.</p>
           </div>
           <div className="mt-4 pt-4 border-t border-white/5">
-            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Sync Conflict Resolver</label>
+            <label className="block text-xs font-mono text-slate-400 mb-1.5">Sync Conflict Resolver</label>
             <HarnessModelPicker
               agentKinds={s.agentConfigs.filter(a => a.enabled && a.available).map(a => a.kind)}
               models={s.availableModelsForSyncResolver}
@@ -169,12 +170,12 @@ export function StrategyTab() {
               effortPlaceholder="Inherit"
             />
             <div className="mt-3">
-              <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">After a resolution</label>
+              <label className="block text-xs font-mono text-slate-400 mb-1.5">After a resolution</label>
               <select
                 aria-label="After a resolution"
                 value={s.syncReviewBeforePush}
                 onChange={e => s.setSyncReviewBeforePush(e.target.value as '' | 'push')}
-                className="w-64 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+                className="w-64 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring"
               >
                 <option value="">Review it when someone is there</option>
                 <option value="push">Always push to origin</option>
@@ -187,18 +188,18 @@ export function StrategyTab() {
       </div>
 
       {/* Artifact Handling */}
-      <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-          <FileText className="w-4 h-4 text-cyan-400" /> Artifact Handling
+      <div className="panel p-6 space-y-4">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+          <FileText className="w-4 h-4 text-slate-400" /> Artifact Handling
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">Each workflow step produces a report (<code className="text-slate-300">research-report.md</code>, <code className="text-slate-300">critic-review.md</code>, …). By default these land in a subfolder and stay out of the PR — view them in demeteo's artifact panel. Toggle the commit switch to ship them with the feature branch instead.</p>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Artifact Subfolder</label>
-          <input type="text" value={s.artifactSubdir} onChange={e => s.setArtifactSubdir(e.target.value)} placeholder="artifacts/" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <label className="block text-xs font-mono text-slate-400 mb-1.5">Artifact Subfolder</label>
+          <input type="text" value={s.artifactSubdir} onChange={e => s.setArtifactSubdir(e.target.value)} placeholder="artifacts/" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring font-mono placeholder-slate-600" />
           <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">Repo-relative path. The orchestrator injects this as <code>{'{{report_dir}}'}</code> (alias <code>{'{{artifact_dir}}'}</code>) into every step's prompt and excludes it from <code>git add</code> when the commit switch is off.</p>
         </div>
-        <label className="flex items-start gap-3 p-3 rounded-lg border border-white/5 bg-black/20 cursor-pointer hover:border-cyan-500/30 transition-colors">
-          <input type="checkbox" checked={s.commitArtifacts} onChange={e => s.setCommitArtifacts(e.target.checked)} className="mt-0.5 w-4 h-4 rounded border-white/20 bg-black/40 text-cyan-500 focus:ring-cyan-500/40 focus:ring-offset-0" />
+        <label className="flex items-start gap-3 p-3 rounded-lg border border-white/5 bg-black/20 cursor-pointer hover:border-white/20 transition-colors">
+          <input type="checkbox" checked={s.commitArtifacts} onChange={e => s.setCommitArtifacts(e.target.checked)} className="mt-0.5 w-4 h-4 rounded border-white/20 bg-black/40 accent-accent" />
           <div className="flex-1">
             <div className="text-xs font-semibold text-slate-200">Commit artifacts to the feature branch</div>
             <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">When off (default), the orchestrator runs <code>git add -A -- ':!&lt;artifact_subfolder&gt;'</code> so the reports stay as untracked files in the worktree. The UI viewer still shows them.</div>
@@ -207,15 +208,15 @@ export function StrategyTab() {
       </div>
 
       {s.prTemplate && (
-        <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-2">
-          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider">Detected PR Template</h3>
+        <div className="panel p-6 md:col-span-2 space-y-2">
+          <h3 className="font-heading text-sm font-semibold text-slate-300">Detected PR Template</h3>
           <div className="w-full bg-black/40 border border-white/5 rounded-lg p-4 font-mono text-xs text-slate-400 max-h-[160px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
         </div>
       )}
 
       {/* Extra Writable Paths */}
-      <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
-        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+      <div className="panel p-6 md:col-span-2 space-y-4">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
           <FolderOpen className="w-4 h-4 text-emerald-400" /> Extra Writable Paths
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
@@ -252,10 +253,11 @@ export function StrategyTab() {
                 }
               }}
               placeholder="e.g. target/ or node_modules"
-              className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500/50 font-mono"
+              className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring font-mono"
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => {
                 const v = s.newExtraPath.trim();
                 if (v && !s.extraWritablePaths.includes(v)) {
@@ -263,21 +265,21 @@ export function StrategyTab() {
                   s.setNewExtraPath('');
                 }
               }}
-              className="px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors flex items-center gap-1 font-semibold shrink-0"
+              className="shrink-0"
             >
               <Plus className="w-3 h-3" /> Add
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
       {/* Coding Agent Configurations */}
-      <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
+      <div className="panel p-6 md:col-span-2 space-y-4">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <Activity className="w-4 h-4 text-cyan-400" /> Coding Agent Configuration
+          <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
+            <Activity className="w-4 h-4 text-slate-400" /> Coding Agent Configuration
           </h3>
-          <button type="button" onClick={() => s.fetchAgentConfigs(true)} disabled={s.isRefreshingAgents} className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all disabled:opacity-50" title="Re-check agent availability">
+          <button type="button" onClick={() => s.fetchAgentConfigs(true)} disabled={s.isRefreshingAgents} className="p-1 rounded text-slate-500 hover:text-white hover:bg-white/5 transition-all disabled:opacity-50" title="Re-check agent availability">
             <RotateCw className={`w-3.5 h-3.5 ${s.isRefreshingAgents ? 'animate-spin text-cyan-400' : ''}`} />
           </button>
         </div>
@@ -286,10 +288,10 @@ export function StrategyTab() {
           {s.agentConfigs.length === 0 ? (
             <div className="md:col-span-2 text-xs text-slate-500 italic p-2">No agents found on target machine.</div>
           ) : s.agentConfigs.map(agent => (
-            <div key={agent.kind} className={`flex items-start justify-between p-4 rounded-lg border transition-all ${agent.enabled ? 'bg-violet-500/5 border-violet-500/25 shadow-[0_0_15px_rgba(139,92,246,0.05)]' : 'bg-black/20 border-white/5 opacity-60'}`}>
+            <div key={agent.kind} className={`flex items-start justify-between p-4 rounded-lg border transition-all ${agent.enabled ? 'bg-accent-tint border-accent-edge' : 'bg-black/20 border-white/5 opacity-60'}`}>
               <div className="flex gap-3 w-full">
                 <div className="pt-0.5">
-                  <button type="button" onClick={() => s.setAgentConfigs(s.agentConfigs.map(a => a.kind === agent.kind ? { ...a, enabled: !a.enabled } : a))} className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agent.enabled ? 'bg-violet-500 border-violet-500 text-white' : 'border-slate-600 hover:border-slate-500'}`}>
+                  <button type="button" onClick={() => s.setAgentConfigs(s.agentConfigs.map(a => a.kind === agent.kind ? { ...a, enabled: !a.enabled } : a))} className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agent.enabled ? 'bg-accent border-accent text-white' : 'border-slate-600 hover:border-slate-500'}`}>
                     {agent.enabled && <Check className="w-3 h-3 stroke-[3]" />}
                   </button>
                 </div>

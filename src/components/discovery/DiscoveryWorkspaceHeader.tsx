@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Code, GitBranch, Lock } from 'lucide-react';
+import { Code, GitBranch } from 'lucide-react';
 
 import { setDiscoveryBase } from '../../lib/discovery';
 import { baseBranchLabel, baseBranchLock, resolveBaseBranchInput } from '../../lib/discoveryBase';
@@ -12,8 +12,10 @@ import { listTerminalBranches } from '../../lib/terminal';
 import { formatCost, formatTokens } from '../../lib/utils';
 import type { Discovery, DiscoveryBoard, TerminalBranchOption } from '../../types';
 import { BackButton } from '../ui/BackButton';
+import { Button, buttonClasses } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
+import { BaseBranchLockNote } from './BaseBranchLockNote';
 import { DiscoveryActionsMenu, type DiscoveryMenuAction } from './DiscoveryActionsMenu';
 import { OptionPill } from './OptionPill';
 import { useDiscoveryHeaderDensity } from './useDiscoveryHeaderDensity';
@@ -137,16 +139,15 @@ export function DiscoveryWorkspaceHeader({
   const toggleLabel = discovery.status === 'open' ? 'Close discovery' : 'Reopen discovery';
 
   const decomposeButton = (
-    <button
-      type="button"
+    <Button
+      variant="primary"
       data-testid="discovery-decompose"
       onClick={onDecompose}
       disabled={busy || decomposing}
-      className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <Code className="h-3.5 w-3.5" aria-hidden="true" />
       {decomposing ? 'Decomposing…' : 'Decompose'}
-    </button>
+    </Button>
   );
 
   const menuActions: DiscoveryMenuAction[] = [];
@@ -221,27 +222,25 @@ export function DiscoveryWorkspaceHeader({
 
         {wide ? (
           <div className="flex shrink-0 items-center gap-2">
-            <button type="button" onClick={onToggleOpen} disabled={busy} className="btn-secondary">
+            <Button onClick={onToggleOpen} disabled={busy}>
               {toggleLabel}
-            </button>
+            </Button>
             {integration.showControls && (
               <>
-                <button
-                  type="button"
+                <Button
                   data-testid="discovery-update-base"
                   onClick={onUpdateBase}
                   disabled={busy || !integration.sync.enabled}
-                  className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Update from default branch
-                </button>
+                </Button>
                 {discovery.integration_mr_url ? (
                   <div className="flex items-center gap-2">
                     <a
                       href={discovery.integration_mr_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="btn-secondary"
+                      className={buttonClasses()}
                     >
                       View integration PR
                     </a>
@@ -250,16 +249,14 @@ export function DiscoveryWorkspaceHeader({
                     </Chip>
                   </div>
                 ) : (
-                  <button
-                    type="button"
+                  <Button
                     data-testid="discovery-publish-integration"
                     onClick={onPublishIntegration}
                     disabled={busy || !integration.publish.enabled}
                     title={integration.publish.reason ?? undefined}
-                    className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Open integration PR
-                  </button>
+                  </Button>
                 )}
               </>
             )}
@@ -285,7 +282,7 @@ export function DiscoveryWorkspaceHeader({
                 type="button"
                 onClick={openEditingBase}
                 disabled={lock.locked || busy}
-                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-violet-300 transition-colors hover:text-violet-200 disabled:cursor-not-allowed disabled:text-slate-600"
+                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-accent-ink transition-colors hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
               >
                 Change
               </button>
@@ -297,25 +294,17 @@ export function DiscoveryWorkspaceHeader({
           >
             <span data-testid="discovery-turns">{turnCountLabel(turnCount)}</span>
             {' · '}
-            <span className="text-emerald-300">{formatCost(discovery.total_cost)}</span>
+            <span className="text-slate-300">{formatCost(discovery.total_cost)}</span>
             {!narrow && (
               <>
                 {' · '}
-                <span className="text-cyan-300">{formatTokens(discovery.tokens)}</span> tokens
+                <span className="text-slate-300">{formatTokens(discovery.tokens)}</span> tokens
               </>
             )}
           </p>
         </div>
 
-        {lock.locked && (
-          <p
-            data-testid="discovery-base-locked"
-            className="m-0 flex items-start gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2.5 text-[11px] leading-relaxed text-slate-400"
-          >
-            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
-            {lock.reason}
-          </p>
-        )}
+        <BaseBranchLockNote lock={lock} />
 
         {editingBase && (
           <div className="nested-card mt-1 flex flex-col gap-2.5 px-3.5 py-3">
@@ -358,24 +347,19 @@ export function DiscoveryWorkspaceHeader({
               </p>
             )}
             <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={cancelEditingBase}
-                disabled={baseSubmitting}
-                className="btn-secondary text-[11px] disabled:cursor-not-allowed disabled:opacity-40"
-              >
+              <Button size="sm" onClick={cancelEditingBase} disabled={baseSubmitting}>
                 Cancel
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => void saveBase()}
                 disabled={
                   baseSubmitting || (baseDraft.mode === 'named' && baseDraft.name.trim().length === 0)
                 }
-                className="btn-primary text-[11px] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {baseSubmitting ? 'Saving…' : 'Save'}
-              </button>
+              </Button>
             </div>
           </div>
         )}

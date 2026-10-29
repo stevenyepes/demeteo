@@ -8,6 +8,7 @@ fn every_declared_tool_maps_to_its_exact_tier() {
         ("list_projects", Scope::Read),
         ("list_features", Scope::Read),
         ("get_feature", Scope::Read),
+        ("refresh_run", Scope::Read),
         ("list_step_attempts", Scope::Read),
         ("get_failure_verdict", Scope::Read),
         ("list_pending_gates", Scope::Read),

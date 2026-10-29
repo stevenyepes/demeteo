@@ -98,6 +98,21 @@ pub(crate) fn pose_synthetic_gate(
     ))
 }
 
+/// Whether the question on `step_exec_id` is the "may this resume?" one,
+/// answered or not.
+///
+/// An answer counts: it was given while no driver was parked to read it, and
+/// [`park_for_human`]'s fast path is where it gets consumed.
+pub(crate) fn resume_question_posed(
+    gates: &dyn GateRepository,
+    step_exec_id: &StepExecutionId,
+) -> bool {
+    matches!(
+        gates.latest_for_step(step_exec_id),
+        Ok(Some(row)) if row.id == resume_question_id(step_exec_id)
+    )
+}
+
 /// Withdraw the watchdog's "may this resume?" from a node about to run.
 ///
 /// Once the node runs the question is moot, but its row stays answerable

@@ -506,7 +506,7 @@ its ticket graph. A Discovery is project-scoped by construction, so it belongs
 where the project lives; no new navigation concept is introduced.
 
 Per AGENTS.md §4, the ticket graph is a design surface like any other — token
-values from `src/App.css`, no hard-coded colour, and the existing semantics:
+values from `src/styles/tokens.css`, no hard-coded colour, and the existing semantics:
 violet for primary actions, emerald for running agents, ruby for failure.
 
 ### 9.2 Two views over one ticket set

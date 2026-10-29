@@ -16,11 +16,13 @@ it into a Workflow, delegates Steps to coding agents (opencode, claude-code, her
 manages a Git worktree per Step, and presents human-approval Gates before merging.
 **Current phase: V1** — core orchestrator, fully implemented.
 
-Use these exact names in code and comments: **Project** (a Git repo Demeteo tracks) ·
+Use these exact names in code and comments: **Project** (one or more Git repositories
+Demeteo tracks together; the UI says Project, never Workspace) ·
 **Feature** (user-described work, decomposed by a Workflow) · **Workflow** (reusable,
 versioned DAG of Steps) · **Step** (one DAG node: `agent`, `sequence`, `gate`, `sync`, `finalize`, or `command`) ·
 **Subtask** (work for one agent in one worktree) · **Gate** (human-approval checkpoint) ·
-**ProviderInstance** (a configured AI provider: model + key + endpoint).
+**ProviderInstance** (a connected Git host account, GitHub or GitLab; not an AI model
+provider, and the UI calls it a Git host).
 
 ---
 
@@ -147,22 +149,73 @@ before you finish, and say which ones you couldn't verify.
 
 ## 4. Visual Design
 
-Token *values* live in `src/App.css` — read them from there, never hard-code hex.
-Their semantics, which the stylesheet doesn't record: **violet** = active connections
-and primary actions · **cyan** = terminal streams and interactive states · **emerald** =
-running agents and healthy statuses · **ruby** = errors, stopped tasks, failures.
+Token *values* live in `src/styles/tokens.css`. Read them from there and never
+hard-code hex. This section is what they mean. [DESIGN.md](DESIGN.md) records the
+system as shipped, including where code still drifts from this section. Don't copy a
+drifting pattern because it sits nearby.
 
-Cards are glassmorphism — `backdrop-filter: blur(12px)` over the card-surface token.
+**Direction: a quiet instrument.** A developer keeps Demeteo open all day to supervise
+agents, so the chrome recedes and the work and its state carry the screen. The
+benchmarks are developer tools (Linear, Zed, Ghostty, GitHub Primer), not landing
+pages. The earlier "dark neon glassmorphism" mandate was retired in 2026-10. It is the
+look an AI generator reaches for by default, and while this file required it, every
+agent reproduced it.
+
+**Colour is spent only on meaning.** Neutral greys do everything else.
+- **the accent**, indigo "Signal" (decision 61 in [docs/DECISIONS.md](docs/DECISIONS.md)) = primary
+  actions, selection, focus. It is never a status, and neither is violet, which sits too close to it.
+  A button is `src/components/ui/Button.tsx`, whose variant names a role: there is no
+  status-hue button, so approving a gate is `primary`. Focus is the one `:focus-visible`
+  ring in `src/App.css`; a field may show focus with `border-accent-ring` instead, never a hue of its own.
+- Status hues come from `src/lib/runStatus.ts`: a surface may keep its own labels, but its
+  tones are a `RunStatusTone` drawn through the `TONE_*` maps, never a hue spelled locally.
+  - **cyan** = in motion (running, bootstrapping, verifying, a PR out for review)
+  - **emerald** = finished well, or healthy
+  - **amber** = a human is needed, and only that. `pipelineFilter.ts` derives the
+    "Needs you" band from a settled amber status, so an amber status that needs nobody
+    is a bug, not a style choice.
+  - **ruby** = failed or destructive
+  - **slate** = inert
+- A warning nobody has to act on (reconnecting, degraded, retrying) is not amber. Say it
+  in words on a neutral tone, or use ruby once it has actually failed.
+- A status colour always ships with a label or icon, because hue alone carries no state.
+  The target is WCAG 2.2 AA ([PRODUCT.md](PRODUCT.md)).
+
+**Depth is a surface step, not an effect.** There are three solid surfaces: the app
+background, the panel, and the raised layer (menus and dialogs). Each has a 1px hairline
+border. `.panel` is the panel, and its radius (`--radius-panel`) is never
+re-spelled at a call site. Controls take smaller radii. Only the raised layer casts a
+shadow, a single token, so a call site never adds `shadow-*`. A card inside a panel is a
+`.nested-card`, never a second panel. Backdrop blur belongs only to something floating
+over live content (command palette, dialogs, controls over the workflow canvas), never
+to a card or a page section.
+
+**Never:**
+- glow shadows or `text-shadow`
+- gradient fills, except an indeterminate progress bar
+- decorative blurred blobs, or sparkle icons as ornament
+- `hover:scale`
+- shimmer, except an indeterminate progress bar
+- all-caps letter-spaced labels
+- text under 11px
+- hues outside the token set (Tailwind's yellow, orange, blue, rose, …)
+- `style=` props or raw hex for design tokens
+- a flat grey card without its hairline
+
 Type has exactly three utilities: `font-heading` (Outfit), `font-mono` (Fira Code /
-JetBrains Mono) and `font-sans` (Inter), which `body` already sets — so UI text needs no
-class. Tailwind v4 derives those names from the `--font-*` keys in the `@theme` block of
-`src/App.css`, and a utility naming a face with no key there matches no rule at all: the
-element silently inherits Inter, and nothing — not the build, not the console — says so.
-Name a key for the role rather than the typeface (`--font-heading`, never
-`--font-outfit`), so changing the face is one token instead of every call site. §7 gates
-the dead-class case mechanically. Status dots pulse; view switches transition smoothly.
-**Never** plain system colors, `style=` props for design tokens, or flat grey cards with
-no depth.
+JetBrains Mono) and `font-sans` (Inter). `body` already sets `font-sans`, so UI text
+needs no class. Tailwind v4 derives those names from the `--font-*` keys in the `@theme`
+block of `src/styles/tokens.css`. A utility naming a face with no key there matches no
+rule at all: the element silently inherits Inter, and nothing (not the build, not the
+console) says so. Name a key for the role rather than the typeface (`--font-heading`,
+never `--font-outfit`), so changing the face is one token instead of every call site.
+§7 gates the dead-class case mechanically. Write labels and headings in sentence case.
+UI copy will be translated, so never build a sentence by concatenation or carry meaning
+in letter case.
+
+Motion is a budget. An animation that never stops claims something is still happening,
+and on WebKitGTK any running animation costs a core. The rules sit beside `pulse-glow` in
+`src/App.css`.
 
 ---
 
@@ -366,6 +419,7 @@ Read the relevant doc before modifying that area.
 | Terminal agent activity | [docs/TERMINAL_ACTIVITY.md](docs/TERMINAL_ACTIVITY.md) |
 | Terminal sessions: feature-scoped terminals, brief, hand-back (designed, not built) | [docs/TERMINAL_SESSIONS_SPEC.md](docs/TERMINAL_SESSIONS_SPEC.md) · plan in [docs/TASKS_TERMINAL_SESSIONS.md](docs/TASKS_TERMINAL_SESSIONS.md) |
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
+| Visual design system as shipped, and its drift from §4 | [DESIGN.md](DESIGN.md) · product context, audience, voice in [PRODUCT.md](PRODUCT.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
 | Demeteo Hub: trust model, pairing, socket, requests, gate decisions (passkey auth and the Hub's half of pairing built in `crates/demeteo-hub`, the approval page in `hub-web/`; the server side of the socket and the request queue built in `crates/demeteo-hub/src/socket`; the session JSON API that reads the fleet and queues requests, gate decisions included, built in `crates/demeteo-hub/src/api`; the desktop client built in `crates/demeteo-core`, verifying gate decisions and passkey changes against its pinned passkeys, with its Settings › Hub tab in `src/components/settings/`) | [docs/HUB.md](docs/HUB.md) |
 | Demeteo Hub design mockup (decided, not built; parts superseded) | [docs/hub-design/](docs/hub-design/README.md) |

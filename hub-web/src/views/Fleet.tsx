@@ -7,6 +7,7 @@ import { PlaceholderCard } from '../components/PlaceholderCard';
 import { type FleetInstance, getFleet } from '../lib/fleet';
 import { needsYouOldestFirst, summarizeFleet } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
+import { buttonClasses } from '../../../src/components/ui/Button';
 
 export function Fleet() {
   const [fleet, setFleet] = useState<FleetInstance[] | null>(null);
@@ -55,7 +56,7 @@ export function Fleet() {
           <p>No instances are paired with this Hub yet. Pairing starts from the desktop.</p>
           <a
             href={routeHref({ name: 'add-instance' })}
-            className="btn-primary mt-4 inline-block focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+            className={`${buttonClasses('primary')} mt-4`}
           >
             Add instance
           </a>
@@ -83,13 +84,13 @@ export function Fleet() {
           <div className="mt-4 flex flex-wrap gap-3">
             <a
               href={routeHref({ name: 'add-instance' })}
-              className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+              className={buttonClasses('primary')}
             >
               Add instance
             </a>
             <a
               href={routeHref({ name: 'dispatch' })}
-              className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+              className={buttonClasses('primary')}
             >
               Run a pipeline
             </a>

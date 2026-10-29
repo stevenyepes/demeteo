@@ -14,6 +14,7 @@ import {
 import { MiniGraph } from './canvas/MiniGraph';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 import { BackButton } from './ui/BackButton';
+import { Button } from './ui/Button';
 
 interface WorkflowListProps {
   onEdit: (id: string) => void;
@@ -146,25 +147,22 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                 if (file) void handleImportFile(file);
               }}
             />
-            <button
+            <Button
+              size="sm"
               onClick={() => importInput.current?.click()}
               title="Import a workflow JSON file"
-              className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-md text-sm font-semibold transition-all duration-300 border border-white/5 text-slate-300"
             >
               <Upload className="w-4 h-4" /> Import
-            </button>
-            <button
-              onClick={onNew}
-              className="flex items-center gap-2 px-3 py-1.5 bg-violet-600/80 hover:bg-violet-600 hover:shadow-[0_0_15px_rgba(139,92,246,0.5)] rounded-md text-sm font-semibold transition-all duration-300 border border-violet-500/30"
-            >
+            </Button>
+            <Button variant="primary" size="sm" onClick={onNew}>
               <Plus className="w-4 h-4" /> New
-            </button>
+            </Button>
           </div>
         </div>
 
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
-            <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+            <RefreshCw className="w-8 h-8 text-slate-400 animate-spin" />
           </div>
         ) : error ? (
           <div className="flex-1 p-6 text-rose-400 text-sm flex items-center gap-2">
@@ -179,28 +177,28 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {/* Group Starter Pack */}
             <div className="space-y-2">
-              <div className="text-xs uppercase tracking-wider text-slate-500 font-bold px-2">Starter Pipelines</div>
+              <div className="text-xs text-slate-500 font-bold px-2">Starter Pipelines</div>
               {workflows
                 .filter((w) => w.is_starter)
                 .map((w) => (
                   <div
                     key={w.id}
                     onClick={() => setSelectedId(w.id)}
-                    className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border backdrop-blur-md ${
+                    className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border ${
                       selectedId === w.id
-                        ? 'bg-violet-950/20 border-violet-500/50 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
-                        : 'bg-white/2 hover:bg-white/5 border-white/5'
+                        ? 'bg-accent-tint border-accent-edge'
+                        : 'bg-surface-panel hover:bg-surface-panel-hover border-white/5'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-white">{w.name}</span>
                       <div className="flex items-center gap-1.5">
                         {w.schedule && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 flex items-center gap-1">
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 flex items-center gap-1">
                             <Clock className="w-2.5 h-2.5" /> Scheduled
                           </span>
                         )}
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
                           Starter
                         </span>
                       </div>
@@ -213,28 +211,28 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
             {/* Group Custom */}
             {workflows.some((w) => !w.is_starter) && (
               <div className="space-y-2 pt-4">
-                <div className="text-xs uppercase tracking-wider text-slate-500 font-bold px-2">Custom Pipelines</div>
+                <div className="text-xs text-slate-500 font-bold px-2">Custom Pipelines</div>
                 {workflows
                   .filter((w) => !w.is_starter)
                   .map((w) => (
                     <div
                       key={w.id}
                       onClick={() => setSelectedId(w.id)}
-                      className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border backdrop-blur-md ${
+                      className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border ${
                         selectedId === w.id
-                          ? 'bg-violet-950/20 border-violet-500/50 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
-                          : 'bg-white/2 hover:bg-white/5 border-white/5'
+                          ? 'bg-accent-tint border-accent-edge'
+                          : 'bg-surface-panel hover:bg-surface-panel-hover border-white/5'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-white">{w.name}</span>
                         <div className="flex items-center gap-1.5">
                           {w.schedule && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 flex items-center gap-1">
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 flex items-center gap-1">
                               <Clock className="w-2.5 h-2.5" /> Scheduled
                             </span>
                           )}
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold uppercase tracking-wider">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold">
                             Custom
                           </span>
                         </div>
@@ -253,7 +251,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
         {selectedWorkflow ? (
           <div className="space-y-8 max-w-3xl">
             {/* Header Card */}
-            <div className="p-6 rounded-xl border border-white/5 bg-white/[0.02] backdrop-blur-xl flex justify-between items-start">
+            <div className="panel p-6 flex justify-between items-start">
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-bold font-heading text-white">{selectedWorkflow.name}</h1>
@@ -267,7 +265,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
               <div className="flex gap-2">
                 <button
                   onClick={() => onStartFeature(selectedWorkflow.id)}
-                  className="p-2.5 bg-emerald-600/80 hover:bg-emerald-600 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] rounded-lg text-white transition-all duration-300 border border-emerald-500/30"
+                  className="p-2.5 bg-accent hover:bg-accent-hover rounded-lg text-white transition-colors border border-transparent"
                   title="Run Workflow"
                 >
                   <Play className="w-4 h-4 fill-white" />
@@ -307,20 +305,20 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
             </div>
 
             {selectedWorkflow.schedule && (
-              <div className="p-4 rounded-xl border border-white/5 bg-violet-500/[0.02] flex items-center justify-between">
+              <div className="p-4 rounded-xl border border-white/5 bg-white/[0.02] flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <Clock className="w-5 h-5 text-violet-400" />
+                  <Clock className="w-5 h-5 text-slate-400" />
                   <div>
                     <h4 className="text-sm font-semibold text-white">Cron Execution Schedule</h4>
                     <p className="text-xs text-slate-400">
-                      Cron: <code className="text-violet-300 font-mono">{selectedWorkflow.schedule.cron}</code> &bull; 
-                      Title: <code className="text-cyan-300">{selectedWorkflow.schedule.title_template}</code>
+                      Cron: <code className="text-slate-200 font-mono">{selectedWorkflow.schedule.cron}</code> &bull; 
+                      Title: <code className="text-slate-200">{selectedWorkflow.schedule.title_template}</code>
                     </p>
                   </div>
                 </div>
                 {selectedWorkflow.schedule.next_run_at && (
                   <div className="text-right">
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block mb-0.5">Next Run</span>
+                    <span className="text-[10px] text-slate-500 font-bold block mb-0.5">Next Run</span>
                     <div className="text-xs text-slate-300 font-mono bg-black/30 border border-white/5 px-2 py-1 rounded">
                       {new Date(selectedWorkflow.schedule.next_run_at * 1000).toLocaleString()}
                     </div>
@@ -344,27 +342,28 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
               <h3 className="text-lg font-semibold font-heading text-white tracking-wide">Steps Configuration</h3>
               <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
                 {selectedWorkflow.steps.map((step, idx) => {
-                  let badgeColor = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
+                  // Kinds are slate like the canvas's (`nodeTypeMeta`); only a
+                  // gate keeps amber, being where a human is needed.
+                  let badgeColor = 'bg-white/5 text-slate-300 border-white/10';
                   let icon = <Cpu className="w-4 h-4" />;
                   if (step.kind === 'sequence' || step.kind === 'parallel') {
-                    badgeColor = 'bg-violet-500/10 text-violet-400 border-violet-500/20';
                     icon = <GitBranch className="w-4 h-4" />;
                   } else if (step.kind === 'gate') {
-                    badgeColor = 'bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.15)]';
+                    badgeColor = 'bg-amber-500/10 text-amber-400 border-amber-500/20';
                     icon = <ShieldAlert className="w-4 h-4" />;
                   }
 
                   return (
                     <div key={step.id} className="relative group">
                       {/* Circle node connector */}
-                      <span className="absolute -left-[41px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-[#0d0f14] border border-white/10 group-hover:border-violet-500 transition-colors duration-300">
-                        <span className="text-[10px] text-slate-400 group-hover:text-violet-400 font-bold">{idx + 1}</span>
+                      <span className="absolute -left-[41px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-[#0d0f14] border border-white/10 group-hover:border-slate-400 transition-colors duration-300">
+                        <span className="text-[10px] text-slate-400 group-hover:text-slate-200 font-bold">{idx + 1}</span>
                       </span>
 
                       <div className="p-5 rounded-lg border border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-all duration-300">
                         <div className="flex items-center gap-3">
                           <span className="font-semibold text-white tracking-wide text-sm">{step.title}</span>
-                          <span className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${badgeColor}`}>
+                          <span className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold ${badgeColor}`}>
                             {icon} {step.kind}
                           </span>
                           {step.agent_kind && (
@@ -380,7 +379,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                           </div>
                         )}
 
-                        <div className="mt-3 flex items-center gap-4 text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
+                        <div className="mt-3 flex items-center gap-4 text-[10px] text-slate-500 font-semibold">
                           {step.on_failure && <span>On Failure: {step.on_failure}</span>}
                           {step.max_iterations && <span>Max Loops: {step.max_iterations}</span>}
                         </div>

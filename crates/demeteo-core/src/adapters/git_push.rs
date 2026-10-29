@@ -13,6 +13,12 @@
 //! terminal to ask on. They failed with `fatal: could not read Password` for
 //! the rest of the project's life.
 //!
+//! ## Where the token comes from
+//!
+//! From a [`GitCredentialSource`], never from the keyring directly: which
+//! process holds the token is the source's business, and the desktop's answer
+//! is [`KeyringCredentialSource`](crate::adapters::git_credentials::KeyringCredentialSource).
+//!
 //! ## Why the PAT rides an inline helper rather than a file or the URL
 //!
 //! Three ways to hand `git` a token, two of which this module deliberately
@@ -55,6 +61,7 @@ use std::time::Duration;
 use crate::domain::git_push::{credential_host, host_without_port};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
+use crate::ports::git_credentials::GitCredentialSource;
 
 /// Ceiling on the push itself. Its job is not to bound a slow network but to
 /// bound a git that has decided to *ask* something: an unattended run has
@@ -96,14 +103,15 @@ pub(crate) struct GitCredential {
 /// token, and a `None` here is the correct answer rather than a degraded one.
 ///
 /// Every failure degrades to `None` deliberately — an unreadable remote, no
-/// provider for the host, no PAT in the keyring. The push then runs exactly as
-/// it did before this module existed, and if git cannot authenticate it says
+/// provider for the host, no PAT from `credentials`. The push then runs exactly
+/// as it did before this module existed, and if git cannot authenticate it says
 /// so in words [`is_credential_failure`](crate::domain::git_push::is_credential_failure)
 /// can read. Refusing to push at all would be worse: it would break the ssh
 /// projects that never needed a token, to protect the ones that did.
-pub(crate) async fn credential_for_repo(
+pub(crate) async fn credential_for_repo_with(
     exec: &dyn ExecutionPort,
     app_settings: &dyn AppSettingsRepository,
+    credentials: &dyn GitCredentialSource,
     machine_str: &str,
     repo_dir: &str,
 ) -> Option<GitCredential> {
@@ -114,17 +122,22 @@ pub(crate) async fn credential_for_repo(
         )
         .await
         .ok()?;
-    credential_for_remote(app_settings, remote.trim())
+    credential_for_remote(app_settings, credentials, repo_dir, remote.trim())
 }
 
 /// The credential `remote_url` needs, read from the URL alone.
 ///
-/// The half of [`credential_for_repo`] that needs no port, split out so a
+/// The half of [`credential_for_repo_with`] that needs no port, split out so a
 /// caller that already holds the origin does not probe for it a second time.
-/// `None` for the same reasons, a password-bearing URL included — the caller
-/// that wants to replace one rewrites it first.
+/// `repo_dir` is the repository that origin belongs to; it goes to
+/// `credentials` untouched, because a source that holds one token per run can
+/// only tell whose it is from there. `None` for the same reasons, a
+/// password-bearing URL included — the caller that wants to replace one
+/// rewrites it first.
 pub(crate) fn credential_for_remote(
     app_settings: &dyn AppSettingsRepository,
+    credentials: &dyn GitCredentialSource,
+    repo_dir: &str,
     remote_url: &str,
 ) -> Option<GitCredential> {
     let host = credential_host(remote_url)?;
@@ -135,7 +148,7 @@ pub(crate) fn credential_for_remote(
         .find(|p| host_without_port(&p.host) == host)?;
     Some(GitCredential {
         user: remote_user(&provider.kind),
-        pat: crate::adapters::mr_publisher::resolve_pat_for(&provider.id.0).ok()?,
+        pat: credentials.pat_for(&provider.id.0, repo_dir).ok()?,
         host: host_without_port(&provider.host).to_string(),
     })
 }

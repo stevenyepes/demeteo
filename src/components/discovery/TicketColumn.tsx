@@ -38,9 +38,7 @@ interface TicketColumnProps {
  * blocked in the graph when there is one answer between them, and nothing here
  * recomputes a lane the backend already derived.
  *
- * The toggle is `SegmentedControl` unchanged, and so is its cyan selection.
- * `docs/TASKS_DISCOVERY.md` settles that against the mock's violet: a view
- * toggle takes no action, and violet is the primary-action colour.
+ * The toggle is `SegmentedControl` unchanged, selection and all.
  */
 export function TicketColumn({
   tickets,

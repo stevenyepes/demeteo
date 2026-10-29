@@ -3,6 +3,7 @@ import { ShieldAlert, Check, Server, Code, GitBranch, X } from 'lucide-react';
 import { formatError } from '../lib/errors';
 import { connectProviderInstance } from '../lib/providers';
 import { OverlayPortal } from './ui/OverlayPortal';
+import { Button } from './ui/Button';
 
 interface ProviderSettingsProps {
     onConnected: (provider: { id: string; type: string; name: string; host: string; pat: string; username: string; avatarUrl: string }) => void;
@@ -56,10 +57,10 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
 
     return (
       <OverlayPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/85 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="absolute w-[600px] h-[600px] bg-cyan-600/10 rounded-full blur-[120px] pointer-events-none"></div>
             
-            <div className="glass-panel w-full max-w-xl p-8 relative z-10 flex flex-col shadow-2xl animate-fade-in border border-white/10">
+            <div className="raised w-full max-w-xl p-8 relative z-10 flex flex-col animate-fade-in">
                 <button 
                     onClick={onClose}
                     className="absolute top-6 right-6 p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"
@@ -74,38 +75,38 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
 
                 <div className="space-y-5">
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-2 uppercase tracking-wider">Provider Type</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-2">Provider Type</label>
                         <div className="flex gap-4">
                             <button 
                                 onClick={() => setProviderType('github')}
-                                className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${providerType === 'github' ? 'bg-cyan-500/10 border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.2)]' : 'bg-black/30 border-white/10 hover:border-white/20 hover:bg-white/5'}`}
+                                className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${providerType === 'github' ? 'bg-accent-tint border-accent-edge' : 'bg-black/30 border-white/10 hover:border-white/20 hover:bg-white/5'}`}
                             >
-                                <Code className={`w-6 h-6 ${providerType === 'github' ? 'text-cyan-400' : 'text-slate-500'}`} />
+                                <Code className={`w-6 h-6 ${providerType === 'github' ? 'text-accent-ink' : 'text-slate-500'}`} />
                                 <span className={providerType === 'github' ? 'text-white font-medium text-sm' : 'text-slate-400 text-sm'}>GitHub</span>
                             </button>
                             <button 
                                 onClick={() => setProviderType('gitlab')}
-                                className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${providerType === 'gitlab' ? 'bg-violet-500/10 border-violet-500/50 shadow-[0_0_15px_rgba(139,92,246,0.2)]' : 'bg-black/30 border-white/10 hover:border-white/20 hover:bg-white/5'}`}
+                                className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${providerType === 'gitlab' ? 'bg-accent-tint border-accent-edge' : 'bg-black/30 border-white/10 hover:border-white/20 hover:bg-white/5'}`}
                             >
-                                <GitBranch className={`w-6 h-6 ${providerType === 'gitlab' ? 'text-violet-400' : 'text-slate-500'}`} />
+                                <GitBranch className={`w-6 h-6 ${providerType === 'gitlab' ? 'text-accent-ink' : 'text-slate-500'}`} />
                                 <span className={providerType === 'gitlab' ? 'text-white font-medium text-sm' : 'text-slate-400 text-sm'}>GitLab</span>
                             </button>
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Provider Name / Alias</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-1.5">Provider Name / Alias</label>
                         <input 
                             type="text"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
                             placeholder="e.g. Personal GitHub, Corporate GitLab"
-                            className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 transition-colors placeholder-slate-600"
+                            className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring transition-colors placeholder-slate-600"
                         />
                     </div>
 
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Host URL (Optional)</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-1.5">Host URL (Optional)</label>
                         <div className="relative">
                             <Server className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
                             <input 
@@ -113,19 +114,19 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                                 value={host}
                                 onChange={(e) => setHost(e.target.value)}
                                 placeholder={providerType === 'github' ? 'github.com' : 'gitlab.com'}
-                                className="w-full bg-black/40 border border-white/10 rounded-lg py-2 pl-9 pr-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 transition-colors placeholder-slate-600"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg py-2 pl-9 pr-3 text-sm text-white focus:outline-none focus:border-accent-ring transition-colors placeholder-slate-600"
                             />
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Personal Access Token</label>
+                        <label className="block text-xs font-mono text-slate-400 mb-1.5">Personal Access Token</label>
                         <input 
                             type="password"
                             value={pat}
                             onChange={(e) => setPat(e.target.value)}
                             placeholder="ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-                            className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 transition-colors font-mono placeholder-slate-600"
+                            className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring transition-colors font-mono placeholder-slate-600"
                         />
                         <p className="mt-1.5 text-[11px] text-slate-500">
                             Requires scopes: `repo` and `user`. The token is stored securely in your system keyring.
@@ -150,23 +151,17 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                 </div>
 
                 <div className="mt-6 flex justify-end gap-3">
-                    <button 
-                        onClick={onClose}
-                        className="px-5 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-white/5 transition-all"
-                    >
+                    <Button variant="ghost" size="lg" onClick={onClose}>
                         Cancel
-                    </button>
-                    <button 
+                    </Button>
+                    <Button
+                        variant="primary"
+                        size="lg"
                         onClick={handleConnect}
                         disabled={status === 'validating' || status === 'success'}
-                        className={`px-6 py-2 rounded-lg font-medium shadow-lg transition-all text-sm flex items-center justify-center gap-2
-                            ${status === 'success' ? 'bg-emerald-600 text-white shadow-emerald-500/20' : 
-                              status === 'validating' ? 'bg-cyan-600/50 text-white cursor-wait' : 
-                              'bg-cyan-600 hover:bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]'
-                            }`}
                     >
                         {status === 'validating' ? 'Validating...' : status === 'success' ? 'Connected' : (initialProvider ? 'Update Account' : 'Connect Account')}
-                    </button>
+                    </Button>
                 </div>
             </div>
         </div>

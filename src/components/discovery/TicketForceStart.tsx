@@ -4,6 +4,7 @@ import { ticketLabel } from '../../lib/discoveryProgress';
 import { MIN_REASON } from '../../lib/ticketEditor';
 import { primaryAction, showsForceStart, type TicketIndex } from '../../lib/ticketPresentation';
 import type { TicketView } from '../../types';
+import { Button, buttonClasses } from '../ui/Button';
 import { FieldLabel } from '../ui/FieldLabel';
 
 type Phase = 'idle' | 'forcing' | 'dropping';
@@ -144,7 +145,7 @@ export function TicketForceStart({
               onClick={() => (dropping ? onDrop(reason.trim()) : onForceStart(reason.trim()))}
               className={
                 dropping
-                  ? 'btn-secondary disabled:cursor-not-allowed disabled:opacity-35'
+                  ? buttonClasses()
                   : 'rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-[18px] py-2.5 text-[13px] font-medium text-amber-400 transition hover:bg-amber-500/[0.14] disabled:cursor-not-allowed disabled:opacity-35'
               }
             >
@@ -152,16 +153,14 @@ export function TicketForceStart({
                 ? `Drop ${ticketLabel(view.ticket.seq)}`
                 : `Force start ${ticketLabel(view.ticket.seq)}`}
             </button>
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 setPhase('idle');
                 setReason('');
               }}
-              className="btn-secondary"
             >
               Cancel
-            </button>
+            </Button>
             <span className="ml-auto text-[11px] text-slate-500">
               {short ? 'A reason is required.' : 'Recorded on the ticket.'}
             </span>
@@ -170,15 +169,14 @@ export function TicketForceStart({
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
+          <Button
+            variant="danger-subtle"
             data-testid="ticket-drop"
             disabled={busy}
             onClick={() => setPhase('dropping')}
-            className="btn-secondary text-[13px] text-ruby-200 disabled:cursor-not-allowed disabled:opacity-35"
           >
             Drop ticket&hellip;
-          </button>
+          </Button>
           <span className="flex-1" />
           {saveHint}
           {saveControls}
@@ -193,15 +191,14 @@ export function TicketForceStart({
               Force start&hellip;
             </button>
           )}
-          <button
-            type="button"
+          <Button
+            variant="primary"
             data-testid="ticket-primary-action"
             disabled={action.kind !== 'start' || busy || needsSave}
             onClick={onStart}
-            className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
           >
             {action.label}
-          </button>
+          </Button>
         </div>
       )}
     </div>

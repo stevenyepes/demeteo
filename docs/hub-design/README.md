@@ -3,7 +3,7 @@
 Design for a browser control plane over many Demeteo instances — desktops on
 macOS, Linux and Windows, and `demeteo-runner` hosts. **Decided, and partly built** — [`HUB.md`](../HUB.md) §2 has the state of each part. The
 decisions are recorded in [`DECISIONS.md`](../DECISIONS.md#1-the-locked-decisions)
-(56–63) and specified in [`HUB.md`](../HUB.md); where this mockup disagrees with
+(56–64) and specified in [`HUB.md`](../HUB.md); where this mockup disagrees with
 them, they win. The runner half of the design is superseded — see below.
 
 These are the source files of a design canvas
@@ -27,7 +27,7 @@ the board layout.
 The design reverses `docs/OPEN_QUESTIONS.md` §17 (web companion out of
 scope) and lets a human decide gates outside the desktop, which the MCP surface
 excludes. Both are decided
-([decisions 61 and 65](../DECISIONS.md#1-the-locked-decisions)); neither is built.
+([decisions 62 and 66](../DECISIONS.md#1-the-locked-decisions)); neither is built.
 The gate decision is a separate surface from MCP's and does not reopen
 [decision 50](../MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently).
 
@@ -37,10 +37,10 @@ The artboards are not edited. Where they disagree with a decision, the decision 
 
 | Artboard says | Superseded by |
 | --- | --- |
-| A `logs` scope that sends transcripts and diffs to the Hub (`DesktopConnect`, `Instance`, `Run`, `Runs`) | [Decision 66](../DECISIONS.md#66--hub-scopes-and-ceilings-detail): scopes are `read`, `spend` and `gates`; transcripts and diffs never leave an instance |
-| A runner pairing with a printed code, `demeteo-runner hub pair <url>`, and a refresh token in the runner's credential store (`AddInstance`) | [Decision 63](../DECISIONS.md#63--hub-instances-detail): runners are not paired; a later, separate discovery covers runners over SSH |
-| A runner as a paired instance (`Architecture`, `Pairing`) | Decisions 63 and 64 |
-| A passkey required only for merge-to-default and over-budget gates (`DesktopConnect`, `Instance`) | [Decision 65](../DECISIONS.md#65--hub-gate-decisions-detail): every Hub gate decision carries an assertion |
+| A `logs` scope that sends transcripts and diffs to the Hub (`DesktopConnect`, `Instance`, `Run`, `Runs`) | [Decision 67](../DECISIONS.md#67--hub-scopes-and-ceilings-detail): scopes are `read`, `spend` and `gates`; transcripts and diffs never leave an instance |
+| A runner pairing with a printed code, `demeteo-runner hub pair <url>`, and a refresh token in the runner's credential store (`AddInstance`) | [Decision 64](../DECISIONS.md#64--hub-instances-detail): runners are not paired; a later, separate discovery covers runners over SSH |
+| A runner as a paired instance (`Architecture`, `Pairing`) | Decisions 64 and 65 |
+| A passkey required only for merge-to-default and over-budget gates (`DesktopConnect`, `Instance`) | [Decision 66](../DECISIONS.md#66--hub-gate-decisions-detail): every Hub gate decision carries an assertion |
 
 The built tab drops `DesktopConnect`'s `logs` toggle and makes `read` a real
 toggle that defaults on ([`HUB.md`](../HUB.md) §7). The mockup has no place to

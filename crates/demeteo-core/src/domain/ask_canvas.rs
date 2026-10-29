@@ -24,8 +24,8 @@ use crate::domain::models::ask::{AskMessage, CanvasPathVerdict};
 /// Where a node sits and what it does, fixed vocabulary matching the four
 /// node tones of `docs/ask-canvas/probe/Nodes.html` (in git history). Ruby
 /// is never a node role — it is reserved for failure/stopped states elsewhere in the
-/// app (see `App.css`'s ruby tokens), so a fifth variant must not be added
-/// without updating that surface first, nor without
+/// app (see the ruby tokens in `src/styles/tokens.css`), so a fifth variant
+/// must not be added without updating that surface first, nor without
 /// [`canvas_block_vocabulary`], which is the only place a model is told
 /// these four tokens exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

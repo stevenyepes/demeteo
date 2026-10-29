@@ -27,6 +27,7 @@ import { CalendarClock, Loader2, X } from 'lucide-react';
 import { useErrorBus } from '../../lib/errorBus';
 import { getProjects } from '../../lib/project';
 import { saveWorkflowSchedule } from '../../lib/workflows';
+import { Button } from '../ui/Button';
 
 export interface WorkflowScheduleValue {
   cron: string;
@@ -127,12 +128,12 @@ export function ScheduleDrawer({
 
   return (
     <aside
-      className="absolute right-0 top-0 z-20 flex h-full w-[380px] flex-col border-l border-white/5 bg-[#0d0f14] shadow-2xl"
+      className="absolute right-0 top-0 z-20 flex h-full w-[380px] flex-col border-l border-hairline-raised bg-surface-raised shadow-[var(--shadow-raised)]"
       data-testid="schedule-drawer"
       aria-label="Workflow schedule"
     >
       <header className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
-        <CalendarClock className="h-4 w-4 text-violet-400" />
+        <CalendarClock className="h-4 w-4 text-slate-400" />
         <h2 className="flex-1 text-sm font-semibold text-slate-100">Schedule</h2>
         <button
           type="button"
@@ -153,7 +154,7 @@ export function ScheduleDrawer({
         <div>
           <label
             htmlFor="schedule-project"
-            className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="mb-1 block text-[11px] font-semibold text-slate-400"
           >
             Target project
           </label>
@@ -161,7 +162,7 @@ export function ScheduleDrawer({
             id="schedule-project"
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-[#0b0d12] p-2.5 text-sm text-white outline-none focus:border-violet-500"
+            className="w-full rounded-lg border border-white/10 bg-[#0b0d12] p-2.5 text-sm text-white outline-none focus:border-accent-ring"
           >
             <option value="">— Select project —</option>
             {projects.map((p) => (
@@ -175,7 +176,7 @@ export function ScheduleDrawer({
         <div>
           <label
             htmlFor="schedule-cron"
-            className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="mb-1 block text-[11px] font-semibold text-slate-400"
           >
             Cron expression
           </label>
@@ -185,7 +186,7 @@ export function ScheduleDrawer({
             value={cron}
             onChange={(e) => setCron(e.target.value)}
             placeholder="0 0 * * *"
-            className="w-full rounded-lg border border-white/10 bg-[#0b0d12] p-2.5 font-mono text-sm text-white outline-none focus:border-violet-500"
+            className="w-full rounded-lg border border-white/10 bg-[#0b0d12] p-2.5 font-mono text-sm text-white outline-none focus:border-accent-ring"
           />
           <p className="mt-1 text-[11px] text-slate-500">
             minute hour day-of-month month day-of-week
@@ -195,7 +196,7 @@ export function ScheduleDrawer({
         <div>
           <label
             htmlFor="schedule-title"
-            className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="mb-1 block text-[11px] font-semibold text-slate-400"
           >
             Feature title template
           </label>
@@ -205,7 +206,7 @@ export function ScheduleDrawer({
             value={titleTemplate}
             onChange={(e) => setTitleTemplate(e.target.value)}
             placeholder="Nightly run {{datetime}}"
-            className="w-full rounded-lg border border-white/10 bg-[#0b0d12] p-2.5 text-sm text-white outline-none focus:border-violet-500"
+            className="w-full rounded-lg border border-white/10 bg-[#0b0d12] p-2.5 text-sm text-white outline-none focus:border-accent-ring"
           />
         </div>
 
@@ -217,15 +218,10 @@ export function ScheduleDrawer({
       </div>
 
       <footer className="border-t border-white/5 p-4">
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
-        >
+        <Button variant="primary" onClick={save} disabled={saving} className="w-full">
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           {isCleared(cron, titleTemplate, projectId) ? 'Remove schedule' : 'Save schedule'}
-        </button>
+        </Button>
       </footer>
     </aside>
   );

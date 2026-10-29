@@ -6,9 +6,11 @@
  * from `lib/runStatus.ts` (audit F27), so a new surface cannot re-open the
  * status-colour drift by hand-writing `bg-emerald-500/10 text-…`.
  *
- * Casing and typography are deliberately not props. A chip is uppercase mono
- * everywhere or the pills stop reading as one family, which is the drift this
- * component exists to end.
+ * Casing and typography are deliberately not props. A chip is mono in its
+ * label's own sentence case everywhere, or the pills stop reading as one
+ * family, which is the drift this component exists to end. There is no case
+ * transform: AGENTS.md §4 bans letter-spaced capitals, and translated copy must
+ * not carry meaning in letter case.
  */
 
 import type { ReactNode } from 'react';
@@ -80,7 +82,7 @@ export function Chip(props: ChipProps): React.ReactElement {
       data-tone={tone}
       title={title}
       style={maxWidth ? { maxWidth } : undefined}
-      className={`inline-flex items-center shrink-0 rounded border font-mono uppercase tracking-wide ${
+      className={`inline-flex items-center shrink-0 rounded border font-mono ${
         SIZE_CLASS[size]
       } ${TONE_CHIP[tone]} ${maxWidth ? 'overflow-hidden' : ''} ${className}`}
     >

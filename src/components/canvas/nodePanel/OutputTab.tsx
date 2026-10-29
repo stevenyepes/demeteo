@@ -50,7 +50,7 @@ export function OutputTab({
 
   if (!hasOutput) {
     return (
-      <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold uppercase tracking-wider text-slate-600">
+      <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold text-slate-600">
         No output produced for this node.
       </div>
     );
@@ -72,7 +72,7 @@ export function OutputTab({
       {/* Harness / verifier output — the failing-tests / implicated-files surface. */}
       {errorOutput && !environment && (
         <div className="mb-4 shrink-0">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+          <div className="mb-2 text-[10px] font-bold text-slate-500">
             {isFailed ? 'Verifier / harness output' : 'Message'}
           </div>
           <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-rose-500/20 bg-rose-950/10 p-3 font-mono text-[11px] leading-relaxed text-rose-200/90">
@@ -83,7 +83,7 @@ export function OutputTab({
 
       {(artifactPaths.length > 0 || hiddenArtifactCount > 0) && (
         <div className="mb-3 shrink-0 space-y-2">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+          <div className="text-[10px] font-bold text-slate-500">
             Artifacts
           </div>
           {artifactPaths.map((path) => {

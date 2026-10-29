@@ -10,6 +10,14 @@ interface CommandEntry {
   onSelect: () => void;
 }
 
+const CATEGORY_LABEL: Record<CommandEntry['category'], string> = {
+  project: 'Project',
+  feature: 'Feature',
+  workflow: 'Workflow',
+  action: 'Action',
+  settings: 'Settings',
+};
+
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
@@ -82,12 +90,12 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh]" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/70" />
+      <div className="absolute inset-0 bg-black/60" />
       <div
-        className="relative w-full max-w-xl glass-panel border border-white/10 rounded-xl shadow-2xl overflow-hidden"
+        className="raised relative w-full max-w-xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/5 bg-[#0d0f14]/80">
+        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/5">
           <Search className="w-5 h-5 text-slate-400 shrink-0" />
           <input
             ref={inputRef}
@@ -118,8 +126,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
                 }}
                 className={`flex items-center gap-3 px-5 py-2.5 cursor-pointer transition-all mx-1.5 rounded-lg ${
                   idx === selectedIndex
-                    ? 'bg-violet-500/15 text-white border border-violet-500/20'
-                    : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                    ? 'bg-accent-tint text-white border border-accent-edge'
+                    : 'text-slate-300 border border-transparent hover:bg-white/5 hover:text-white'
                 }`}
               >
                 <span className="shrink-0 opacity-70">{entry.icon}</span>
@@ -129,13 +137,13 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
                     {entry.description}
                   </div>
                 </div>
-                <span className={`text-[10px] font-mono uppercase tracking-wider shrink-0 ${
-                  idx === selectedIndex ? 'text-violet-400' : 'text-slate-600'
+                <span className={`text-[10px] font-mono shrink-0 ${
+                  idx === selectedIndex ? 'text-accent-ink' : 'text-slate-600'
                 }`}>
-                  {entry.category}
+                  {CATEGORY_LABEL[entry.category]}
                 </span>
                 {idx === selectedIndex && (
-                  <ArrowRight className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                  <ArrowRight className="w-3.5 h-3.5 text-accent-ink shrink-0" />
                 )}
               </div>
             ))

@@ -28,6 +28,7 @@ import {
   reconcileRuns,
   remoteRunDiffUrl,
 } from '../lib/remoteRuns';
+import { Button, buttonClasses } from './ui/Button';
 
 /**
  * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION.md
@@ -96,7 +97,7 @@ const DiffLinkButton: React.FC<{ run: RemoteRunMirror }> = ({ run }) => {
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
+      className={buttonClasses('secondary', 'sm')}
       title={`View the diff for the pushed branch (${run.pushed_branch})`}
     >
       <ExternalLink className="w-3 h-3" /> View branch diff
@@ -201,14 +202,10 @@ const RemoteRunInbox: React.FC = () => {
             </p>
             </div>
           </div>
-          <button
-            onClick={reconcile}
-            disabled={reconciling}
-            className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-50"
-          >
+          <Button onClick={reconcile} disabled={reconciling}>
             <RefreshCw className={`w-3.5 h-3.5 ${reconciling ? 'animate-spin' : ''}`} />
             Refresh
-          </button>
+          </Button>
         </div>
 
         {error && (
@@ -223,7 +220,7 @@ const RemoteRunInbox: React.FC = () => {
             Loading…
           </div>
         ) : runs.length === 0 ? (
-          <div className="glass-panel p-8 text-center flex flex-col items-center justify-center">
+          <div className="panel p-8 text-center flex flex-col items-center justify-center">
             <Inbox className="w-8 h-8 text-slate-500 mb-3" />
             <h3 className="text-base font-heading font-semibold text-white mb-1">No remote runs yet</h3>
             <p className="text-sm text-slate-400 max-w-md">
@@ -240,7 +237,7 @@ const RemoteRunInbox: React.FC = () => {
                 <div key={bucket}>
                   <div className="flex items-center gap-2 mb-2">
                     <Icon className={`w-4 h-4 ${accent}`} />
-                    <h3 className={`text-xs font-mono uppercase tracking-wider ${accent}`}>{meta.label}</h3>
+                    <h3 className={`text-xs font-mono ${accent}`}>{meta.label}</h3>
                     <span className="text-[10px] text-slate-600 font-mono">{grouped[bucket].length}</span>
                   </div>
                   <div className="space-y-2">
@@ -248,8 +245,8 @@ const RemoteRunInbox: React.FC = () => {
                       <div
                         key={`${run.machine_id}:${run.run_id}`}
                         onClick={() => openRun(run)}
-                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[meta.tone]} ${
-                          run.feature_id ? 'cursor-pointer hover:bg-white/[0.03] transition-colors' : ''
+                        className={`panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[meta.tone]} ${
+                          run.feature_id ? 'cursor-pointer' : ''
                         }`}
                         title={run.feature_id ? 'Open this run' : undefined}
                       >
@@ -274,11 +271,10 @@ const RemoteRunInbox: React.FC = () => {
                           className="shrink-0 flex items-center gap-2"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <button
-                            type="button"
+                          <Button
+                            size="sm"
                             onClick={() => openRun(run)}
                             disabled={!run.feature_id}
-                            className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                             title={
                               run.feature_id
                                 ? 'Open the run — step timeline, activity log, artifacts, and cost'
@@ -286,13 +282,13 @@ const RemoteRunInbox: React.FC = () => {
                             }
                           >
                             <ListTree className="w-3 h-3" /> Open run
-                          </button>
+                          </Button>
                           {bucket === 'pr_ready' && run.pr_url && (
                             <a
                               href={run.pr_url}
                               target="_blank"
                               rel="noreferrer"
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300 flex items-center gap-1.5"
+                              className={buttonClasses('primary', 'sm')}
                             >
                               <ExternalLink className="w-3 h-3" /> Open PR
                             </a>
@@ -305,14 +301,9 @@ const RemoteRunInbox: React.FC = () => {
                             <ReinjectCredentials run={run} onResolved={reconcile} />
                           )}
                           {(bucket === 'running' || bucket === 'parked') && (
-                            <button
-                              type="button"
-                              onClick={() => cancelRun(run)}
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-                              title="Cancel this run"
-                            >
+                            <Button size="sm" onClick={() => cancelRun(run)} title="Cancel this run">
                               <Ban className="w-3 h-3" /> Cancel
-                            </button>
+                            </Button>
                           )}
                         </div>
                       </div>

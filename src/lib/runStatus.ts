@@ -6,17 +6,20 @@
  * FeatureDetail, the Runs inbox, and the TopBar badge all speak the same
  * color language instead of each view keeping its own ternary chain.
  *
- * Tone semantics (docs/UX_JOURNEYS.md §2, as settled by F27):
- *   cyan    = in motion (running)
- *   violet  = in motion, agent-judged (verifying), or out with a reviewer
- *             (published PR) — work that is moving without this app doing it
- *   amber   = needs a human (gates, credentials, interruptions)
- *   emerald = done well (completed / PR ready)
+ * Tone semantics (AGENTS.md §4; F27 settled the single mapping):
+ *   cyan    = in motion, whether this app is driving it (bootstrapping,
+ *             running, verifying) or a reviewer is (published PR)
+ *   amber   = needs a human (gates, credentials, interruptions) and nothing
+ *             else — `segmentFor` derives the "Needs you" band from it
+ *   emerald = done well (completed / PR ready / merged)
  *   ruby    = done badly (failed / over budget)
  *   slate   = inert (queued, cancelled, unreachable, skipped, PR closed)
+ * There is no violet tone, and no tone in the accent's hue: the accent marks
+ * primary actions, selection and focus, so a chip in it reads as something to
+ * click rather than as a state.
  */
 
-export type RunStatusTone = 'emerald' | 'cyan' | 'violet' | 'amber' | 'ruby' | 'slate';
+export type RunStatusTone = 'emerald' | 'cyan' | 'amber' | 'ruby' | 'slate';
 
 export interface RunStatusMeta {
   label: string;
@@ -27,9 +30,9 @@ export interface RunStatusMeta {
 
 const META: Record<string, RunStatusMeta> = {
   pending:              { label: 'Queued',            tone: 'slate',   active: true },
-  bootstrapping:        { label: 'Bootstrapping',     tone: 'amber',   active: true },
+  bootstrapping:        { label: 'Bootstrapping',     tone: 'cyan',    active: true },
   running:              { label: 'Running',           tone: 'cyan',    active: true },
-  verifying:            { label: 'Verifying',         tone: 'violet',  active: true },
+  verifying:            { label: 'Verifying',         tone: 'cyan',    active: true },
   gated:                { label: 'Gate needs you',    tone: 'amber',   active: false },
   awaiting_gate:        { label: 'Gate needs you',    tone: 'amber',   active: false },
   parked:               { label: 'Gate needs you',    tone: 'amber',   active: false },
@@ -38,7 +41,7 @@ const META: Record<string, RunStatusMeta> = {
   'over-budget':        { label: 'Over budget',       tone: 'ruby',    active: false },
   awaiting_mr:          { label: 'PR ready',          tone: 'emerald', active: false },
   pr_ready:             { label: 'PR ready',          tone: 'emerald', active: false },
-  published:            { label: 'Published',         tone: 'violet',  active: false },
+  published:            { label: 'Published',         tone: 'cyan',    active: false },
   merged:               { label: 'Merged',            tone: 'emerald', active: false },
   pr_closed:            { label: 'PR closed',         tone: 'slate',   active: false },
   completed:            { label: 'Completed',         tone: 'emerald', active: false },
@@ -125,12 +128,11 @@ export function featureRunStatus(feature: FeatureRunStatusFields): string {
 
 /** `bg/text/border` classes for a pill/chip in the given tone. */
 export const TONE_CHIP: Record<RunStatusTone, string> = {
-  emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  cyan:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  violet:  'bg-violet-500/10 text-violet-400 border-violet-500/20',
-  amber:   'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  ruby:    'bg-ruby-500/10 text-ruby-400 border-ruby-500/20',
-  slate:   'bg-slate-500/10 text-slate-400 border-slate-500/20',
+  emerald: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40',
+  cyan:    'bg-cyan-500/15 text-cyan-400 border-cyan-500/40',
+  amber:   'bg-amber-500/15 text-amber-400 border-amber-500/40',
+  ruby:    'bg-ruby-500/15 text-ruby-400 border-ruby-500/40',
+  slate:   'bg-slate-500/15 text-slate-400 border-slate-500/40',
 };
 
 /**
@@ -143,7 +145,6 @@ export const TONE_CHIP: Record<RunStatusTone, string> = {
 export const TONE_BADGE: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
   cyan:    'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
-  violet:  'bg-violet-500/20 text-violet-300 border-violet-500/30',
   amber:   'bg-amber-500/20 text-amber-300 border-amber-500/40',
   ruby:    'bg-ruby-500/20 text-ruby-300 border-ruby-500/40',
   slate:   'bg-slate-500/20 text-slate-300 border-slate-500/30',
@@ -153,7 +154,6 @@ export const TONE_BADGE: Record<RunStatusTone, string> = {
 export const TONE_TEXT: Record<RunStatusTone, string> = {
   emerald: 'text-emerald-400',
   cyan:    'text-cyan-400',
-  violet:  'text-violet-400',
   amber:   'text-amber-400',
   ruby:    'text-ruby-400',
   slate:   'text-slate-500',
@@ -163,7 +163,6 @@ export const TONE_TEXT: Record<RunStatusTone, string> = {
 export const TONE_BORDER_L: Record<RunStatusTone, string> = {
   emerald: 'border-l-emerald-500/60',
   cyan:    'border-l-cyan-500/60',
-  violet:  'border-l-violet-500/60',
   amber:   'border-l-amber-500/60',
   ruby:    'border-l-ruby-500/60',
   slate:   'border-l-slate-600/60',

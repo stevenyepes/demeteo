@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { AlertTriangle, PlugZap } from 'lucide-react';
 
+import { Button } from '../ui/Button';
 import { describeListFailure, type PullRequestListFailure } from '../../lib/pullRequests';
 import { TONE_CHIP, TONE_TEXT, type RunStatusTone } from '../../lib/runStatus';
 
@@ -57,7 +58,7 @@ export function ReviewFailureCard({
       data-testid="code-review-failure"
       data-failure={failure.kind}
       data-tone={tone}
-      className={`glass-panel rounded-2xl border ${border} p-6 space-y-4`}
+      className={`panel ${border} p-6 space-y-4`}
     >
       <div className="flex items-start gap-3">
         <Icon aria-hidden="true" className={`mt-0.5 w-5 h-5 shrink-0 ${TONE_TEXT[tone]}`} />
@@ -78,18 +79,13 @@ export function ReviewFailureCard({
 
       <div className="flex flex-wrap gap-3">
         {copy.actions.map((action) => (
-          <button
+          <Button
             key={action.label}
-            type="button"
+            variant={action.primary ? 'primary' : 'secondary'}
             onClick={action.intent === 'connect' ? onConnect : onRetry}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
-              action.primary
-                ? 'bg-violet-600 hover:bg-violet-500 text-white'
-                : 'border border-white/10 bg-white/5 hover:bg-white/10 text-slate-200'
-            }`}
           >
             {action.label}
-          </button>
+          </Button>
         ))}
       </div>
     </div>

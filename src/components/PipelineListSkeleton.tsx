@@ -10,10 +10,6 @@
  * line with its margin. A row with no description measures ~92px and one with
  * a two-line description ~135px, so no single number matches every row — this
  * one sits between them, which is the most a placeholder can do.
- *
- * Rows are flat shimmer blocks rather than `glass-panel` cards on purpose:
- * `backdrop-filter` is a budget on WebKitGTK, and spending a blur layer per
- * row on a surface nobody reads is the wrong place for it.
  */
 
 import type { ReactElement } from 'react';

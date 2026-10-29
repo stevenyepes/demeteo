@@ -114,7 +114,7 @@ export function SyncPanel({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <GitMerge className={`h-4 w-4 shrink-0 ${TONE_TEXT[model.tone]}`} />
-            <h3 className="truncate font-heading text-sm font-bold uppercase tracking-wider text-white">
+            <h3 className="truncate font-heading text-sm font-bold text-white">
               Branch sync
             </h3>
           </div>
@@ -156,7 +156,7 @@ export function SyncPanel({
 
         {model.showResolver && resolverSelection && (
           <div className="rounded-xl border border-white/5 bg-black/20 p-3.5">
-            <div className="mb-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            <div className="mb-2.5 text-[10px] font-bold text-slate-500">
               Resolve with
             </div>
             <SyncResolverOptions selection={resolverSelection} />
@@ -275,7 +275,7 @@ function SyncFacts({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+      <div className="mb-2 text-[10px] font-bold text-slate-500">
         {title}
       </div>
       {children}

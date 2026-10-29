@@ -80,3 +80,57 @@ fn the_refusal_names_the_branch_the_expectation_and_the_likely_cause() {
     assert!(present.contains("published from the desktop"), "{present}");
     assert!(absent.contains("expected it absent"), "{absent}");
 }
+
+const OTHER_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[test]
+fn a_remote_branch_at_the_local_commit_is_already_published() {
+    let output = format!("{SHA}\trefs/heads/demeteo/features/f-1\n");
+
+    assert!(already_published(SHA, &output, "demeteo/features/f-1"));
+}
+
+#[test]
+fn a_remote_branch_at_another_commit_is_not_published() {
+    let output = format!("{OTHER_SHA}\trefs/heads/demeteo/features/f-1\n");
+
+    assert!(!already_published(SHA, &output, "demeteo/features/f-1"));
+}
+
+#[test]
+fn a_shortened_sha_is_not_the_same_commit() {
+    let output = format!("{}\trefs/heads/b\n", &SHA[..12]);
+
+    assert!(!already_published(SHA, &output, "b"));
+    assert!(!already_published(
+        &SHA[..12],
+        &format!("{SHA}\trefs/heads/b\n"),
+        "b"
+    ));
+}
+
+#[test]
+fn an_absent_ref_or_a_sibling_branch_is_not_published() {
+    assert!(!already_published(SHA, "", "b"));
+    assert!(!already_published(
+        SHA,
+        &format!("{SHA}\trefs/heads/b/c\n"),
+        "b"
+    ));
+    assert!(!already_published(
+        SHA,
+        &format!("{SHA}\trefs/tags/b\n"),
+        "b"
+    ));
+}
+
+#[test]
+fn garbage_output_and_an_empty_local_head_are_not_published() {
+    assert!(!already_published(
+        SHA,
+        "fatal: could not read from remote",
+        "b"
+    ));
+    assert!(!already_published(SHA, "\n \n\t\n", "b"));
+    assert!(!already_published("", "\trefs/heads/b\n", "b"));
+}

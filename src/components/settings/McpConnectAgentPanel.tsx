@@ -17,6 +17,7 @@ import { MCP_AGENT_SETUP, type McpAgentSetup, type McpSetupStep } from '../../li
 import { reportError } from '../../lib/errorBus';
 import { TabBar } from '../ui/TabBar';
 import type { TabDef } from '../ui/TabBar';
+import { Button } from '../ui/Button';
 
 /** Generic glyphs, not brand logos — no icon/asset system exists for agent
  *  kinds anywhere in the app (`src/lib/agents.ts` is stringly-typed), and
@@ -51,7 +52,7 @@ function CopyableCommand({ command }: { command: string }) {
         type="button"
         onClick={handleCopy}
         aria-label="Copy command"
-        className="shrink-0 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-violet-500/10 hover:border-violet-500/30 hover:text-violet-400 text-slate-400 transition-all"
+        className="shrink-0 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white text-slate-400 transition-all"
       >
         {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
       </button>
@@ -74,16 +75,16 @@ function InstallSkillButton() {
     }
   };
   return (
-    <button
-      type="button"
+    <Button
+      size="sm"
       onClick={handleInstall}
       disabled={saving}
       title="Save into .claude/skills/demeteo-mcp/ in your project"
-      className="flex items-center gap-1.5 mt-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-violet-500/10 hover:border-violet-500/30 hover:text-violet-400 text-slate-300 transition-all disabled:opacity-50"
+      className="mt-1.5"
     >
       {saving ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
       Install skill
-    </button>
+    </Button>
   );
 }
 
@@ -168,7 +169,7 @@ export function McpConnectAgentPanel({ serverUrl }: { serverUrl: string }) {
 
   return (
     <div className="nested-card p-4 space-y-3">
-      <h4 className="font-heading text-xs font-semibold text-slate-300 uppercase tracking-wider">
+      <h4 className="font-heading text-xs font-semibold text-slate-300">
         Connect an agent
       </h4>
       <TabBar tabs={tabs} activeTab={selected} onChange={setSelected} ariaLabel="Agent to set up" size="sm" />

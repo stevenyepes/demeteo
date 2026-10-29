@@ -162,7 +162,7 @@ describe('TaskListArtifact', () => {
     // A missing `kind` used to interpolate the string "undefined" as a class,
     // which no stylesheet defines and no gate in `npm run checks` reports.
     expect(container.innerHTML).not.toContain('undefined');
-    expect(container.querySelector('.border-violet-500\\/50')).not.toBeNull();
+    expect(container.querySelector('.border-slate-500\\/50')).not.toBeNull();
     expect(screen.queryByText('Original decomposition')).not.toBeInTheDocument();
   });
 
@@ -220,7 +220,7 @@ describe('TaskListArtifact', () => {
     const { container } = render(<TaskListArtifact plan={plan} />);
 
     expect(container.innerHTML).not.toContain('undefined');
-    expect(container.querySelector('.border-violet-500\\/50')).not.toBeNull();
+    expect(container.querySelector('.border-slate-500\\/50')).not.toBeNull();
   });
 
   // Nothing rejects a repeat in these agent-written lists, and React reports a

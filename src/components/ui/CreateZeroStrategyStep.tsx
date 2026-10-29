@@ -20,7 +20,7 @@ const FieldInput: React.FC<{
   placeholder?: string;
 }> = ({ label, value, onChange, placeholder }) => (
   <div>
-    <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5">
+    <label className="block text-[10px] font-mono text-slate-400 mb-1.5">
       {label}
     </label>
     <input
@@ -28,7 +28,7 @@ const FieldInput: React.FC<{
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+      className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
     />
   </div>
 );
@@ -48,7 +48,7 @@ export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
+        <h3 className="font-heading font-semibold text-cyan-400 text-xs mb-1">
           Strategy detected
         </h3>
         <p className="text-sm text-slate-300">
@@ -60,10 +60,10 @@ export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
         <FieldInput label="Branch prefix" value={branchPrefix} onChange={onBranchPrefixChange} />
         <FieldInput label="Test command (optional)" value={testCommand} onChange={onTestCommandChange} placeholder="npm test" />
         <div>
-          <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5">
+          <label className="block text-[10px] font-mono text-slate-400 mb-1.5">
             Feature lifecycle
           </label>
-          <select value={featureLifecycle} onChange={(e) => onFeatureLifecycleChange(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50">
+          <select value={featureLifecycle} onChange={(e) => onFeatureLifecycleChange(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring">
             <option value="archive">Archive by default</option>
             <option value="keep">Keep active</option>
             <option value="auto_delete">Auto delete branch</option>
@@ -72,7 +72,7 @@ export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
       </div>
       {prTemplate && (
         <div>
-          <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5">
+          <label className="block text-[10px] font-mono text-slate-400 mb-1.5">
             Detected PR template
           </label>
           <div className="bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-32 overflow-y-auto whitespace-pre-wrap">

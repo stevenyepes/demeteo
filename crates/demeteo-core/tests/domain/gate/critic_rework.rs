@@ -15,6 +15,24 @@ fn standard_steps() -> Vec<StepConfig> {
     starter.steps
 }
 
+#[test]
+fn review_keys_lead_with_the_critics_executions_and_end_with_its_step_id() {
+    let steps = standard_steps();
+    let critic = steps
+        .iter()
+        .find(|s| s.id.as_ref() == "s-critic")
+        .expect("the critic is in the Standard pipeline");
+    let execs = [
+        execution(&steps, "s-gate-ship", "awaiting_gate"),
+        execution(&steps, "s-critic", "completed"),
+    ];
+
+    assert_eq!(
+        review_store_keys(&execs, critic),
+        ["se-s-critic".to_string(), "s-critic".to_string()]
+    );
+}
+
 fn execution(steps: &[StepConfig], step_id: &str, status: &str) -> StepExecution {
     let index = steps
         .iter()

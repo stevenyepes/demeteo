@@ -21,6 +21,7 @@ import type { ConfigOptionValue, Discovery, Machine, TerminalBranchOption } from
 import { useRunnerCompatibility } from '../../hooks/useRunnerCompatibility';
 import { AttachmentDropzone, type LaunchStageEntry } from '../AttachmentDropzone';
 import { RunnerVersionNotice } from '../RunnerVersionNotice';
+import { Button } from '../ui/Button';
 import { FieldLabel } from '../ui/FieldLabel';
 import { Modal } from '../ui/Modal';
 import { OptionPill } from './OptionPill';
@@ -232,10 +233,10 @@ export function NewDiscoveryModal({
         role="dialog"
         aria-modal="true"
         aria-label="New discovery"
-        className="glass-panel flex max-h-[85vh] flex-col overflow-hidden"
+        className="raised flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="shrink-0 border-b border-white/5 px-5 py-[18px]">
-          <p className="mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
+          <p className="mb-1.5 font-heading text-[11px] font-semibold text-cyan-400">
             demeteo
           </p>
           <h2 className="font-heading text-xl font-bold text-white">New discovery</h2>
@@ -445,9 +446,8 @@ export function NewDiscoveryModal({
           )}
         </div>
 
-        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 bg-[#0d0f14]/90 px-5 py-4">
-          <button
-            type="button"
+        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 px-5 py-4">
+          <Button
             onClick={() => {
               // A Discovery created before a failed `setDiscoveryBase` already
               // exists server-side; closing without `onCreated` would leave it
@@ -457,18 +457,12 @@ export function NewDiscoveryModal({
               if (createdDiscovery !== null) onCreated(createdDiscovery);
               else onClose();
             }}
-            className="btn-secondary text-[13px]"
           >
             {createdDiscovery !== null ? 'Close' : 'Cancel'}
-          </button>
-          <button
-            type="button"
-            onClick={start}
-            disabled={!canStart}
-            className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          </Button>
+          <Button variant="primary" onClick={start} disabled={!canStart}>
             {createdDiscovery !== null ? 'Retry base branch' : 'Start discovery'}
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>
