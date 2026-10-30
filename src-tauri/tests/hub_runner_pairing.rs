@@ -129,7 +129,7 @@ fn form_members(body: &str) -> Vec<(String, String)> {
 
 #[test]
 fn the_device_forms_carry_exactly_the_members_the_hub_reads() {
-    let machine = consent_machine("runner 1", "linux", "x86_64", "1.2.3");
+    let machine = consent_machine("runner 1", "unused", "linux", "x86_64", "1.2.3");
     assert_eq!(
         form_members(&device_authorization_form_body(
             "read spend gates",

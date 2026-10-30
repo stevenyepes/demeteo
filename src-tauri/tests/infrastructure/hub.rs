@@ -41,7 +41,7 @@ use crate::domain::hub_pairing::{
     hub_origin, hub_status, pairing_state, redirect_uri, socket_dial_url, socket_url, token_error,
     token_refusal, token_url, AuthorizeRequest, HubMachine, HubPairingError, HubPairingState,
     HubPins, HubSecret, HubStatus, KeyringStatus, PairingAnswer, PinnedPasskey, RefreshAnswer,
-    PAIR_TIMEOUT, SCOPES,
+    DESKTOP_INSTANCE_FALLBACK, PAIR_TIMEOUT, RUNNER_INSTANCE_FALLBACK, SCOPES,
 };
 use crate::domain::hub_request::log::{parse_scope, scope_as_str, MAX_LOG_PAGE};
 use crate::domain::hub_request::passkeys::{passkey_origin, PasskeyOrigin, TrustWrite};
@@ -1550,6 +1550,7 @@ async fn machine_core_reports_the_labels_pairing_sends() {
         sent,
         consent_machine(
             &sent.instance_name,
+            DESKTOP_INSTANCE_FALLBACK,
             std::env::consts::OS,
             std::env::consts::ARCH,
             ""
@@ -1848,22 +1849,28 @@ fn consent_labels_satisfy_the_hubs_label_rule() {
 #[test]
 fn consent_machine_labels_every_field_with_its_cap_and_fallback() {
     assert_eq!(
-        consent_machine("", " ", "\u{feff}", "\n"),
+        consent_machine("", "fallback", " ", "\u{feff}", "\n"),
         HubMachine {
-            instance_name: "Demeteo desktop".into(),
+            instance_name: "fallback".into(),
             os: "unknown".into(),
             arch: "unknown".into(),
             app_version: "unknown".into(),
         }
     );
     let long = "x".repeat(100);
-    let capped = consent_machine(&long, &long, &long, &long);
+    let capped = consent_machine(&long, "fallback", &long, &long, &long);
     assert_eq!(capped.instance_name, "x".repeat(64));
     assert_eq!(capped.os, "x".repeat(32));
     assert_eq!(capped.arch, "x".repeat(32));
     assert_eq!(capped.app_version, "x".repeat(32));
     assert_eq!(
-        consent_machine(" Ana's laptop\n", "linux", "x86_64", "1.4.0\u{200b}"),
+        consent_machine(
+            " Ana's laptop\n",
+            "fallback",
+            "linux",
+            "x86_64",
+            "1.4.0\u{200b}"
+        ),
         HubMachine {
             instance_name: "Ana's laptop".into(),
             os: "linux".into(),
@@ -1957,6 +1964,7 @@ async fn a_local_only_context_handed_a_store_pairs_through_it_and_binds_no_reque
         .expect("a store makes a LocalOnly context pair");
     assert!(hub.socket_wake().is_some(), "a socket to start");
     assert!(!hub.requests_bound());
+    assert_eq!(hub.instance_fallback(), RUNNER_INSTANCE_FALLBACK);
     let status = hub.status().expect("a status");
     assert_eq!(status.state, HubPairingState::Unpaired);
     assert_eq!(status.keyring_backend, "in-memory test store");
