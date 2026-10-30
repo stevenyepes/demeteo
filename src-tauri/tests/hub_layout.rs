@@ -450,12 +450,14 @@ fn sqlite_lockstep_detector_fires_on_violations() {
     assert_eq!(sqlite_lockstep_violations("").len(), 3);
 }
 
-/// The desktop's Hub socket client: the crates only it uses, the default
-/// feature that turns them on, and the one core file allowed to name the
-/// WebSocket crate (`crates/demeteo-core/src/adapters/hub/socket/ws_transport.rs`).
-/// `demeteo-runner` links core with default features off and must keep them
-/// off: it never pairs, and its musl binary should not carry a TLS client.
+/// The Hub socket client: the crates only it uses, the default feature that
+/// turns them on, and the one core file allowed to name the WebSocket crate
+/// (`crates/demeteo-core/src/adapters/hub/socket/ws_transport.rs`).
+/// `demeteo-runner` links core with default features off and turns the socket
+/// on by name: it pairs through its sealed store (decision 64), and a runner
+/// host has no keyring, so nothing may turn `keyring` back on for it.
 const HUB_SOCKET_FEATURE: &str = "hub-socket";
+const KEYRING_FEATURE: &str = "keyring";
 const HUB_SOCKET_DEPS: [&str; 3] = ["tokio-tungstenite", "rustls", "rustls-platform-verifier"];
 const RUNNER: &str = "demeteo-runner";
 const CORE_SRC: &str = "crates/demeteo-core/src";
@@ -519,11 +521,13 @@ fn hub_socket_dep_violations(core: &Value) -> Vec<String> {
     out
 }
 
-/// Every route by which the runner could turn the feature on: core's
-/// defaults, the feature named on the dependency, or a runner feature that
+/// The runner's normal `demeteo-core` dependency names `hub-socket` with
+/// core's defaults off, and no route turns `keyring` on: core's defaults, the
+/// feature named on any `demeteo-core` dependency, or a runner feature that
 /// forwards it.
-fn runner_hub_socket_violations(runner: &Value) -> Vec<String> {
+fn runner_feature_violations(runner: &Value) -> Vec<String> {
     let mut out = Vec::new();
+    let mut names_socket = false;
     for dep in dependencies(runner).iter().filter(|d| d["name"] == CORE) {
         let kind = dep["kind"].as_str().unwrap_or("normal");
         if dep["uses_default_features"] != Value::Bool(false) {
@@ -531,19 +535,29 @@ fn runner_hub_socket_violations(runner: &Value) -> Vec<String> {
                 "{RUNNER}'s {kind} `{CORE}` dependency must set `default-features = false`"
             ));
         }
-        let features = dep["features"].as_array().into_iter().flatten();
-        if features
+        let features: Vec<&str> = dep["features"]
+            .as_array()
+            .into_iter()
+            .flatten()
             .filter_map(Value::as_str)
-            .any(|f| f == HUB_SOCKET_FEATURE)
-        {
+            .collect();
+        if features.contains(&KEYRING_FEATURE) {
             out.push(format!(
-                "{RUNNER}'s {kind} `{CORE}` dependency enables `{HUB_SOCKET_FEATURE}`"
+                "{RUNNER}'s {kind} `{CORE}` dependency enables `{KEYRING_FEATURE}`"
             ));
         }
+        if kind == "normal" && features.contains(&HUB_SOCKET_FEATURE) {
+            names_socket = true;
+        }
+    }
+    if !names_socket {
+        out.push(format!(
+            "{RUNNER}'s normal `{CORE}` dependency does not enable `{HUB_SOCKET_FEATURE}`"
+        ));
     }
     let forwards = [
-        format!("{CORE}/{HUB_SOCKET_FEATURE}"),
-        format!("{CORE}?/{HUB_SOCKET_FEATURE}"),
+        format!("{CORE}/{KEYRING_FEATURE}"),
+        format!("{CORE}?/{KEYRING_FEATURE}"),
     ];
     if let Some(features) = runner["features"].as_object() {
         for (name, enables) in features {
@@ -553,7 +567,7 @@ fn runner_hub_socket_violations(runner: &Value) -> Vec<String> {
                 .any(|f| forwards.iter().any(|fw| fw == f))
             {
                 out.push(format!(
-                    "{RUNNER}'s `{name}` feature enables `{CORE}/{HUB_SOCKET_FEATURE}`"
+                    "{RUNNER}'s `{name}` feature enables `{CORE}/{KEYRING_FEATURE}`"
                 ));
             }
         }
@@ -599,11 +613,11 @@ fn hub_socket_deps_are_optional_and_on_by_default() {
 }
 
 #[test]
-fn the_runner_never_enables_hub_socket() {
+fn the_runner_carries_the_socket_and_never_the_keyring() {
     let metadata = workspace_metadata();
     let runner =
         package(&metadata, RUNNER).unwrap_or_else(|| panic!("`{RUNNER}` package not found"));
-    let violations = runner_hub_socket_violations(runner);
+    let violations = runner_feature_violations(runner);
     assert!(
         violations.is_empty(),
         "crates/{RUNNER}/Cargo.toml:\n  - {}",
@@ -679,26 +693,37 @@ fn hub_socket_detectors_fire_on_violations() {
 
     let runner = |uses_default: bool, features: Vec<&str>, own: Value| {
         serde_json::json!({
-            "dependencies": [{
-                "name": CORE, "kind": null,
-                "uses_default_features": uses_default, "features": features,
-            }],
+            "dependencies": [
+                {
+                    "name": CORE, "kind": null,
+                    "uses_default_features": uses_default, "features": features,
+                },
+                {
+                    "name": CORE, "kind": "dev",
+                    "uses_default_features": false, "features": ["test-support"],
+                },
+            ],
             "features": own,
         })
     };
-    let clean = runner(false, vec!["vendored-openssl"], serde_json::json!({}));
-    assert!(runner_hub_socket_violations(&clean).is_empty());
-    let defaults = runner(true, vec![], serde_json::json!({}));
-    assert_eq!(runner_hub_socket_violations(&defaults).len(), 1);
-    let named = runner(false, vec![HUB_SOCKET_FEATURE], serde_json::json!({}));
-    assert_eq!(runner_hub_socket_violations(&named).len(), 1);
+    let socket = vec!["vendored-openssl", HUB_SOCKET_FEATURE];
+    let clean = runner(false, socket.clone(), serde_json::json!({}));
+    assert!(runner_feature_violations(&clean).is_empty());
+    let defaults = runner(true, socket.clone(), serde_json::json!({}));
+    assert_eq!(runner_feature_violations(&defaults).len(), 1);
+    let no_socket = runner(false, vec!["vendored-openssl"], serde_json::json!({}));
+    assert_eq!(runner_feature_violations(&no_socket).len(), 1);
+    let mut with_keyring = socket.clone();
+    with_keyring.push(KEYRING_FEATURE);
+    let keyring = runner(false, with_keyring, serde_json::json!({}));
+    assert_eq!(runner_feature_violations(&keyring).len(), 1);
     for forward in [
-        format!("{CORE}/{HUB_SOCKET_FEATURE}"),
-        format!("{CORE}?/{HUB_SOCKET_FEATURE}"),
+        format!("{CORE}/{KEYRING_FEATURE}"),
+        format!("{CORE}?/{KEYRING_FEATURE}"),
     ] {
         let own = serde_json::json!({ "desktop": [forward] });
         assert_eq!(
-            runner_hub_socket_violations(&runner(false, vec![], own)).len(),
+            runner_feature_violations(&runner(false, socket.clone(), own)).len(),
             1
         );
     }

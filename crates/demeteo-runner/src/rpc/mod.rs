@@ -15,6 +15,7 @@
 mod branch;
 mod credentials;
 mod gates;
+mod hub;
 mod lifecycle;
 mod ownership;
 mod publish;
@@ -136,6 +137,9 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
         .unwrap_or("")
         .to_string();
     let cid = client_id.as_str();
+    if let Some(result) = hub::dispatch_hub(&svc.hub, &req.method, &req.params).await {
+        return respond(req.id, result);
+    }
     let result = match req.method.as_str() {
         "health" => serde_json::to_value(health_info()).map_err(|e| e.to_string()),
         "submit_run" => lifecycle::submit_run(svc, req.params, cid)
@@ -190,14 +194,18 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         other => Err(format!("unknown method: {}", other)),
     };
+    respond(req.id, result)
+}
+
+fn respond(id: u64, result: Result<serde_json::Value, String>) -> Response {
     match result {
         Ok(v) => Response {
-            id: req.id,
+            id,
             result: Some(v),
             error: None,
         },
         Err(e) => Response {
-            id: req.id,
+            id,
             result: None,
             error: Some(e),
         },
