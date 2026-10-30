@@ -1,11 +1,13 @@
 use crate::application::remote_runs::{release_on_runner, RunnerCacheRpc};
 use crate::application::worktree::{project_clone, resolve_project_clone};
 use crate::domain::cache_release::cache_releasable;
+use crate::domain::hub_socket::removal_logs_cancel;
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::Feature;
 use crate::domain::runner_cache_release::{CacheReleaseReason, PendingRunnerRelease};
 use crate::ports::db::{AppSettingsRepository, FeaturePatch, FeatureRepository, ProjectRepository};
 use crate::ports::execution::ExecutionPort;
+use crate::ports::notification::DomainEvent;
 use crate::ports::remote_run_mirror::{RemoteRunMirror, RemoteRunMirrorPort, RunnerCachePort};
 use crate::ports::worktree_ops::{BranchDeleted, FeatureCachePort, WorktreeOpsPort};
 use crate::state::AppContext;
@@ -312,6 +314,13 @@ async fn finalize_feature_cleanup(
     // through both local writes means it either hydrates before this terminal
     // transition, or reclaims the row after dismissal and finds it absent.
     let _guard = ctx.remote_run_mirror_guard.lock().await;
+    let before = ctx.features.get(feature_id)?.map(|f| f.status);
+    if before.as_deref().is_some_and(removal_logs_cancel) {
+        let _ = ctx.notif.emit(&DomainEvent::FeatureStatusChanged {
+            feature_id: feature_id.clone(),
+            status: "cancelled".to_string(),
+        });
+    }
     persist_feature_cleanup(&*ctx.features, &*ctx.remote_run_mirror, feature_id, status)
 }
 

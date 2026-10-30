@@ -20,12 +20,19 @@ use crate::ports::worktree_ops::FeatureCachePort;
 #[derive(Default)]
 struct CountingNotif {
     mr_merged: AtomicUsize,
+    completed: AtomicUsize,
 }
 
 impl NotificationPort for CountingNotif {
     fn emit(&self, event: &DomainEvent) -> Result<(), String> {
-        if matches!(event, DomainEvent::MrMerged { .. }) {
-            self.mr_merged.fetch_add(1, Ordering::SeqCst);
+        match event {
+            DomainEvent::MrMerged { .. } => {
+                self.mr_merged.fetch_add(1, Ordering::SeqCst);
+            }
+            DomainEvent::FeatureStatusChanged { status, .. } if status == "completed" => {
+                self.completed.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -112,6 +119,11 @@ fn record_merged_completes_feature_and_notifies_once() {
 
     assert_eq!(mr_merged_count(&adapter, "p-1"), 1);
     assert_eq!(notif.mr_merged.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        notif.completed.load(Ordering::SeqCst),
+        1,
+        "the run log, and a paired Hub, learn of the merge only from this event"
+    );
 
     let stored = FeatureRepository::get(&adapter, &feature.id)
         .unwrap()

@@ -6,6 +6,7 @@ use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, SequenceStateMirror, StepExecution};
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
+use crate::ports::notification::DomainEvent;
 use crate::ports::remote_run_mirror::RemoteRunMirror;
 use crate::state::AppContext;
 
@@ -119,12 +120,23 @@ fn mark_unhydrated_shadow(ctx: &AppContext, feature_id: &str, run_status: &str) 
         return;
     }
     let patch = FeaturePatch {
-        status: Some(status),
+        status: Some(status.clone()),
         ..Default::default()
     };
-    if let Err(error) = ctx.features.update(&feature_id, &patch) {
-        eprintln!("shadow status write failed for feature {feature_id}: {error}");
+    match ctx.features.update(&feature_id, &patch) {
+        Ok(()) => log_shadow_status(ctx, &feature_id, &status),
+        Err(error) => eprintln!("shadow status write failed for feature {feature_id}: {error}"),
     }
+}
+
+/// Logs a shadow row's new status as the step executor logs a local one.
+/// A detached run's own events stay on its runner, so this row is the only
+/// word of how it ended the desktop's log — and a paired Hub — ever gets.
+fn log_shadow_status(ctx: &AppContext, feature_id: &FeatureId, status: &str) {
+    let _ = ctx.notif.emit(&DomainEvent::FeatureStatusChanged {
+        feature_id: feature_id.clone(),
+        status: status.to_string(),
+    });
 }
 
 pub(super) async fn hydrate_shadow_feature(
@@ -163,12 +175,21 @@ pub(super) async fn hydrate_shadow_feature(
     let steps: Vec<StepExecution> = serde_json::from_value(steps_value)
         .map_err(|error| format!("shadow steps decode: {error}"))?;
     let feature_id = feature.id.clone();
-    match ctx.features.get(&feature_id)? {
-        None => ctx.features.add(feature.clone())?,
-        Some(local) => ctx.features.update(
-            &feature_id,
-            &shadow_feature_patch(&feature, local.mr_state.as_deref()),
-        )?,
+    let before = match ctx.features.get(&feature_id)? {
+        None => {
+            ctx.features.add(feature.clone())?;
+            None
+        }
+        Some(local) => {
+            ctx.features.update(
+                &feature_id,
+                &shadow_feature_patch(&feature, local.mr_state.as_deref()),
+            )?;
+            Some(local.status)
+        }
+    };
+    if before.as_deref() != Some(feature.status.as_str()) {
+        log_shadow_status(ctx, &feature_id, &feature.status);
     }
 
     let store = FsArtifactStore::new(ctx.app_data_dir.clone());

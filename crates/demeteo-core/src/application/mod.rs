@@ -15,6 +15,7 @@ pub mod memory;
 pub mod projects;
 pub mod providers;
 pub mod remote_runs;
+pub mod run_end_backfill;
 pub mod run_view;
 pub mod step_control;
 pub mod sync_session;

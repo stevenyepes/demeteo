@@ -82,7 +82,7 @@ fn text<'a>(payload: &'a Value, field: &str) -> Option<&'a str> {
     payload.get(field)?.as_str()
 }
 
-fn feature_kind(status: &str) -> Option<RunEventKind> {
+pub(super) fn feature_kind(status: &str) -> Option<RunEventKind> {
     match status {
         "running" => Some(RunEventKind::FeatureStarted),
         // The run ended well and only the PR is left to open (see

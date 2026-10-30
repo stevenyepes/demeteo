@@ -10,6 +10,7 @@ use crate::application::remote_runs::{refresh_run_for_feature, FeatureRunRefresh
 use crate::application::run_view::FailureExplanation;
 use crate::application::tickets;
 use crate::domain::gate::pending::awaiting_unrecorded_gate;
+use crate::domain::hub_socket::run_has_ended;
 use crate::domain::ids::{DiscoveryId, FeatureId, MachineId, ProjectId, StepExecutionId};
 use crate::domain::models::{
     Discovery, DiscoveryStatus, Feature, GateDecision, Machine, Project, StepAttempt, StepExecution,
@@ -192,7 +193,8 @@ pub fn list_step_attempts(
 }
 
 /// Every gate awaiting a decision across a project's — or, when
-/// `project_id` is `None`, every project's — active features.
+/// `project_id` is `None`, every project's — active features, less those
+/// whose run has ended ([`run_has_ended`]).
 ///
 /// A gate with a pending `gate_decisions` row is reported from that row. One
 /// without — a run on a remote machine, whose decisions live on the runner —
@@ -209,6 +211,9 @@ pub fn list_pending_gates(
 ) -> Result<Vec<PendingGate>, String> {
     let mut pending = Vec::new();
     for feature in list_features(ctx, project_id)? {
+        if run_has_ended(&feature.status) {
+            continue;
+        }
         let decision = match ctx.gates.pending_for_feature(&feature.id)? {
             Some(recorded) => Some(recorded),
             None => {

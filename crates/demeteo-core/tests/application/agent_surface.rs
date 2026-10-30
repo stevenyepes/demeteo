@@ -389,6 +389,40 @@ async fn a_mirrored_gate_that_has_been_decided_is_not_listed() {
     assert!(list_pending_gates(&ctx, None).unwrap().is_empty());
 }
 
+/// A merge or a removal settles a feature without deciding its gate, so the
+/// row outlives the run; no decision on it could reach anything.
+#[tokio::test]
+async fn a_pending_gate_row_of_a_run_that_has_ended_is_not_listed() {
+    for ended in ["completed", "awaiting_mr", "failed", "cancelled"] {
+        let (ctx, _) =
+            feature_with_mirrored_gate(&format!("gates-ended-{ended}"), "awaiting_gate").await;
+        ctx.features
+            .update(
+                &FeatureId::from("f-detached".to_string()),
+                &crate::ports::db::FeaturePatch {
+                    status: Some(ended.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        ctx.gates
+            .create(GateDecision {
+                id: GateDecisionId::from("gd-1".to_string()),
+                step_execution_id: StepExecutionId::from("se-gate".to_string()),
+                decision: None,
+                feedback: None,
+                created_at: 0,
+                auto_approved: false,
+            })
+            .unwrap();
+
+        assert!(
+            list_pending_gates(&ctx, None).unwrap().is_empty(),
+            "{ended}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_local_gate_with_a_pending_row_is_listed_once_under_its_own_decision_id() {
     let (ctx, _) = feature_with_mirrored_gate("gates-local-once", "awaiting_gate").await;
