@@ -17,6 +17,8 @@ const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/sign-in', { name: 'sign-in' }],
   ['#/passkeys', { name: 'passkeys' }],
   ['#/pair/eyJyZXF1ZXN0IjoiMSJ9', { name: 'pair', request: 'eyJyZXF1ZXN0IjoiMSJ9' }],
+  ['#/device', { name: 'device' }],
+  ['#/device/BCDF-GHJK', { name: 'device', userCode: 'BCDF-GHJK' }],
 ];
 
 describe('routeHref', () => {
@@ -89,6 +91,10 @@ describe('parseRoute', () => {
       expect(parseRoute(hash).name).toBe('not-found');
     },
   );
+
+  it.each(['#/device//', '#/device/a/b'])('reports %s as not-found: a device page names one code or none', (hash) => {
+    expect(parseRoute(hash).name).toBe('not-found');
+  });
 
   it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/signin', '#/Sign-In'])(
     'reports %s as not-found rather than as an auth route',

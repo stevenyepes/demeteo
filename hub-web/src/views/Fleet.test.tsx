@@ -31,6 +31,7 @@ function instance(id: string, overrides: Partial<FleetInstance>): FleetInstance 
     arch: 'x86_64',
     version: '1.4.2',
     scopes: ['read'],
+    kind: 'desktop',
     readGranted: true,
     lastSeen: NOW - 60,
     liveRuns: 0,

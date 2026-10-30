@@ -372,6 +372,7 @@ function fleetInstance(overrides: Partial<FleetInstance> = {}): FleetInstance {
     arch: 'x86_64',
     version: '1.0.0',
     scopes: ['read', 'spend'],
+    kind: 'desktop',
     readGranted: true,
     lastSeen: 1_700_000_000,
     liveRuns: 0,

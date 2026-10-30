@@ -1,8 +1,9 @@
-import { Monitor } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { CeremonyError } from '../components/CeremonyError';
 import { PageHeader } from '../components/PageHeader';
+import { PairingClaims } from '../components/PairingClaims';
+import { PairingScopes } from '../components/PairingScopes';
 import { HubApiError } from '../lib/api';
 import {
   approvePairing,
@@ -14,13 +15,6 @@ import {
 } from '../lib/pairing';
 import { routeHref } from '../lib/router';
 import { Button } from '../../../src/components/ui/Button';
-
-/** What each scope allows, as `docs/HUB.md` §7 states it. */
-const ALLOWS: Record<PairingScope, string> = {
-  read: 'This instance sends its events and snapshots to the Hub.',
-  spend: 'The Hub may start, cancel and re-point runs that spend money.',
-  gates: 'The Hub may relay a gate decision to this instance.',
-};
 
 const EXPIRED_HINT =
   'This pairing request has expired or was already answered. Start pairing again from Demeteo on the machine.';
@@ -52,13 +46,8 @@ interface ApprovePairingProps {
 }
 
 export function ApprovePairing({ request }: ApprovePairingProps) {
-  const id = useId();
   const [prompt, setPrompt] = useState<PairingPrompt | null>(null);
-  /**
-   * What the user took away, not what they kept: the scopes approved are the
-   * requested ones less these, so no state this view can reach holds a scope
-   * the machine did not ask for.
-   */
+  /** `PairingScopes` says why this holds what was taken away. */
   const [withheld, setWithheld] = useState<PairingScope[]>([]);
   const [busy, setBusy] = useState(false);
   const [answered, setAnswered] = useState(false);
@@ -117,75 +106,20 @@ export function ApprovePairing({ request }: ApprovePairingProps) {
       {prompt === null && failure === null && <p className="text-sm text-slate-400">Reading the pairing request…</p>}
       {prompt !== null && (
         <div className="panel flex max-w-2xl flex-col gap-6 p-6">
-          <section aria-labelledby={`${id}-claimed`} className="flex items-start gap-4">
-            <span
-              aria-hidden="true"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-hairline bg-white/5 text-slate-300"
-            >
-              <Monitor className="h-5 w-5" />
-            </span>
-            <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <h2 id={`${id}-claimed`} className="text-xs font-medium text-slate-400">
-                Claimed by the machine
-              </h2>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                <dt className="text-slate-400">Name</dt>
-                <dd className="font-heading font-semibold text-white break-all">{prompt.instanceName}</dd>
-                <dt className="text-slate-400">OS</dt>
-                <dd className="font-mono text-slate-200 break-all">{prompt.os}</dd>
-                <dt className="text-slate-400">Architecture</dt>
-                <dd className="font-mono text-slate-200 break-all">{prompt.arch}</dd>
-                <dt className="text-slate-400">Demeteo version</dt>
-                <dd className="font-mono text-slate-200 break-all">{prompt.appVersion}</dd>
-              </dl>
-              <p className="text-xs text-slate-400">
-                The machine reported these about itself. The Hub has not verified them.
-              </p>
-            </div>
-          </section>
-          <section
-            aria-labelledby={`${id}-key`}
-            className="flex flex-col gap-2 rounded-md border border-hairline bg-surface-well px-4 py-3"
-          >
-            <h2 id={`${id}-key`} className="text-xs font-medium text-slate-400">
-              Device key fingerprint
-            </h2>
-            <p className="font-mono text-lg text-white break-all">{prompt.fingerprint}</p>
-            <p className="text-xs text-slate-400">
-              Check that this matches the fingerprint Demeteo shows on the machine. If it does not,
-              choose Deny.
-            </p>
-          </section>
-          <fieldset className="flex flex-col">
-            <legend className="text-xs font-medium text-slate-400">Scopes requested</legend>
-            <p className="mt-1 mb-2 text-xs text-slate-400">
-              Uncheck any you do not want to grant. Nothing the machine did not ask for can be added
-              here.
-            </p>
-            <div className="flex flex-col divide-y divide-hairline rounded-md border border-hairline">
-              {prompt.scopes.map((scope) => (
-                <div key={scope} className="flex items-start gap-3 px-4 py-3">
-                  <input
-                    id={`${id}-${scope}`}
-                    type="checkbox"
-                    checked={!withheld.includes(scope)}
-                    onChange={(event) => toggle(scope, event.target.checked)}
-                    disabled={!answerable}
-                    aria-describedby={`${id}-${scope}-allows`}
-                    className="mt-0.5 accent-accent disabled:cursor-not-allowed disabled:opacity-40"
-                  />
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <label htmlFor={`${id}-${scope}`} className="font-mono text-sm text-slate-200">
-                      {scope}
-                    </label>
-                    <span id={`${id}-${scope}-allows`} className="text-xs text-slate-400">
-                      {ALLOWS[scope]}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </fieldset>
+          <PairingClaims
+            kind="desktop"
+            instanceName={prompt.instanceName}
+            os={prompt.os}
+            arch={prompt.arch}
+            appVersion={prompt.appVersion}
+            fingerprint={prompt.fingerprint}
+          />
+          <PairingScopes
+            requested={prompt.scopes}
+            withheld={withheld}
+            onToggle={toggle}
+            disabled={!answerable}
+          />
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="primary"

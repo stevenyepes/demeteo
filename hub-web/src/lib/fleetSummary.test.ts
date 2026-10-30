@@ -20,6 +20,7 @@ function instance(overrides: Partial<FleetInstance>): FleetInstance {
     arch: null,
     version: null,
     scopes: ['read'],
+    kind: 'desktop',
     readGranted: true,
     lastSeen: null,
     liveRuns: 0,
