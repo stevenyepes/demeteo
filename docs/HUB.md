@@ -27,13 +27,14 @@ full.
 | # | Decision | Rejected | Why |
 |---|----------|----------|-----|
 | 62 | A browser control plane (the Hub) is in scope; reverses [`OPEN_QUESTIONS.md` §17](OPEN_QUESTIONS.md#17-other-captured-items) | keeping a web companion out of scope | one view over a fleet, and a gate decided away from the machine, are needs the desktop cannot meet |
-| 63 | Hosted, multi-tenant; a tenant is one person with one fleet | self-hosted single-tenant; teams in v1 | the user wants a hosted service; the passkey endorsement chain has no notion of membership |
-| 64 | Desktops pair and hold one outbound `wss`; the Hub never dials a desktop; runners are not paired | the runner dialing out; the Hub storing PATs or long-lived SSH keys | a Hub token at rest on a host with no keyring, plus a second transport; standing credentials for every tenant — see [decision 64](DECISIONS.md#64--hub-instances-detail) |
+| 63 | Single tenant: one person, who also operates the Hub | hosted multi-tenant (the 2026-10-02 answer); teams | a Hub that mints git tokens (71) would put every tenant's repositories behind one breach; the passkey endorsement chain has no notion of membership |
+| 64 | Desktops and runners pair and each hold one outbound `wss`; the Hub dials neither | unpaired runners relayed by a desktop (the 2026-10-02 answer); the Hub dialing runners over SSH; the Hub storing PATs or long-lived SSH keys | a run must start while the desktop is off; NAT; a runner's pairing secrets are sealed by `systemd-creds` — see [decision 64](DECISIONS.md#64--hub-instances-detail) |
 | 65 | The Hub builds future runner `RunSpec`s from desktop-reported snapshots with local paths stripped | Hub-side authoring of Projects and Workflows; Workflows read from repo files | a second editor plus drift; a new concept |
 | 66 | A Gate may be decided from the Hub by a WebAuthn assertion the desktop verifies against pinned passkeys | a session plus a step-up for some gates; read-only gates; manual per-desktop passkey acceptance | a compromised Hub could approve ordinary gates; see §8 |
 | 67 | Scopes `read` / `spend` / `gates`, toggled and enforced on the instance; local per-run and rolling-24-hour ceilings | a `logs` scope; MCP's `configure`; toggle-only scopes | transcripts and diffs never leave an instance; a Hub-supplied cap is a cap the Hub can raise — see §7 |
 | 68 | Postgres plus OpenBao (Transit) as Docker Compose: `hub`, `postgres`, `openbao`, `caddy` | HashiCorp Vault; Cosmian/Eviden KMS | BSL is not open source; source-available licensing — see §9 |
 | 69 | `demeteo-hub`, `demeteo-hub-protocol` and `hub-web/` | the Hub linking `demeteo-core` in v1 | it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls |
+| 71 | The Hub mints a short-lived git token per runner run, and stores none: from a GitHub App key held in OpenBao, or from a GitLab bot user's OAuth refresh token | a runner storing its own git credential; the Hub storing PATs; SSH certificate authorities | nothing standing on an idle runner; one place to revoke; acceptable only single-tenant — see [decision 71](DECISIONS.md#71--runner-git-credentials-detail) |
 
 ---
 
@@ -50,7 +51,7 @@ full.
 | Desktop side: Settings › Hub tab | **built** — `src/components/settings/HubTab.tsx`. Outside `ExecutionMode::Router` it shows only the local toggles, ceilings, passkeys and activity log. It pairs and disconnects; shows the fingerprint, this machine as the Hub sees it (`hub_machine`), and the socket's state, sync, Hello → first-ack latency and why it stopped (`hub_connection`); sets the toggles and ceilings of §7 through `hub_policy_set`; lists the trusted passkeys as pinned or endorsed (`hub_trusted_passkeys`); and shows the activity log (`hub_request_log`). It polls the connection and the log every 5 s while open. `spend` and `gates` still default to off, so every request that needs one is refused until the user turns it on |
 | Desktop side: passkey pin set, request verification, local ceilings | **built** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`, and each passkey's signature counter by `V66__hub_passkey_sign_count.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). The WebAuthn assertion a `gate_decision` or a `passkey_revocation` carries is verified on the desktop against the pinned set before the request has any effect: a gate is then decided by the desktop's own `gate_decide`, and a key is removed in one transaction with the signer's counter (§8). Every `passkey_endorsement` is consumed and refused `unknown_kind` without its assertion being read (§11 item 20). A gate of a run a `demeteo-runner` owns is not decided this way yet: it is refused `runner_owned` (§10) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
-| Runner dispatch from the Hub | **not built, and not part of this ticket set** — see §10 |
+| Runner dispatch from the Hub | **decided, not built** — runners pair and the Hub mints their git tokens (decisions 64 and 71); see §10 |
 
 The design mockup in [`hub-design/`](hub-design/README.md) exists. It is a
 picture of the Hub, not a part of it, and where it disagrees with this document
@@ -96,6 +97,7 @@ judged by what that attacker cannot do.
 | **Attachments**, briefly | user-authored content the browser sent: a file the user attached to a Feature. Encrypted at rest, deleted after the instance fetches it — §6.3 |
 | Feature titles and harness kinds | the other user-authored content on the Hub: the title of each of an instance's newest Features, scrubbed and cut to 200 characters, in its snapshot, and the kinds of harness it registered. Sent only with `read` on, replaced by the next snapshot ([decision 70](DECISIONS.md#1-the-locked-decisions), §5). A Feature's description, prompts and PR text have no field |
 | Its own server secrets | in OpenBao, or encrypted under Transit — §9 |
+| The GitHub App private key, **decided, not built** | imported into OpenBao Transit and used there, never in the Hub process; it mints a one-repository token per runner run, which is never stored ([decision 71](DECISIONS.md#71--runner-git-credentials-detail)) |
 
 ### What a compromised Hub can and cannot do
 
@@ -121,7 +123,9 @@ judged by what that attacker cannot do.
 ## 4. Pairing
 
 Pairing makes one **desktop** an instance of one tenant. A `demeteo-runner` host
-does not pair (§10). It reuses the shape of the OAuth listener in
+will pair too, by device code approved with a passkey
+([decision 64](DECISIONS.md#64--hub-instances-detail)); that flow is decided and
+not built, and what follows is the desktop's. It reuses the shape of the OAuth listener in
 [MCP §5](MCP_INTEGRATION.md#5-authorization) — loopback, PKCE `S256`, a consent the
 human signs — and differs from it on purpose.
 
@@ -1707,31 +1711,32 @@ token, the socket (§5) and the attachment fetch (§6.3), and both are admitted
 by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
 `access_verdict` in [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs).
 
-**Runner dispatch is out of scope for this ticket set,** and a separate discovery
-owns it. A `demeteo-runner` host is not paired with the Hub (decision 64), and no
-request kind in §6 targets one.
+**Runner dispatch is decided and not built.** Decisions
+[64](DECISIONS.md#64--hub-instances-detail) and
+[71](DECISIONS.md#71--runner-git-credentials-detail) settle its shape: a
+`demeteo-runner` host pairs and holds its own outbound socket, verifying,
+enforcing and reporting as a desktop does; the Hub builds the `RunSpec` from the
+last snapshot a paired desktop reported (§5); and the Hub mints each run's git
+token from a GitHub App key in OpenBao, delivered in the signed request and
+refreshed over the socket. Until it is built, no request kind in §6 targets a
+runner.
 
-What that discovery would pursue, recorded so it is not re-derived and **not
-decided here**: the Hub drives runners over SSH the way a desktop does, using
-per-run GitHub App installation tokens and GitLab OAuth short-lived access tokens
-instead of stored PATs, and per-tenant SSH CAs held in the KMS that mint short-lived
-user certificates. It builds a `RunSpec` from the last snapshot a paired desktop
-reported (§5). It is gated on the SSH-certificate spike, ticket `hub-ssh-cert-spike`.
-
-Two things about that plan are easy to get wrong:
+Two things about it are easy to get wrong:
 
 - [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) says scoped-token minting is not
-  implemented and standing PAT injection is what ships. That is still true. The
-  per-run tokens above are the Hub's *future* answer, not the current runner's.
-- **Rejected: the runner dialing out to the Hub.** It would need a Hub token at rest
-  on a host with no keyring (the `keyring` feature note in
-  `crates/demeteo-core/Cargo.toml`, and `crates/demeteo-runner/src/credentials.rs`),
-  plus a second transport to the runner. **Rejected: the Hub storing PATs or
-  long-lived SSH keys.**
+  implemented and standing PAT injection is what ships. That is still true for
+  desktop-submitted runs, and stays true after runner dispatch lands: only a run
+  the Hub starts gets a minted token.
+- **The socket is not an execution transport.** A Hub-started run executes
+  through the runner's own local `ExecutionPort`, and a Hub request must land in
+  the same application functions a desktop's control RPC does (decision 64).
 
-The mockup's printed-code runner pairing
-(`demeteo-runner hub pair <url>`) is superseded by this decision;
-[`hub-design/README.md`](hub-design/README.md) lists it.
+A runner pairs by device code (`demeteo-runner hub pair <url>`), approved on the
+Hub with a passkey, and its scopes and ceilings are set on the runner by its CLI
+or by a desktop over SSH (decision 64). GitLab runs get their tokens from a
+dedicated bot user's OAuth authorization (decision 71).
+[`hub-design/README.md`](hub-design/README.md) lists the mockup's version of the
+pairing.
 
 ---
 

@@ -71,14 +71,15 @@
 | 60 | Shipping on a clean review | **A fourth gate-autonomy level, `clean`**, between `review` and `full` ([decision 57](#1-the-locked-decisions)): as `review`, and a `dangerous` gate approves itself too when the review step before it reports no critical and no major issue. **A review is a step field** — `StepConfig.review_artifact` names the declared artifact — and the engine appends the format to that step's prompt, so a workflow built on the canvas is covered without its author writing the format. **The counts decide**: the review ends with `{"review": {"critical", "major", "minor"}}`; minor issues never hold the gate; a written `## Verdict` that disagrees on whether the review blocks makes it unreadable. **Every unreadable case asks a person** — no counts, no verdict, a review step that has not completed, an artifact missing from the store, a review file the step's turn found at its path and did not write, or any step other than a gate that could run after the review and before the gate. That last is decided on the graph, not on list order: the review must be upstream of the gate, and every other non-gate step that is not downstream of the gate must be upstream of the review. Still approval only: a blocking review parks the gate, it is never turned into a redirect. Unrelated to [decision 50](#1-the-locked-decisions): the approval is the project's own policy, and no MCP client can grant or trigger it. **Rejected:** trusting the verdict alone (the Standard critic prompt never defined `PASS_WITH_NOTES`, so it could sit over major issues); counting bullets under the headings; a separate toggle beside the level; a per-finding list for now. Policy: `crates/demeteo-core/src/domain/gate/review_contract.rs`. | 2026-10-11 |
 | 61 | Visual direction | **A quiet instrument** ([AGENTS.md §4](../AGENTS.md#4-visual-design)): solid surfaces at three depths with hairline borders, blur only on overlays, colour spent only on meaning, no glow, gradients or decorative effects, WCAG 2.2 AA. The accent is indigo **"Signal"**, not stock violet-500: fill `#5a60c2` (white label 5.40:1), hover `#6269cc`, text `#838ef4`, focus ring `#6e78db`, selected border `#6972c0`, selected tint `rgba(90,96,194,.16)`. Stock violet failed AA for white text (4.23:1) and its focus and selection borders measured under 2:1. Status hues stay separate and resolve through `runStatus.ts`; no status uses the accent hue. ⚠️ **Supersedes the "dark neon glassmorphism" language** formerly in AGENTS.md §4 and `UX_JOURNEYS.md` §2, retired because it is the look AI generators default to and its mandate made every agent rebuild it. | 2026-10-20 design audit |
 | 62 | Web companion is in scope | **A browser control plane, the Demeteo Hub, is in scope** over many Demeteo instances. This **reverses** the position in [OPEN_QUESTIONS.md §17](OPEN_QUESTIONS.md#17-other-captured-items) ("Mobile / web companion — explicitly out of scope"). **Rejected:** keeping it out of scope — the design in [hub-design/](hub-design/README.md) answers a need the desktop cannot (one view over a fleet, a gate decided away from the machine), and the invariants it must not break are recorded below instead. Detail: [HUB.md §1](HUB.md#1-summary). | 2026-10-02 |
-| 63 | Hub tenancy | **A hosted, multi-tenant service where a tenant is one person with one fleet.** **Rejected:** self-hosted single-tenant — the user wants a hosted service; and teams in v1 — the passkey endorsement chain of [decision 66](#66--hub-gate-decisions-detail) has no notion of membership, so a second person in a tenant would have no defined way to be trusted or revoked. Detail: [HUB.md §1](HUB.md#1-summary). | 2026-10-02 |
-| 64 | Hub instances | **Desktops (macOS, Linux, Windows) pair with the Hub and hold one outbound `wss`; the Hub never dials a desktop.** Desktops keep their own provider keys and git tokens. **`demeteo-runner` hosts are not paired.** **Rejected:** the runner dialing out to the Hub — it would need a Hub token at rest on a host with no keyring, and a second transport to the runner; and the Hub storing PATs or long-lived SSH keys. Detail: [64](#64--hub-instances-detail). | 2026-10-02 |
+| 63 | Hub tenancy | **Single tenant: one Hub serves one person, who also operates it.** A Hub that mints git tokens ([decision 71](#1-the-locked-decisions)) would, deployed for many tenants, be one breach away from write access to every tenant's repositories. **Rejected:** a hosted multi-tenant service (the 2026-10-02 answer, kept in [§2](#63--hub-tenancy)); teams, for the unchanged reason that the passkey endorsement chain of [decision 66](#66--hub-gate-decisions-detail) has no notion of membership. Detail: [71](#71--runner-git-credentials-detail). | 2026-10-29 |
+| 64 | Hub instances | **Desktops and `demeteo-runner` hosts both pair with the Hub, and each holds one outbound `wss`; the Hub never dials either.** A paired runner is an instance in its own right: it verifies requests and gate assertions against keys it pinned, enforces its own scopes and ceilings, and reports its own runs, so a run the Hub starts on it needs no desktop online. Its Hub device key and refresh token are stored in its SQLite, encrypted under a key sealed by `systemd-creds`; a host that cannot seal one is refused pairing. It pairs by **device code**, approved on the Hub with a passkey, and its scopes and ceilings are set **on the runner**, by its CLI or by a desktop over SSH. **Rejected:** unpaired runners with a desktop relaying for them (no run could start while the desktop is off, which is what remote runs are for); the Hub dialing runners over SSH (it cannot reach a runner behind NAT, and it would put an SSH client and the power to run code on every runner into the Hub); the Hub storing PATs or long-lived SSH keys. The 2026-10-02 answer is kept in [§2](#64--hub-instances). Detail: [64](#64--hub-instances-detail). | 2026-10-29 |
 | 65 | Run source for future runner runs | **Paired desktops report Project and Workflow snapshots with local paths stripped, and the Hub builds a `RunSpec` from the last reported snapshot.** **Rejected:** Hub-side authoring of Projects and Workflows — a second editor, plus drift from the desktop's copy; and Workflows read from repo files — a new concept. Detail: [HUB.md §5](HUB.md#5-the-socket). | 2026-10-02 |
 | 66 | Gate decisions from the Hub are allowed | **A Gate may be decided from the Hub, but only by a WebAuthn assertion the desktop verifies itself** against passkey public keys it has pinned; the Hub relays and cannot forge an approval, and **no token can approve**. [Decision 50](#1-the-locked-decisions) is unchanged for MCP. **Rejected:** a Hub session plus a passkey step-up only for merge-to-default and over-budget gates (a compromised Hub or hijacked session could approve ordinary gates); read-only gates on the Hub; accepting each new passkey by hand on every desktop. Detail: [66](#66--hub-gate-decisions-detail). | 2026-10-02 |
 | 67 | Hub scopes | **Three scopes — `read`, `spend`, `gates` — toggled and enforced on the instance; no Hub action can turn one on.** Hub-started runs are bounded by **local ceilings** set on the desktop. **Rejected:** a `logs` scope — transcripts and diffs never leave an instance; MCP's `configure` — not offered; toggle-only scopes — they trust Hub-supplied caps. Detail: [67](#67--hub-scopes-and-ceilings-detail). | 2026-10-02 |
 | 68 | Hub storage and custody | **Postgres, plus OpenBao (MPL-2.0, the Linux Foundation fork of Vault) with its Transit engine for envelope encryption, shipped as Docker Compose: `hub`, `postgres`, `openbao`, `caddy`.** Hub server secrets live in OpenBao or are encrypted under Transit, never plaintext in Postgres. **Rejected:** HashiCorp Vault — BSL, not open source; Cosmian/Eviden KMS — source-available licensing. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
 | 69 | Hub code layout | **`crates/demeteo-hub` (axum server), `crates/demeteo-hub-protocol` (serde-only wire types shared by the desktop client and the Hub), and `hub-web/` (a second Vite entry in this repo reusing `src/components/canvas` and the `src/App.css` tokens).** **Rejected:** the Hub linking `demeteo-core` in v1 — it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
 | 70 | Feature labels on the Hub | **A paired desktop's snapshot names its newest Features — id, Project, the Workflow version pinned, and the title the user gave it, scrubbed and cut to 200 characters — and its registered harness kinds, behind `read` like the rest of the snapshot.** The title is the second piece of user-authored content on the Hub after attachments, and unlike them it is kept until the next snapshot replaces it. The launch description, the PR title and body, prompts, transcripts and diffs still never leave an instance. **Rejected:** a per-Feature frame on the event stream — a second cursor-less channel the Hub would have to merge, where the snapshot is already replaced wholesale and already gated on `read`; ids alone — the fleet and runs views were unreadable as `f-1793…` and `s-gate-review`; carrying the description — it is the run's prompt body, not a label. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-10-29 |
+| 71 | Git credentials for Hub-started runner runs | **The Hub mints one per run, short-lived, and stores none.** GitHub first: a Demeteo GitHub App whose private key is held and used inside OpenBao Transit. For each run the Hub requests an installation token limited to the run's one repository and to `contents: write` and `pull_requests: write`, which GitHub expires after an hour. It reaches the runner inside the signed request, over the runner's own socket ([decision 64](#1-the-locked-decisions)); the runner asks for a fresh one whenever it needs the remote again, and holds it only in its per-run memory store. The App's bot account pushes and opens the pull request. **GitLab:** a dedicated bot user, a member of only the chosen projects, authorizes an OAuth application with `write_repository` alone; the Hub keeps its rotating refresh token under Transit and mints a two-hour access token per run, and the merge request is opened by git push options. **Rejected:** a runner storing its own git credential (a standing secret on an idle runner, rotated host by host); the Hub storing PATs; per-tenant SSH certificate authorities. **Accepted:** a compromised Hub can mint write tokens for every repository the App is installed on and every project the GitLab bot belongs to, bounded by single tenancy ([decision 63](#1-the-locked-decisions)) and by installing the App on selected repositories only. Detail: [71](#71--runner-git-credentials-detail). | 2026-10-29 |
 
 ### 44 — Harness baseline (detail)
 
@@ -409,32 +410,133 @@ opening a rework loop no agent can close.
 
 ### 64 — Hub instances (detail)
 
-What is rejected here is what a later reader would reach for first.
+**Every instance dials out; the Hub dials nothing.** Desktops and runners sit
+behind NAT and firewalls, so the one connection that can exist is the one they
+open. One outbound `wss` carries everything — events up, requests down — which
+is why [HUB.md §5](HUB.md#5-the-socket) has no second channel.
 
-**Desktops dial out; the Hub never dials in.** A desktop sits behind NAT and a
-firewall and owns the keyring, so the one connection that can exist is the one it
-opens. One outbound `wss` carries everything — events up, requests down — which
-is why [HUB.md §5](HUB.md#5-the-socket) has no second channel. Desktops keep using
-their own provider keys and git tokens; the Hub is never a place those live.
+**Why a runner pairs now.** Remote runs exist so that work goes on while the
+desktop is off, and a runner that only a desktop can reach cannot start a run
+then. The 2026-10-02 answer refused runner pairing for two reasons ([§2](#64--hub-instances)).
+Each has an answer:
 
-**A runner is not a paired instance.** `demeteo-runner` runs on a host with no
-keyring: the `keyring` feature of `crates/demeteo-core/Cargo.toml` is off for it,
-and `crates/demeteo-runner/src/credentials.rs` is the file-backed substitute.
-**Rejected: the runner dialing out to the Hub**, because the Hub refresh token
-would sit at rest on exactly the machine that cannot protect it, and the runner
-would need a second transport beside the SSH one it already has, so
-[EXECUTION_PARITY.md](EXECUTION_PARITY.md)'s "one behavioural contract" would
-have two doors to keep identical.
+- **"A Hub token at rest on a host with no keyring."** The runner stores its
+  device key and refresh token in its own SQLite, encrypted under a key that
+  `systemd-creds encrypt` sealed, bound to the host's TPM2 when it has one. The
+  runner's systemd unit loads that key with `LoadCredentialEncrypted=`, so its
+  plaintext exists only in the unit's in-memory credentials directory. A host
+  that cannot seal is **refused pairing**, not paired with weaker protection it
+  does not show. This is the one exception to the keyring-only rule of
+  [AGENTS.md §2](../AGENTS.md), and it covers runner hosts only.
+- **"A second transport to the runner."** The socket is a control channel, not
+  an `ExecutionPort` transport: a run the Hub starts executes through the
+  runner's own local port, exactly as a desktop-submitted one does, so
+  [EXECUTION_PARITY.md](EXECUTION_PARITY.md) is unchanged. What it does demand
+  is that a Hub request and a desktop control RPC land in the **same**
+  application functions — start, cancel, assignment, gate decision. A Hub-only
+  path is the drift this paragraph exists to prevent.
 
-**What comes later, and is not decided here.** A separate discovery will have the
-Hub drive runners over SSH the way a desktop does, using per-run GitHub App
-installation tokens and GitLab OAuth short-lived access tokens, and per-tenant SSH
-CAs held in the KMS that mint short-lived user certificates. It is gated on the
-SSH-certificate spike (ticket `hub-ssh-cert-spike`) and is not part of the ticket
-set this decision belongs to. **Rejected: the Hub storing PATs or long-lived SSH
-keys** — a hosted multi-tenant service holding standing credentials for every
-tenant's repositories and hosts is the breach that matters most, and a short-lived
-credential minted per run has nothing to steal afterwards.
+**What a paired runner holds at rest:** its device key and refresh token
+(encrypted as above), the request-signing key and passkey public keys it pinned,
+and its own scope toggles and ceilings. Not a git credential —
+[decision 71](#71--runner-git-credentials-detail). Provider API keys and harness
+sign-ins were on the runner host already, and stay where they are.
+
+**The agents run as the runner's own user (accepted for now).** A coding agent
+on a runner has a shell as the user whose files and in-memory credentials
+directory hold those secrets. Every agent spawn must strip `CREDENTIALS_DIRECTORY`
+and the like from the child's environment; a compromised agent can still read
+what that user can. Running agents as a separate user is the fix, and is
+deferred.
+
+**A desktop-submitted detached run is reported by its runner** once the runner
+is paired. The desktop must not also report a run a runner owns, or the Hub
+counts it twice.
+
+**A runner pairs by device code.** `demeteo-runner hub pair <hub url>` creates
+the runner's device key, asks the Hub for a short code and a verification URL that
+expire in ten minutes, and prints both. The human approves on the Hub with a
+passkey, after checking that the runner's name and device-key fingerprint shown
+there match what the runner printed; the runner polls and receives tokens bound
+to its device key, as a desktop's are ([HUB.md §4](HUB.md#4-pairing)). The
+desktop's machine settings can run the same command over SSH and show the code,
+so pairing needs no desktop but can use one. The risk this shape carries is a
+human approving a code someone else started; the passkey and the fingerprint
+comparison are what stand against it. **Rejected:** a desktop brokering the
+pairing (a desktop's Hub pairing would become able to admit new instances, and
+pairing would always need a desktop); forwarding the loopback callback over SSH
+(fails whenever the browser is not on the machine holding the SSH session).
+
+**A runner's scopes and ceilings live on the runner.** One application function
+sets them, reached two ways: `demeteo-runner hub policy …` on the host, and a
+control RPC the desktop's machine settings call over SSH. Everything is off until
+set, as on a desktop ([decision 67](#67--hub-scopes-and-ceilings-detail)), and
+the Hub still cannot turn a scope on or raise a ceiling. A desktop that can reach
+the runner over SSH already controls it entirely, so setting its policy adds no
+trust. **Rejected:** host-only configuration (every change an SSH session); a
+runner adopting the desktop's ceilings (one policy silently governing two
+machines).
+
+### 71 — Runner git credentials (detail)
+
+**Why the Hub mints them rather than the runner keeping one.** A runner that
+stores its own credential holds a standing write secret while idle, rotated host
+by host, and readable by any agent running as its user. A token the Hub mints per
+run reaches one repository, expires within the hour, and is revoked for every
+runner at once by uninstalling the App. The cost is concentration: the Hub
+becomes the one place able to mint them. That is acceptable only because the Hub
+is single-tenant ([decision 63](#1-the-locked-decisions)); it would not be on a
+service hosting other people's repositories.
+
+**The App key never enters the Hub process.** GitHub generates an App's private
+key and offers it only as a download, so it is imported into OpenBao Transit and
+the download is destroyed. The Hub signs the App's JWT through Transit. This
+stops the key from being copied, not from being used: a compromised Hub process
+can still ask Transit to sign, which is the accepted risk in the row above.
+
+**Minting is narrow.** Only for a run the Hub dispatched to a paired runner,
+only while that run is live, only for that run's repository, and only with
+`contents: write` and `pull_requests: write`. A minted token is never written to
+Postgres, never logged, and never reused across runs. The App is installed on
+selected repositories, never on all of an account's.
+
+**Delivery and refresh.** The first token travels inside the signed
+`start_feature` request. GitHub expires it after an hour and a pipeline can run
+for longer, so the runner asks the Hub for a fresh one over its socket whenever it
+needs the remote and the one it holds is near expiry or refused. The Hub must
+therefore be up when a run pushes; the desktop need not be. On the runner, the
+token lives in the per-run memory store of `crates/demeteo-runner/src/credentials.rs`
+and is wiped when the run ends, as an injected PAT is today.
+
+**Desktop-submitted runs are unchanged:** the desktop still injects its own PAT.
+
+**The App's bot opens the pull request, and that is accepted.** The bot account
+(`<app>[bot]`) is the actor that pushes and opens a Hub-started run's pull
+request; commits still carry the user as author. Because the user is not the
+pull request's author, they can approve it themselves under branch protection
+that requires one review. **Rejected:** opening it as the user through the App's
+user-to-server tokens — the Hub would hold the user's six-month refresh token, a
+standing credential acting as them across every repository they can reach; and a
+per-project choice, which needs that same token for every project that picks the
+user.
+
+**GitLab uses a dedicated bot user and OAuth.** GitLab has no installation token,
+so the equivalent of installing an App on selected repositories is a GitLab user
+that exists only for Demeteo and is a member, at Developer, of only the chosen
+projects. It authorizes an OAuth application with `write_repository` alone. The
+Hub keeps that authorization's refresh token encrypted under Transit, and mints
+a fresh access token per run, which GitLab expires after two hours. The merge
+request is opened by git push options (`merge_request.create` and its
+companions) rather than the API, because the API would need the `api` scope —
+everything the bot can do — where `write_repository` reaches only repositories.
+The refresh token rotates on every use and is the one standing GitLab credential;
+it is the minting credential this decision accepts, as the App key is for GitHub.
+**To verify before building:** that push options cover what the runner's merge
+request publisher sets, and the refresh token's behaviour on a self-managed
+instance. **Rejected:** authorizing as the user's own GitLab account (a token
+reaching every project they can, and the `api` scope to open merge requests); a
+runner-held credential for GitLab (the standing secret on an idle runner this
+decision rejects for GitHub).
 
 ### 66 — Hub gate decisions (detail)
 
@@ -519,6 +621,60 @@ A decision you silently overwrite stops being a decision *record*. When a
 locked answer changes, the row above is updated **and** the original is kept
 here with the reason it moved, so the next reader can tell "we thought hard and
 changed our minds" from "nobody ever considered this".
+
+### 63 — Hub tenancy
+
+| | |
+|---|---|
+| **Was** | **A hosted, multi-tenant service where a tenant is one person with one fleet.** **Rejected:** self-hosted single-tenant — the user wants a hosted service; and teams in v1 — the passkey endorsement chain of [decision 66](#66--hub-gate-decisions-detail) has no notion of membership, so a second person in a tenant would have no defined way to be trusted or revoked. Detail: [HUB.md §1](HUB.md#1-summary). |
+| **Now** | Single tenant: one Hub serves one person, who also operates it. |
+| **Changed** | 2026-10-29 |
+
+**Why it changed.** [Decision 71](#71--runner-git-credentials-detail) makes the
+Hub mint git tokens for runner runs. On a service hosting many tenants that turns
+one Hub breach into write access to every tenant's repositories; for one person
+operating their own Hub it is a breach of their own fleet, which a stolen desktop
+already is.
+
+### 64 — Hub instances
+
+| | |
+|---|---|
+| **Was** | **Desktops (macOS, Linux, Windows) pair with the Hub and hold one outbound `wss`; the Hub never dials a desktop.** Desktops keep their own provider keys and git tokens. **`demeteo-runner` hosts are not paired.** **Rejected:** the runner dialing out to the Hub — it would need a Hub token at rest on a host with no keyring, and a second transport to the runner; and the Hub storing PATs or long-lived SSH keys. Detail: [64](#64--hub-instances-detail). |
+| **Now** | Desktops and runners both pair and dial out; a paired runner verifies, enforces and reports for itself. |
+| **Changed** | 2026-10-29 |
+
+**Why it changed.** With runners unpaired, nothing can start a remote run while
+the desktop is off, and that is what remote runs are for. How each original
+objection is answered is in [the detail](#64--hub-instances-detail). The original
+reasoning, kept as it was written:
+
+What is rejected here is what a later reader would reach for first.
+
+**Desktops dial out; the Hub never dials in.** A desktop sits behind NAT and a
+firewall and owns the keyring, so the one connection that can exist is the one it
+opens. One outbound `wss` carries everything — events up, requests down — which
+is why [HUB.md §5](HUB.md#5-the-socket) has no second channel. Desktops keep using
+their own provider keys and git tokens; the Hub is never a place those live.
+
+**A runner is not a paired instance.** `demeteo-runner` runs on a host with no
+keyring: the `keyring` feature of `crates/demeteo-core/Cargo.toml` is off for it,
+and `crates/demeteo-runner/src/credentials.rs` is the file-backed substitute.
+**Rejected: the runner dialing out to the Hub**, because the Hub refresh token
+would sit at rest on exactly the machine that cannot protect it, and the runner
+would need a second transport beside the SSH one it already has, so
+[EXECUTION_PARITY.md](EXECUTION_PARITY.md)'s "one behavioural contract" would
+have two doors to keep identical.
+
+**What comes later, and is not decided here.** A separate discovery will have the
+Hub drive runners over SSH the way a desktop does, using per-run GitHub App
+installation tokens and GitLab OAuth short-lived access tokens, and per-tenant SSH
+CAs held in the KMS that mint short-lived user certificates. It is gated on the
+SSH-certificate spike (ticket `hub-ssh-cert-spike`) and is not part of the ticket
+set this decision belongs to. **Rejected: the Hub storing PATs or long-lived SSH
+keys** — a hosted multi-tenant service holding standing credentials for every
+tenant's repositories and hosts is the breach that matters most, and a short-lived
+credential minted per run has nothing to steal afterwards.
 
 ### 46 — MCP protocol revision
 
