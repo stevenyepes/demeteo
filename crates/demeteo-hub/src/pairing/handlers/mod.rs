@@ -24,6 +24,6 @@ pub use device_consent::{
 };
 pub(crate) use token::one_proof;
 pub use token::{
-    redeemed, refreshed, token, CodeRedemption, DevicePoll, Rotated, Rotation, TokenRefresh,
+    redeemed, refreshed, token, CodeRedemption, DevicePoll, Grant, Rotated, Rotation, TokenRefresh,
     TOKEN_PATH,
 };
