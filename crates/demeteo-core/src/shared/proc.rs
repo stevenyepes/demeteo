@@ -155,9 +155,10 @@ pub fn harden_child_spawn(cmd: &mut Command) {
     }
 }
 
-pub fn sanitize_child_env(
-    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] cmd: &mut Command,
-) {
+pub fn sanitize_child_env(cmd: &mut Command) {
+    // Where systemd put a runner's sealed Hub store key (decision 64). An
+    // agent is a shell on the runner's host; the key is the runner's alone.
+    cmd.env_remove("CREDENTIALS_DIRECTORY");
     #[cfg(target_os = "linux")]
     {
         for var in ["LD_LIBRARY_PATH", "LD_PRELOAD"] {
