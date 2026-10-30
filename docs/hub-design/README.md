@@ -38,7 +38,7 @@ The artboards are not edited. Where they disagree with a decision, the decision 
 | Artboard says | Superseded by |
 | --- | --- |
 | A `logs` scope that sends transcripts and diffs to the Hub (`DesktopConnect`, `Instance`, `Run`, `Runs`) | [Decision 67](../DECISIONS.md#67--hub-scopes-and-ceilings-detail): scopes are `read`, `spend` and `gates`; transcripts and diffs never leave an instance |
-| A runner pairing with a printed code, `demeteo-runner hub pair <url>`, and a refresh token in the runner's credential store (`AddInstance`) | [Decision 64](../DECISIONS.md#64--hub-instances-detail): runners are not paired; a later, separate discovery covers runners over SSH |
+| A runner pairing with a printed code, `demeteo-runner hub pair <url>`, and a refresh token in the runner's credential store (`AddInstance`) | [Decision 64](../DECISIONS.md#64--hub-instances-detail): runners do pair, by a device code approved with a passkey, with their pairing secrets encrypted under a key sealed by `systemd-creds` |
 | A runner as a paired instance (`Architecture`, `Pairing`) | Decisions 64 and 65 |
 | A passkey required only for merge-to-default and over-budget gates (`DesktopConnect`, `Instance`) | [Decision 66](../DECISIONS.md#66--hub-gate-decisions-detail): every Hub gate decision carries an assertion |
 
