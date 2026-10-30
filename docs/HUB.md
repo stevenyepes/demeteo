@@ -418,6 +418,88 @@ itself — is designed and **not built** (§10): it retires the refresh token fa
 and takes effect by the next refresh at the latest, so at most one access-token
 lifetime (15 minutes) after the Hub-side revoke.
 
+### Pairing a runner by device code
+
+A `demeteo-runner` host has no browser and often no route back from one, so it
+pairs by the device authorization grant of RFC 8628, held to the same device key,
+DPoP binding and pairing response as the desktop's grant
+([decision 64](DECISIONS.md#64--hub-instances-detail)). Everything not named here
+is as above: ES256 device key, the fingerprint format, rotating refresh tokens
+with reuse detection, the Hub minting `instance_id`, a second pairing of the same
+key replacing the first.
+
+<!-- EXAMPLE: new -->
+
+```
+runner ──────────▶ POST /device_authorization   labels + scope, DPoP proof of the device key
+Hub ─────────────▶ device_code, user_code, verification_uri, expires_in 600, interval 5
+runner prints      the user_code, the verification URI and its own fingerprint
+human ──browser──▶ /#/device → enters the user_code, compares the fingerprint,
+                   approves with a passkey assertion made for this pairing
+runner ──────────▶ POST /token   grant_type=urn:ietf:params:oauth:grant-type:device_code,
+                                 device_code, DPoP proof — every `interval` seconds
+Hub ─────────────▶ authorization_pending … then the pairing response of the
+                   authorization-code grant, member for member
+```
+
+**`POST /device_authorization`** sits outside `/v1` beside `/token`, with no
+`Origin` or CSRF guard, `application/x-www-form-urlencoded`, and every answer
+`Cache-Control: no-store`. It carries exactly one `DPoP` header, held to the rules
+of `/token` except that `htu` is the configured origin followed by
+`/device_authorization`. The device key is the proof's `jwk`, so there is no
+`dpop_jkt` parameter: the key is proven, not named. The form is `scope`,
+`instance_name`, `os`, `arch` and `app_version`, under the rules of `GET /authorize`.
+
+| `200` member | Value |
+|---|---|
+| `device_code` | unpadded base64url of 32 random bytes; held by its SHA-256, in memory |
+| `user_code` | eight characters of `BCDFGHJKLMNPQRSTVWXZ`, shown as two groups of four joined by `-` |
+| `verification_uri` | the configured origin followed by `/#/device` |
+| `verification_uri_complete` | `verification_uri`, then `/` and the `user_code` |
+| `expires_in` | `600` |
+| `interval` | `5` |
+
+Refusals: `400 invalid_request` and `400 invalid_dpop_proof` as on `/token`, and
+`503 too_many_pairings` at the bound.
+
+**The device-code grant** is `POST /token` with
+`grant_type=urn:ietf:params:oauth:grant-type:device_code` and `device_code`. The
+proof must be made by the key that started the pairing. Its answers:
+
+| Status | `error` | When |
+|---|---|---|
+| 200 | — | approved: the pairing response, every member of the authorization-code grant's. The `device_code` is spent |
+| 400 | `authorization_pending` | not answered yet |
+| 400 | `slow_down` | polled sooner than `interval` after the last poll; the runner adds 5 seconds to its interval, as RFC 8628 §3.5 says |
+| 400 | `access_denied` | the human denied it. The `device_code` is spent |
+| 400 | `expired_token` | ten minutes passed unanswered |
+| 400 | `invalid_grant` | unknown or spent, or a proof by another key |
+| 400 | `invalid_dpop_proof` | as on `/token` |
+
+**Approval is a passkey assertion, not the session.** A desktop's consent is
+answered by whoever holds the session, because the code it mints can only be
+redeemed through the loopback of the machine that asked. A device code has no such
+anchor: anyone can start one and hand its `user_code` to the human, which is the
+risk decision 64 accepts and stands the passkey and the fingerprint against. So
+hub-web's `#/device` page looks the code up, shows the claimed labels and the
+Hub-rendered fingerprint, and the approve route takes a WebAuthn assertion over a
+challenge the Hub issued for that one pending pairing — the ceremony
+`gate_decision` uses (§8). Denying needs only the session. A lookup that misses
+counts against a per-session bound, so a `user_code` cannot be guessed through it.
+
+**An instance has a kind.** A pairing by this grant is a `runner` instance, and one
+by the authorization-code grant a `desktop`. Pairing the same key again takes the
+kind of the grant that paired it last.
+
+**On the runner** the device key and refresh token are stored in its SQLite,
+encrypted under a key that `systemd-creds` sealed and its unit loads with
+`LoadCredentialEncrypted=` (decision 64). `demeteo-runner hub seal` creates that
+key and a unit drop-in, and the installers run it. Pairing runs inside
+`demeteo-runner serve`, which owns the secret store and the socket: `hub pair`,
+`hub status`, `hub policy` and `hub disconnect` are clients of its control socket,
+and a desktop's machine settings reach the same RPC methods over SSH. A `serve`
+without the sealed key answers that it cannot pair, and why.
+
 ---
 
 ## 5. The socket
