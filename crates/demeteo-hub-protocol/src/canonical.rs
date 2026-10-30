@@ -14,7 +14,8 @@
 //! - `Vec<T>`: `u32` item count, then each item.
 //! - Enums: an explicit tag byte, never the serde spelling — renaming a variant
 //!   must not change signed bytes. `Decision`: approve=1, cancel=2. `Effort`:
-//!   low=1, medium=2, high=3, xhigh=4, max=5.
+//!   low=1, medium=2, high=3, xhigh=4, max=5. `Scope`: read=1, spend=2,
+//!   gates=3.
 //!
 //! Each builder begins with `str(label)` then `u32(version)`, so two purposes
 //! cannot produce equal bytes. Builders return the **pre-image**, not a digest:
@@ -22,7 +23,7 @@
 
 use std::fmt;
 
-use crate::{Decision, Effort, PROTOCOL_VERSION};
+use crate::{Decision, Effort, Scope, PROTOCOL_VERSION};
 
 /// Why a value could not be encoded. A refusal to produce bytes; never
 /// truncated or approximate output.
@@ -64,6 +65,14 @@ pub(crate) fn effort_tag(effort: Effort) -> u8 {
         Effort::High => 3,
         Effort::Xhigh => 4,
         Effort::Max => 5,
+    }
+}
+
+pub(crate) fn scope_tag(scope: Scope) -> u8 {
+    match scope {
+        Scope::Read => 1,
+        Scope::Spend => 2,
+        Scope::Gates => 3,
     }
 }
 
@@ -207,6 +216,30 @@ pub fn revocation_challenge(
     enc.put_str(request_id)?;
     enc.put_u64(expires_at);
     enc.put_str(credential_id)?;
+    Ok(enc.finish())
+}
+
+/// The pre-image of the challenge a passkey signs to approve a runner's
+/// device-code pairing. Only the Hub builds and checks it, since no instance
+/// is paired yet to recompute it; it is here so that its label is one of the
+/// set no two purposes share.
+///
+/// Layout: `str("demeteo-hub/v1/device")`, `u32(PROTOCOL_VERSION)`, `str
+/// dpop_jkt`, `vec<u8 scope>`, `str request_id`, `u64 expires_at`.
+pub fn device_approval_challenge(
+    dpop_jkt: &str,
+    scopes: &[Scope],
+    request_id: &str,
+    expires_at: u64,
+) -> Result<Vec<u8>, EncodeError> {
+    let mut enc = Encoder::begin("demeteo-hub/v1/device", PROTOCOL_VERSION)?;
+    enc.put_str(dpop_jkt)?;
+    enc.put_vec(scopes, |enc, scope| {
+        enc.put_u8(scope_tag(*scope));
+        Ok(())
+    })?;
+    enc.put_str(request_id)?;
+    enc.put_u64(expires_at);
     Ok(enc.finish())
 }
 
@@ -440,13 +473,15 @@ mod tests {
         let gate = gate_challenge("s", "s", "s", Decision::Approve, "s", 7).unwrap();
         let endorse = endorsement_challenge("s", "s", 7, "s", "s").unwrap();
         let revoke = revocation_challenge("s", "s", 7, "s").unwrap();
-        let labels = [&gate, &endorse, &revoke].map(|b| label_of(b));
+        let device = device_approval_challenge("s", &[Scope::Read], "s", 7).unwrap();
+        let labels = [&gate, &endorse, &revoke, &device].map(|b| label_of(b));
         assert_eq!(
             labels,
             [
                 Some(&b"demeteo-hub/v1/gate"[..]),
                 Some(&b"demeteo-hub/v1/endorse"[..]),
                 Some(&b"demeteo-hub/v1/revoke"[..]),
+                Some(&b"demeteo-hub/v1/device"[..]),
             ]
         );
     }
@@ -475,6 +510,10 @@ mod tests {
             Effort::Max,
         ];
         assert_eq!(efforts.map(effort_tag), [1, 2, 3, 4, 5]);
+        assert_eq!(
+            [Scope::Read, Scope::Spend, Scope::Gates].map(scope_tag),
+            [1, 2, 3]
+        );
     }
 
     #[test]

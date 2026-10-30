@@ -17,7 +17,7 @@ use demeteo_hub::protocol::{
     RunEventPayload, WebAuthnAssertion,
 };
 use demeteo_hub::routes::AppState;
-use demeteo_hub::store::instances::{insert_instance, NewInstance};
+use demeteo_hub::store::instances::{insert_instance, InstanceKind, NewInstance};
 use demeteo_hub::store::pool::create_user;
 use demeteo_hub::store::requests::{list_queued_requests, QueuedEnvelope};
 use demeteo_hub::store::run_mirror::{mirror_event, NewEvent};
@@ -59,6 +59,7 @@ impl Tenant {
         enrol(db, user, &key, Status::Trusted).await;
         let session = open_session(db, user, &key).await;
         let new = NewInstance {
+            kind: InstanceKind::Desktop,
             id: InstanceId::generate(),
             name: "laptop".to_owned(),
             os: "linux".to_owned(),
