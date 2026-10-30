@@ -11,7 +11,7 @@ import { PageHeader } from '../components/PageHeader';
 import { HubApiError } from '../lib/api';
 import { getInstance, type HubScope, type InstanceDetail } from '../lib/fleet';
 import { useFleet } from '../lib/fleetContext';
-import { elapsedText, platformText } from '../lib/fleetSummary';
+import { elapsedText, kindText, platformText } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
 
 interface InstanceProps {
@@ -168,6 +168,8 @@ function Loaded({ detail }: { detail: InstanceDetail }) {
         <div className="flex min-w-0 flex-[1_1_320px] flex-col gap-6">
           <Section title="Connection">
             <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2">
+              <dt>Kind</dt>
+              <dd className="text-slate-200">{kindText(detail.kind) ?? 'Not reported'}</dd>
               <dt>Present</dt>
               <dd className="text-slate-200">{detail.present ? 'Yes' : 'No'}</dd>
               <dt>Connected since</dt>

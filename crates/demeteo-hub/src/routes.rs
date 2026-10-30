@@ -138,6 +138,11 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
             pairing::handlers::TOKEN_PATH,
             post(pairing::handlers::token),
         )
+        // Beside `/token`, for its reasons: a runner is not a browser either.
+        .route(
+            pairing::handlers::DEVICE_AUTHORIZATION_PATH,
+            post(pairing::handlers::device_authorization),
+        )
         // Outside `v1` as `/token` is: the desktop that opens it sends no
         // `Origin`, and an upgrade is held to the access token it carries
         // and the proof beside it. `guard_mutations` lets every `GET`
@@ -192,6 +197,22 @@ fn v1(state: AppState) -> Router {
             post(pairing::handlers::approve_pairing),
         )
         .route("/v1/pairing/deny", post(pairing::handlers::deny_pairing))
+        .route(
+            "/v1/pairing/device/lookup",
+            post(pairing::handlers::lookup_device),
+        )
+        .route(
+            "/v1/pairing/device/challenge",
+            post(pairing::handlers::challenge_device),
+        )
+        .route(
+            "/v1/pairing/device/approve",
+            post(pairing::handlers::approve_device),
+        )
+        .route(
+            "/v1/pairing/device/deny",
+            post(pairing::handlers::deny_device),
+        )
         .route("/v1/fleet", get(api::fleet::get_fleet))
         .route("/v1/instances/{instance_id}", get(api::fleet::get_instance))
         .route("/v1/runs", get(api::runs::get_runs))

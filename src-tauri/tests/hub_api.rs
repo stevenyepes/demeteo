@@ -534,6 +534,7 @@ async fn the_fleet_counts_live_runs_and_lists_the_one_gate_that_needs_you() {
         view,
         json!({"instances": [{
             "id": id,
+            "kind": "desktop",
             "label": "paired-name",
             "present": true,
             "os": "linux",
@@ -710,6 +711,7 @@ async fn an_instance_shows_its_projects_and_live_runs_and_nothing_unreported() {
         ])
     );
     assert_eq!(detail["id"], json!(id));
+    assert_eq!(detail["kind"], json!("desktop"));
     assert_eq!(detail["read_granted"], json!(true));
     assert_eq!(detail["scopes"], json!(["read", "spend", "gates"]));
     assert_eq!(detail["present"], json!(false));

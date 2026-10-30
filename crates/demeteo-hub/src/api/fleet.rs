@@ -13,7 +13,7 @@ use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::handlers::{store_failed, unix_now, ApiError, CurrentSession};
 use crate::pairing::authorize::scope_named;
 use crate::routes::AppState;
-use crate::store::instances::Instance;
+use crate::store::instances::{Instance, InstanceKind};
 use crate::store::{InstanceId, UserId};
 use axum::extract::{Path, State};
 use axum::Json;
@@ -36,6 +36,8 @@ pub struct FleetView {
 #[derive(Debug, Serialize)]
 pub struct FleetInstanceView {
     pub id: String,
+    /// `None` only for a stored kind this build does not know.
+    pub kind: Option<InstanceKind>,
     pub label: Option<String>,
     pub present: bool,
     pub os: Option<String>,
@@ -73,6 +75,8 @@ pub struct NeedsYou {
 #[derive(Debug, Serialize)]
 pub struct InstanceDetailView {
     pub id: String,
+    /// As [`FleetInstanceView::kind`].
+    pub kind: Option<InstanceKind>,
     pub present: bool,
     pub connected_at: Option<u64>,
     pub last_seen: Option<u64>,
@@ -195,6 +199,7 @@ pub async fn fleet(api: &ApiContext<'_>, user: UserId, _now: u64) -> Result<Flee
         };
         instances.push(FleetInstanceView {
             id: row.id.0.to_string(),
+            kind: InstanceKind::parse(&row.kind),
             label: non_empty(&row.name),
             present: present(api, &row),
             os: non_empty(&row.os),
@@ -248,6 +253,7 @@ pub async fn instance_detail(
     };
     Ok(InstanceDetailView {
         id: row.id.0.to_string(),
+        kind: InstanceKind::parse(&row.kind),
         present: present(api, &row),
         connected_at: row.connected_at.and_then(unix_seconds),
         last_seen: row.last_seen.and_then(unix_seconds),

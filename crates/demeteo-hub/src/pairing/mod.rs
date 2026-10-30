@@ -49,6 +49,7 @@
 
 pub mod access;
 pub mod authorize;
+pub mod device;
 pub mod dpop;
 pub mod grant;
 pub mod handlers;
@@ -61,8 +62,8 @@ pub mod testing;
 
 /// The one lifetime that is decided (`docs/HUB.md` §4): revoking an instance
 /// on the Hub takes effect within one access-token lifetime, so lengthening
-/// this lengthens how long a revoked instance keeps working. The other seven
-/// are defaults no decision stands behind.
+/// this lengthens how long a revoked instance keeps working. Every other
+/// number here is a default no decision stands behind.
 pub const ACCESS_TOKEN_TTL_SECS: u64 = 900;
 pub const REFRESH_TOKEN_TTL_SECS: u64 = 2_592_000;
 pub const AUTHORIZATION_CODE_TTL_SECS: u64 = 60;
@@ -71,6 +72,20 @@ pub const DPOP_MAX_AGE_SECS: u64 = 60;
 pub const MAX_PENDING_PER_USER: usize = 8;
 pub const MAX_PENDING: usize = 16_384;
 pub const MAX_REMEMBERED_JTIS: usize = 65_536;
+/// The device-code grant's: `expires_in` and `interval` of
+/// `POST /device_authorization`, which a runner is told and the Hub holds it
+/// to.
+pub const DEVICE_CODE_TTL_SECS: u64 = 600;
+pub const DEVICE_POLL_INTERVAL_SECS: u64 = 5;
+/// Hub-wide, and the only bound on device codes: a start needs no session
+/// and a device key costs its maker nothing, so a bound per key or per
+/// caller would bound no one.
+pub const MAX_PENDING_DEVICE_CODES: usize = 4_096;
+/// Lookups by `user_code` that found nothing, per tenant, in one window of
+/// [`DEVICE_LOOKUP_WINDOW_SECS`]. What stands between a signed-in user and
+/// guessing a code someone else's runner printed.
+pub const MAX_DEVICE_LOOKUP_MISSES: u32 = 10;
+pub const DEVICE_LOOKUP_WINDOW_SECS: u64 = 600;
 
 /// RFC 3986 §2.3's unreserved set: the characters that mean the same thing
 /// percent-encoded or not, and so the only ones a value may hold if it is to

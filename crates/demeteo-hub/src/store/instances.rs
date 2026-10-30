@@ -4,14 +4,47 @@ use super::tokens::{insert_token, retire_tokens_of_key, NewToken, TokenKind};
 use super::{timestamp, Db, InstanceId, StoreError, UserId};
 use crate::pairing::authorize::{scope_name, scope_named};
 use demeteo_hub_protocol::{Hello, Scope};
+use serde::Serialize;
 use sqlx::{FromRow, PgExecutor};
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// Which grant paired an instance: a desktop's authorization code, or a
+/// runner's device code. Pairing the same key again takes the kind of the
+/// grant that paired it last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceKind {
+    Desktop,
+    Runner,
+}
+
+impl InstanceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Runner => "runner",
+        }
+    }
+
+    /// `None` for anything but the two strings of [`InstanceKind::as_str`],
+    /// exact case.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "desktop" => Some(Self::Desktop),
+            "runner" => Some(Self::Runner),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Instance {
     pub id: InstanceId,
     pub user_id: UserId,
+    /// [`InstanceKind::as_str`]'s spelling, which the column's `CHECK` holds
+    /// it to.
+    pub kind: String,
     pub name: String,
     pub os: String,
     pub arch: String,
@@ -46,6 +79,7 @@ pub struct Greeted {
 #[derive(Debug, Clone)]
 pub struct NewInstance {
     pub id: InstanceId,
+    pub kind: InstanceKind,
     pub name: String,
     pub os: String,
     pub arch: String,
@@ -68,6 +102,7 @@ pub struct NewInstanceLabels {
 /// token as the client was sent it.
 #[derive(Debug, Clone)]
 pub struct NewPairing {
+    pub kind: InstanceKind,
     pub instance: NewInstanceLabels,
     pub device_key: NewDeviceKey,
     /// What the user left checked.
@@ -87,8 +122,8 @@ pub struct Paired {
 
 pub async fn list_instances(user: UserId, db: &Db) -> Result<Vec<Instance>, StoreError> {
     Ok(sqlx::query_as::<_, Instance>(
-        "SELECT id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at, \
-                install_id, connection_id, connected_at, event_cursor \
+        "SELECT id, user_id, kind, name, os, arch, version, last_seen, granted_scopes, \
+                created_at, install_id, connection_id, connected_at, event_cursor \
          FROM instances WHERE user_id = $1 ORDER BY created_at, id",
     )
     .bind(user)
@@ -104,8 +139,8 @@ pub async fn find_instance(
     id: InstanceId,
 ) -> Result<Option<Instance>, StoreError> {
     Ok(sqlx::query_as::<_, Instance>(
-        "SELECT id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at, \
-                install_id, connection_id, connected_at, event_cursor \
+        "SELECT id, user_id, kind, name, os, arch, version, last_seen, granted_scopes, \
+                created_at, install_id, connection_id, connected_at, event_cursor \
          FROM instances WHERE user_id = $1 AND id = $2",
     )
     .bind(user)
@@ -127,10 +162,10 @@ pub async fn insert_instance(
     new: &NewInstance,
 ) -> Result<Instance, StoreError> {
     Ok(sqlx::query_as::<_, Instance>(
-        "INSERT INTO instances (id, user_id, name, os, arch, version, granted_scopes) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         RETURNING id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at, \
-                   install_id, connection_id, connected_at, event_cursor",
+        "INSERT INTO instances (id, user_id, name, os, arch, version, granted_scopes, kind) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         RETURNING id, user_id, kind, name, os, arch, version, last_seen, granted_scopes, \
+                   created_at, install_id, connection_id, connected_at, event_cursor",
     )
     .bind(new.id)
     .bind(user)
@@ -139,6 +174,7 @@ pub async fn insert_instance(
     .bind(&new.arch)
     .bind(&new.version)
     .bind(&new.granted_scopes)
+    .bind(new.kind.as_str())
     .fetch_one(db)
     .await?)
 }
@@ -147,11 +183,13 @@ async fn relabel_instance(
     user: UserId,
     db: impl PgExecutor<'_>,
     id: InstanceId,
-    labels: &NewInstanceLabels,
+    new: &NewPairing,
     granted_scopes: &[String],
 ) -> Result<(), StoreError> {
+    let labels = &new.instance;
     sqlx::query(
-        "UPDATE instances SET name = $3, os = $4, arch = $5, version = $6, granted_scopes = $7 \
+        "UPDATE instances \
+         SET name = $3, os = $4, arch = $5, version = $6, granted_scopes = $7, kind = $8 \
          WHERE user_id = $1 AND id = $2",
     )
     .bind(user)
@@ -161,6 +199,7 @@ async fn relabel_instance(
     .bind(&labels.arch)
     .bind(&labels.version)
     .bind(granted_scopes)
+    .bind(new.kind.as_str())
     .execute(db)
     .await?;
     Ok(())
@@ -307,8 +346,8 @@ fn is_one_pairing(new: &NewPairing) -> bool {
 /// pair, in one transaction, and returns the passkeys that transaction saw.
 ///
 /// A key the tenant has not paired gets a new instance, whose id is minted
-/// here. A key the tenant has paired before keeps its instance: the labels
-/// and `granted_scopes` are replaced by this pairing's, and every live token
+/// here. A key the tenant has paired before keeps its instance: the labels,
+/// `kind` and `granted_scopes` are replaced by this pairing's, and every live token
 /// bound to the key is retired before the new pair is written, so the
 /// earlier pairing's tokens stop working when this one commits. Of what is
 /// replaced, only `name` is pairing's to keep: the instance's next `hello`
@@ -333,13 +372,14 @@ pub async fn pair_instance(user: UserId, db: &Db, new: &NewPairing) -> Result<Pa
     let mut tx = db.begin().await?;
     let instance_id = match lock_instance_of_key(user, &mut *tx, jkt).await? {
         Some(id) => {
-            relabel_instance(user, &mut *tx, id, &new.instance, &granted_scopes).await?;
+            relabel_instance(user, &mut *tx, id, new, &granted_scopes).await?;
             retire_tokens_of_key(user, &mut tx, jkt).await?;
             id
         }
         None => {
             let instance = NewInstance {
                 id: InstanceId::generate(),
+                kind: new.kind,
                 name: new.instance.name.clone(),
                 os: new.instance.os.clone(),
                 arch: new.instance.arch.clone(),
@@ -383,6 +423,7 @@ mod tests {
     fn pairing() -> NewPairing {
         let family_id = Uuid::from_u128(7);
         NewPairing {
+            kind: InstanceKind::Desktop,
             instance: NewInstanceLabels {
                 name: "laptop".to_owned(),
                 os: "linux".to_owned(),
