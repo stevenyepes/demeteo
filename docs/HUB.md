@@ -42,16 +42,16 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On the desktop*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On the desktop*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots (Features and harness kinds included, decision 70), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
-| `hub-web/` (second Vite entry) | **sign-in, passkey management, the pairing approval page and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, and AddInstance explains pairing from the desktop only; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` (second Vite entry) | **sign-in, passkey management, the two pairing approval pages and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
-| Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first |
-| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); a snapshot after the first `CursorAck` and after each Project or Workflow write (§5 *Snapshots*) |
+| Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first. **For a runner** (§4 *Pairing a runner by device code*), `demeteo-core` also has the device-code client (`HubPairing::begin_device_pairing`) and the sealed store (`SealedSecretStore`, migration `V68__hub_sealed_secrets.sql`), and composes both in `ExecutionMode::LocalOnly` when the caller hands it a store (`build_core_context_with_hub_store`). `demeteo-runner serve` holds that pairing and starts its socket; `demeteo-runner hub pair`, `status`, `policy` and `disconnect` call the `hub_*` methods of its control socket (`crates/demeteo-runner/src/rpc/hub.rs`), which a desktop has no Settings surface for yet; and `demeteo-runner hub seal`, which both installers run, seals the store key and writes the unit drop-in that loads it |
+| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On the desktop*). Events from **local runs only** reach the Hub (§5); a snapshot after the first `CursorAck` and after each Project or Workflow write (§5 *Snapshots*). The `hub-socket` feature no longer implies `keyring`, so a runner build can carry the socket; a runner's socket has no request handler bound, so its requests stay queued |
 | Desktop side: Settings › Hub tab | **built** — `src/components/settings/HubTab.tsx`. Outside `ExecutionMode::Router` it shows only the local toggles, ceilings, passkeys and activity log. It pairs and disconnects; shows the fingerprint, this machine as the Hub sees it (`hub_machine`), and the socket's state, sync, Hello → first-ack latency and why it stopped (`hub_connection`); sets the toggles and ceilings of §7 through `hub_policy_set`; lists the trusted passkeys as pinned or endorsed (`hub_trusted_passkeys`); and shows the activity log (`hub_request_log`). It polls the connection and the log every 5 s while open. `spend` and `gates` still default to off, so every request that needs one is refused until the user turns it on |
 | Desktop side: passkey pin set, request verification, local ceilings | **built** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`, and each passkey's signature counter by `V66__hub_passkey_sign_count.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On the desktop*, §7). The WebAuthn assertion a `gate_decision` or a `passkey_revocation` carries is verified on the desktop against the pinned set before the request has any effect: a gate is then decided by the desktop's own `gate_decide`, and a key is removed in one transaction with the signer's counter (§8). Every `passkey_endorsement` is consumed and refused `unknown_kind` without its assertion being read (§11 item 20). A gate of a run a `demeteo-runner` owns is not decided this way yet: it is refused `runner_owned` (§10) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
-| Runner dispatch from the Hub | **decided, not built** — runners pair and the Hub mints their git tokens (decisions 64 and 71); see §10 |
+| Runner dispatch from the Hub | **decided, not built** — a runner pairs by device code and holds its socket (§4 and the rows above), but answers no request yet, and the Hub mints no git token (decisions 64 and 71); see §10 |
 
 The design mockup in [`hub-design/`](hub-design/README.md) exists. It is a
 picture of the Hub, not a part of it, and where it disagrees with this document
@@ -123,9 +123,9 @@ judged by what that attacker cannot do.
 ## 4. Pairing
 
 Pairing makes one **desktop** an instance of one tenant. A `demeteo-runner` host
-will pair too, by device code approved with a passkey
-([decision 64](DECISIONS.md#64--hub-instances-detail)); that flow is decided and
-not built, and what follows is the desktop's. It reuses the shape of the OAuth listener in
+pairs by device code approved with a passkey
+([decision 64](DECISIONS.md#64--hub-instances-detail)), whose Hub half is built
+and is the last subsection below; until then what follows is the desktop's. It reuses the shape of the OAuth listener in
 [MCP §5](MCP_INTEGRATION.md#5-authorization) — loopback, PKCE `S256`, a consent the
 human signs — and differs from it on purpose.
 
@@ -417,6 +417,125 @@ A revocation that reaches the Hub — from the desktop's unpair or from the Hub
 itself — is designed and **not built** (§10): it retires the refresh token family,
 and takes effect by the next refresh at the latest, so at most one access-token
 lifetime (15 minutes) after the Hub-side revoke.
+
+### Pairing a runner by device code
+
+A `demeteo-runner` host has no browser and often no route back from one, so it
+pairs by the device authorization grant of RFC 8628, held to the same device key,
+DPoP binding and pairing response as the desktop's grant
+([decision 64](DECISIONS.md#64--hub-instances-detail)). Everything not named here
+is as above: ES256 device key, the fingerprint format, rotating refresh tokens
+with reuse detection, the Hub minting `instance_id`, a second pairing of the same
+key replacing the first.
+
+<!-- EXAMPLE: new -->
+
+```
+runner ──────────▶ POST /device_authorization   labels + scope, DPoP proof of the device key
+Hub ─────────────▶ device_code, user_code, verification_uri, expires_in 600, interval 5
+runner prints      the user_code, the verification URI and its own fingerprint
+human ──browser──▶ /#/device → enters the user_code, compares the fingerprint,
+                   approves with a passkey assertion made for this pairing
+runner ──────────▶ POST /token   grant_type=urn:ietf:params:oauth:grant-type:device_code,
+                                 device_code, DPoP proof — every `interval` seconds
+Hub ─────────────▶ authorization_pending … then the pairing response of the
+                   authorization-code grant, member for member
+```
+
+**`POST /device_authorization`** sits outside `/v1` beside `/token`, with no
+`Origin` or CSRF guard, `application/x-www-form-urlencoded`, and every answer
+`Cache-Control: no-store`. It carries exactly one `DPoP` header, held to the rules
+of `/token` except that `htu` is the configured origin followed by
+`/device_authorization`. The device key is the proof's `jwk`, so there is no
+`dpop_jkt` parameter: the key is proven, not named. The form is `scope`,
+`instance_name`, `os`, `arch` and `app_version`, under the rules of `GET /authorize`.
+
+| `200` member | Value |
+|---|---|
+| `device_code` | unpadded base64url of 32 random bytes; held by its SHA-256, in memory |
+| `user_code` | eight characters of `BCDFGHJKLMNPQRSTVWXZ`, shown as two groups of four joined by `-` |
+| `verification_uri` | the configured origin followed by `/#/device` |
+| `verification_uri_complete` | `verification_uri`, then `/` and the `user_code` |
+| `expires_in` | `600` |
+| `interval` | `5` |
+
+Refusals: `400 invalid_request` and `400 invalid_dpop_proof` as on `/token`, and
+`503 too_many_pairings` at the bound.
+
+**The device-code grant** is `POST /token` with
+`grant_type=urn:ietf:params:oauth:grant-type:device_code` and `device_code`. The
+proof must be made by the key that started the pairing. Its answers:
+
+| Status | `error` | When |
+|---|---|---|
+| 200 | — | approved: the pairing response, every member of the authorization-code grant's. The `device_code` is spent |
+| 400 | `authorization_pending` | not answered yet |
+| 400 | `slow_down` | polled sooner than `interval` after the last poll; the runner adds 5 seconds to its interval, as RFC 8628 §3.5 says |
+| 400 | `access_denied` | the human denied it. The `device_code` is spent |
+| 400 | `expired_token` | ten minutes passed unanswered |
+| 400 | `invalid_grant` | unknown or spent, or a proof by another key |
+| 400 | `invalid_dpop_proof` | as on `/token` |
+
+**Approval is a passkey assertion, not the session.** A desktop's consent is
+answered by whoever holds the session, because the code it mints can only be
+redeemed through the loopback of the machine that asked. A device code has no such
+anchor: anyone can start one and hand its `user_code` to the human, which is the
+risk decision 64 accepts and stands the passkey and the fingerprint against. So
+hub-web's `#/device` page looks the code up, shows the claimed labels and the
+Hub-rendered fingerprint, and the approve route takes a WebAuthn assertion over a
+challenge the Hub issued for that one pending pairing — the ceremony
+`gate_decision` uses (§8). Denying needs only the session. A lookup that misses
+counts against a bound the session's tenant holds, so a `user_code` cannot be
+guessed through it.
+
+**The approval routes.** Each needs the session cookie, a matching `Origin` and
+the CSRF header, as the consent routes do. `user_code` is read in any letter case,
+with or without its `-`.
+
+| Route | Request body | `200` body |
+|---|---|---|
+| `POST /v1/pairing/device/lookup` | `{"user_code"}` | `{"user_code", "fingerprint", "instance_name", "os", "arch", "app_version", "scopes": [...], "expires_at": <Unix seconds>}` |
+| `POST /v1/pairing/device/challenge` | `{"user_code", "scopes": [...]}` | `{"ceremony_id", "options": {"publicKey": ...}}` |
+| `POST /v1/pairing/device/approve` | `{"ceremony_id", "assertion": {"credential_id", "authenticator_data", "client_data_json", "signature"}}` | `{"answer": "approved"}` |
+| `POST /v1/pairing/device/deny` | `{"user_code"}` | `{"answer": "denied"}` |
+
+- The challenge is the SHA-256 of `device_approval_challenge` in
+  [`canonical.rs`](../crates/demeteo-hub-protocol/src/canonical.rs): its own
+  label, `demeteo-hub/v1/device`, then the device key's thumbprint, the scopes
+  left checked, a fresh request id and an expiry. It is held for the session's
+  passkey with the pairing it names, and `options` allows any of the tenant's
+  trusted passkeys. `scopes` only narrows what the runner asked for, under the
+  rule of the consent routes.
+- Unlike a `gate_decision`'s, this assertion is verified **by the Hub**, against
+  the tenant's trusted passkey it names, user verification required, before
+  anything is recorded: no instance exists yet to verify it. The ceremony is
+  spent by the attempt; a refused assertion leaves the pairing pending.
+- The first answer wins, from whichever tenant gives it.
+- Refusals: `400 invalid_request` (a body that does not validate, or text that
+  cannot be a code), `400 pairing_expired` (no pending pairing has that code:
+  never issued, expired, or answered), `400 invalid_scope`, `400
+  ceremony_expired`, `403 assertion_invalid`, `429 too_many_lookups` (below),
+  `503 too_many_ceremonies`, and the session's own `401` and `403`.
+- **The miss bound.** Every route that takes a `user_code` looks it up, and a
+  lookup that finds no pending pairing is a miss. A tenant with ten misses in its
+  current ten-minute window is answered `429 too_many_lookups` for every lookup,
+  the right code included, until the window ends. It is counted per tenant, so
+  its sessions share one bound. Text that cannot be a code is not counted.
+
+**An instance has a kind.** A pairing by this grant is a `runner` instance, and one
+by the authorization-code grant a `desktop`. Pairing the same key again takes the
+kind of the grant that paired it last. `instances.kind` holds it (migration
+`0009_instance_kind.sql`), and `GET /v1/fleet` and `GET /v1/instances/{instance_id}`
+answer it as `kind`.
+
+**On the runner** the device key and refresh token are stored in its SQLite,
+encrypted under a key that `systemd-creds` sealed and its unit loads with
+`LoadCredentialEncrypted=` (decision 64). `demeteo-runner hub seal` creates that
+key and a unit drop-in, and the installers run it. Pairing runs inside
+`demeteo-runner serve`, which owns the secret store and the socket: `hub pair`,
+`hub status`, `hub policy` and `hub disconnect` are clients of its control socket,
+and a desktop's machine settings reach the same RPC methods over SSH. A `serve`
+without the sealed key answers that it cannot pair, and why.
 
 ---
 
@@ -1551,6 +1670,7 @@ adds columns to two of the tables that were there:
 
 | Column | What it means |
 |---|---|
+| `instances.kind` | `desktop` or `runner`: the grant that paired the instance last (§4). Rows from before `0009_instance_kind.sql` are `desktop`, the only kind that could pair then |
 | `instances.install_id` | the install id the instance's last `Hello` gave. A label the peer chose: it never picks the row a write lands on (§5), and what a changed one means is open (§11 item 17) |
 | `instances.connection_id` | the one connection the instance is present through, null when it is absent. **Presence is this column being non-null**, and no column says so a second time. A connection that ends clears it only while it still holds its own id, so a displaced session ending late does not mark its successor absent |
 | `instances.connected_at` | when that connection sent its `Hello`; cleared with it |
@@ -1638,20 +1758,20 @@ process.
 | Path | What it is |
 |---|---|
 | `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing, the instance socket, the session API and attachments **built**; unpairing **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
-| `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, `access.rs` is the admission of a DPoP-bound access token that the socket and the attachment fetch share, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
+| `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `device.rs` is a runner's pending device codes and their verdicts, `pending.rs` holds consents, codes, device codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, `access.rs` is the admission of a DPoP-bound access token that the socket and the attachment fetch share, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
 | `crates/demeteo-core/src/domain/hub_socket/` | the desktop socket's policy — **built**, and synchronous: `src-tauri/tests/hub_layout.rs` fails on an `async fn` anywhere in it. `projection.rs` is the allowlist a `run_events` row passes to become a protocol `RunEvent`, `mod.rs` the `Hello` and whether events are sent at all, and `verdict.rs` what follows a connection's or a refresh's end, the backoff, and the numbers the session runs on |
 | `crates/demeteo-core/src/ports/hub.rs` | the ports pairing, the socket and the requests reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`, `HubRequestRepository`, and the policy's `HubPolicyReader` and `HubPolicyWriter`, kept apart so the handler can be given the first alone), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`), the attachment fetch (`HubAttachmentFetcher`), the trusted passkey set and its counters (`HubPasskeyTrust`, over the `sign_count` column migration `V66__hub_passkey_sign_count.sql` adds, with its SQL beside the pins' in `adapters/database/repos/hub.rs`), the request handler the socket hands frames to (`HubRequestHandler`) and a browser — **built**. Only the keyring port carries a secret |
 | `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps and owns the refresh lock and the socket's lifetime; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters, and `attachments.rs` fetches an attachment once and checks its size and SHA-256 (§6.3). It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
 | `crates/demeteo-core/src/domain/hub_request/` | the desktop's request policy (§6.1, §7) — **built**, and synchronous. `mod.rs` is the scopes in force, `precheck` (signature, scope, instance, expiry) and `decide` (replay, then spend), split around the consumption of the id; `ceiling.rs` the two ceilings, `verify.rs` the Ed25519 check against the pinned key, `log.rs` the activity-log row, and three for §8: `cose.rs` the parse of a canonical `COSE_Key`, `assertion.rs` the WebAuthn assertion check and the counter rule, and `passkeys.rs` the three challenge digests and the gate, endorsement and revocation verdicts |
 | `crates/demeteo-core/src/application/hub_requests.rs` | the request handler — **built**. It parses, loads the pins, the policy, the committed total and the trusted passkeys, records the id, and acts through the desktop's own launch, cancel, assignment and `gate_decide` calls. `hub_requests/start.rs` holds a start once its id is spent, and `hub_requests/trust.rs` the I/O of the three kinds a passkey signs: loading the set and a gate's step, the counter or set write, and the gate decision. `composition/mod.rs` binds it to `HubPairing`. The SQL is `adapters/database/repos/hub_requests.rs` |
-| `crates/demeteo-core/src/adapters/hub/socket/` | the desktop socket's I/O — **built**. `mod.rs` is the supervisor (refresh, proof, dial, session, verdict, backoff), `session.rs` one connection from its `Hello` to its end, `wake.rs` the `RunEventsPort` decorator that wakes a session on every append, and `ws_transport.rs` the `HubSocketDialer` over `tokio-tungstenite` and rustls, the only file that names the WebSocket crate. `ws_transport.rs` exists only with `demeteo-core`'s default `hub-socket` feature, which `demeteo-runner` builds without |
+| `crates/demeteo-core/src/adapters/hub/socket/` | the desktop socket's I/O — **built**. `mod.rs` is the supervisor (refresh, proof, dial, session, verdict, backoff), `session.rs` one connection from its `Hello` to its end, `wake.rs` the `RunEventsPort` decorator that wakes a session on every append, and `ws_transport.rs` the `HubSocketDialer` over `tokio-tungstenite` and rustls, the only file that names the WebSocket crate. `ws_transport.rs` exists only with `demeteo-core`'s default `hub-socket` feature, which `demeteo-runner` turns on by name without `keyring` (`src-tauri/tests/hub_layout.rs` gates both) |
 | `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds the `GET /socket` upgrade and its admission (`admitted`, which names the socket's URL to `pairing/access.rs`), `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
 | `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs`, `request_status.rs` and `attachments.rs`, the upload. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
 | `crates/demeteo-hub/src/attachments/` | attachments (§6.3) — **built**. `envelope.rs` is the sealing and the decisions, synchronous and without I/O: the size verdict, the expiry and which ids a dispatch may bind. `port.rs` is the `AttachmentStore` port, `postgres.rs` the store over `store/attachments.rs`, `fetch.rs` the fetch-once use-case and its route, and `sweep.rs` the TTL sweep `main.rs` spawns. The upload is a session route, so it is `api/attachments.rs` |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; `demeteo-hub` and `demeteo-core` depend on it, and it depends on neither |
-| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in, passkey management and the pairing approval page built** (SignUp, SignIn, Passkeys, ApprovePairing at `#/pair/<segment>`, and a session gate in front of every route but the first two); Fleet reads `GET /v1/fleet` with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, AddInstance explains desktop pairing only, and Runs, Run and Dispatch are placeholder routes with no data wiring yet; no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in, passkey management and the two pairing approval pages built** (SignUp, SignIn, Passkeys, ApprovePairing at `#/pair/<segment>`, ApproveDevice at `#/device`, and a session gate in front of every route but the first two); Fleet reads `GET /v1/fleet` with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, AddInstance explains desktop and runner pairing, and Runs, Run and Dispatch are placeholder routes with no data wiring yet; no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
 
 **Rejected: the Hub linking `demeteo-core` in v1.** `demeteo-core` brings `libssh2`,
 git plumbing and `rusqlite`. A hosted container would ship all three for code that
@@ -1732,8 +1852,10 @@ Two things about it are easy to get wrong:
   the same application functions a desktop's control RPC does (decision 64).
 
 A runner pairs by device code (`demeteo-runner hub pair <url>`), approved on the
-Hub with a passkey, and its scopes and ceilings are set on the runner by its CLI
-or by a desktop over SSH (decision 64). GitLab runs get their tokens from a
+Hub with a passkey; both halves of that are built (§4, §2). Its scopes and
+ceilings are set on the runner by its CLI or by a desktop over SSH
+(decision 64); a desktop's machine settings do not call its `hub_*` methods
+yet. GitLab runs get their tokens from a
 dedicated bot user's OAuth authorization (decision 71).
 [`hub-design/README.md`](hub-design/README.md) lists the mockup's version of the
 pairing.
@@ -1944,6 +2066,10 @@ constant in [`pairing/mod.rs`](../crates/demeteo-hub/src/pairing/mod.rs).
 | Pending consents per user | 8 | a ninth concurrent request is `503 too_many_pairings` |
 | Pending consents, and pending codes | 16,384 each | the Hub-wide bound behind the same answer |
 | Remembered DPoP proofs | 65,536 | a full window answers `503 too_many_requests` and refuses, never forgets |
+| Device-code lifetime, and poll interval | 600 seconds, 5 seconds | how long a runner's code may wait for a human, and how often it may ask; both are what `POST /device_authorization` tells the runner |
+| Pending device codes | 4,096, Hub-wide | a start beyond it is `503 too_many_pairings`. There is no per-caller bound: a start needs no session and a device key costs nothing |
+| `user_code` | 8 of 20 consonants, about 34.6 bits | with the bounds beside it, one tenant's window of guesses finds one of 4,096 live codes with odds near 1 in 600,000 |
+| Device-code lookup misses | 10 per tenant per 600 seconds | the eleventh lookup in a window is `429 too_many_lookups`, the right code included |
 
 Carried with them, and stated in §4: ES256 as the only device-key algorithm, the
 fingerprint format and its 96 bits, the Hub minting `instance_id`, a second

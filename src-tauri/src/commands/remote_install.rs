@@ -183,7 +183,7 @@ pub struct EnableRemoteRunsOutcome {
     pub version: Option<String>,
     pub linger_enabled: bool,
     /// Set when lingering couldn't be enabled (needs admin/polkit on
-    /// some distros, §10.8).
+    /// some distros, §10.8), or the Hub store key couldn't be sealed.
     pub warning: Option<String>,
 }
 
@@ -263,6 +263,18 @@ pub async fn remote_enable_runs(
         .await
         .map_err(AppError::from)?;
 
+    // Before the restart below, so the restarted unit loads the key. Best
+    // effort: a host that cannot seal still runs work, it only cannot pair.
+    let hub_seal_warning = ctx
+        .exec
+        .run_command(
+            &machine_id,
+            &install_module::hub_seal_command(&shell_escape_posix(&bin_dst)),
+        )
+        .await
+        .err()
+        .map(|e| install_module::hub_seal_warning(&e));
+
     ctx.exec
         .run_command(
             &machine_id,
@@ -274,7 +286,7 @@ pub async fn remote_enable_runs(
 
     // Best-effort linger enable (R2). Some distros gate this behind
     // polkit/sudo, so failure here doesn't fail the install.
-    let (linger_enabled, warning) = match ctx
+    let (linger_enabled, linger_warning) = match ctx
         .exec
         .run_command(&machine_id, "loginctl enable-linger \"$(whoami)\"")
         .await
@@ -303,10 +315,14 @@ pub async fn remote_enable_runs(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    let warnings: Vec<String> = [linger_warning, hub_seal_warning]
+        .into_iter()
+        .flatten()
+        .collect();
     Ok(EnableRemoteRunsOutcome {
         version,
         linger_enabled,
-        warning,
+        warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
     })
 }
 

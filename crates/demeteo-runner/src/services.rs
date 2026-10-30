@@ -5,6 +5,7 @@
 use crate::away_notify::AwayNotifier;
 use crate::credentials::CredentialStore;
 use crate::driver::RunDrivers;
+use crate::hub::HubControl;
 use demeteo_core::state::AppContext;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,4 +18,5 @@ pub struct RunnerServices {
     /// fails the run it's reporting on.
     pub away_notifier: Arc<dyn AwayNotifier>,
     pub drivers: Arc<RunDrivers>,
+    pub hub: HubControl,
 }

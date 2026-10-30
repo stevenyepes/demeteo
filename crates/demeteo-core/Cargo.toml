@@ -11,13 +11,14 @@ edition = "2021"
 # `demeteo-runner`: the runner is intentionally in-memory only per
 # crates/demeteo-runner/src/credentials.rs. There is also no keyring
 # daemon to talk to on a headless remote, so linking one in would only
-# buy a store that always fails to open.
+# buy a store that always fails to open. A runner's Hub pairing uses the
+# sealed store instead (adapters/hub/sealed_store.rs, decision 64).
 default = ["keyring", "hub-socket"]
 keyring = ["dep:keyring"]
-# The desktop's WebSocket to the Hub (adapters/hub/socket/ws_transport.rs).
-# It needs `keyring` because the pairing it authenticates with lives there,
-# and the runner, which never pairs, leaves both off.
-hub-socket = ["keyring", "dep:tokio-tungstenite", "dep:rustls", "dep:rustls-platform-verifier"]
+# The WebSocket to the Hub (adapters/hub/socket/ws_transport.rs). Independent
+# of `keyring`: a runner pairs through its sealed store, and turns this on
+# without it.
+hub-socket = ["dep:tokio-tungstenite", "dep:rustls", "dep:rustls-platform-verifier"]
 # Build openssl from source via openssl-sys's vendored feature instead
 # of letting pkg-config locate the host's libssl. Required when
 # cross-compiling to x86_64-unknown-linux-musl: the host's libssl-dev

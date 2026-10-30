@@ -7,6 +7,19 @@
 
 use super::*;
 
+/// Checked on the command itself, not the process env: an explicit removal
+/// is what `get_envs` reports as `None`, whether or not the variable is set.
+#[test]
+fn a_sanitized_child_is_never_handed_the_runners_sealed_credentials() {
+    let mut cmd = Command::new("true");
+    sanitize_child_env(&mut cmd);
+    assert!(
+        cmd.get_envs()
+            .any(|(name, value)| name == "CREDENTIALS_DIRECTORY" && value.is_none()),
+        "CREDENTIALS_DIRECTORY must be removed from every child's env"
+    );
+}
+
 #[test]
 fn create_no_window_is_not_detached_process() {
     assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);

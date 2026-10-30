@@ -42,19 +42,37 @@ pub struct AuthorizeParams {
     pub app_version: Option<String>,
 }
 
-/// A request that passed [`validate`]. The four labels are what the caller
-/// said about itself, trimmed, and are proof of nothing.
+/// What a caller asks to be paired as, whichever grant it pairs by: the
+/// device key, the scopes, and four labels that are what the caller said
+/// about itself, trimmed, and proof of nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthorizeRequest {
-    pub code_challenge: String,
-    pub redirect_uri: String,
+pub struct PairingAsk {
     pub dpop_jkt: String,
     pub scopes: Vec<Scope>,
-    pub state: String,
     pub instance_name: String,
     pub os: String,
     pub arch: String,
     pub app_version: String,
+}
+
+/// A request that passed [`validate`]: an ask, and where its code goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizeRequest {
+    pub code_challenge: String,
+    pub redirect_uri: String,
+    pub state: String,
+    pub ask: PairingAsk,
+}
+
+/// The form of `POST /device_authorization` as it arrived. There is no
+/// `dpop_jkt`: the key is the proof's, so it is proven and never named.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct DeviceAuthorizationParams {
+    pub scope: Option<String>,
+    pub instance_name: Option<String>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub app_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -84,41 +102,78 @@ pub fn validate(params: &AuthorizeParams) -> Result<AuthorizeRequest, AuthorizeR
     if params.code_challenge_method.as_deref() != Some(CHALLENGE_METHOD) {
         return Err(AuthorizeRefusal::ChallengeMethod);
     }
+    let code_challenge =
+        accepted(&params.code_challenge, is_sha256_text).ok_or(AuthorizeRefusal::Challenge)?;
+    let redirect_uri = accepted(&params.redirect_uri, is_loopback_redirect)
+        .ok_or(AuthorizeRefusal::RedirectUri)?;
+    let dpop_jkt = accepted(&params.dpop_jkt, is_sha256_text).ok_or(AuthorizeRefusal::DeviceKey)?;
+    let scopes = scopes_of(&params.scope)?;
+    let state = accepted(&params.state, is_state).ok_or(AuthorizeRefusal::State)?;
+    let device = DeviceAuthorizationParams {
+        scope: None,
+        instance_name: params.instance_name.clone(),
+        os: params.os.clone(),
+        arch: params.arch.clone(),
+        app_version: params.app_version.clone(),
+    };
     Ok(AuthorizeRequest {
-        code_challenge: accepted(&params.code_challenge, is_sha256_text)
-            .ok_or(AuthorizeRefusal::Challenge)?,
-        redirect_uri: accepted(&params.redirect_uri, is_loopback_redirect)
-            .ok_or(AuthorizeRefusal::RedirectUri)?,
-        dpop_jkt: accepted(&params.dpop_jkt, is_sha256_text).ok_or(AuthorizeRefusal::DeviceKey)?,
-        scopes: params
-            .scope
-            .as_deref()
-            .and_then(requested_scopes)
-            .ok_or(AuthorizeRefusal::Scope)?,
-        state: accepted(&params.state, is_state).ok_or(AuthorizeRefusal::State)?,
-        instance_name: label(&params.instance_name, MAX_INSTANCE_NAME_CHARS)?,
-        os: label(&params.os, MAX_PLATFORM_LABEL_CHARS)?,
-        arch: label(&params.arch, MAX_PLATFORM_LABEL_CHARS)?,
-        app_version: label(&params.app_version, MAX_PLATFORM_LABEL_CHARS)?,
+        code_challenge,
+        redirect_uri,
+        state,
+        ask: labelled(dpop_jkt, scopes, &device)?,
+    })
+}
+
+/// The device-code grant's half of [`validate`], under the same rules for
+/// `scope` and the four labels. `dpop_jkt` is the thumbprint of the key the
+/// request's proof was made by.
+pub fn validate_device(
+    params: &DeviceAuthorizationParams,
+    dpop_jkt: &str,
+) -> Result<PairingAsk, AuthorizeRefusal> {
+    let scopes = scopes_of(&params.scope)?;
+    labelled(dpop_jkt.to_owned(), scopes, params)
+}
+
+fn scopes_of(scope: &Option<String>) -> Result<Vec<Scope>, AuthorizeRefusal> {
+    scope
+        .as_deref()
+        .and_then(requested_scopes)
+        .ok_or(AuthorizeRefusal::Scope)
+}
+
+fn labelled(
+    dpop_jkt: String,
+    scopes: Vec<Scope>,
+    labels: &DeviceAuthorizationParams,
+) -> Result<PairingAsk, AuthorizeRefusal> {
+    Ok(PairingAsk {
+        dpop_jkt,
+        scopes,
+        instance_name: label(&labels.instance_name, MAX_INSTANCE_NAME_CHARS)?,
+        os: label(&labels.os, MAX_PLATFORM_LABEL_CHARS)?,
+        arch: label(&labels.arch, MAX_PLATFORM_LABEL_CHARS)?,
+        app_version: label(&labels.app_version, MAX_PLATFORM_LABEL_CHARS)?,
     })
 }
 
 /// The opaque segment of the approval page's URL: base64url characters only,
 /// so it needs no escaping in a fragment.
 pub fn encode(request: &AuthorizeRequest) -> String {
-    let scope: Vec<&str> = request.scopes.iter().copied().map(scope_name).collect();
+    let ask = &request.ask;
+    let scope: Vec<&str> = ask.scopes.iter().copied().map(scope_name).collect();
     let params = AuthorizeParams {
         response_type: Some(RESPONSE_TYPE.to_owned()),
         code_challenge_method: Some(CHALLENGE_METHOD.to_owned()),
         code_challenge: Some(request.code_challenge.clone()),
         redirect_uri: Some(request.redirect_uri.clone()),
-        dpop_jkt: Some(request.dpop_jkt.clone()),
+        dpop_jkt: Some(ask.dpop_jkt.clone()),
         scope: Some(scope.join(" ")),
         state: Some(request.state.clone()),
-        instance_name: Some(request.instance_name.clone()),
-        os: Some(request.os.clone()),
-        arch: Some(request.arch.clone()),
-        app_version: Some(request.app_version.clone()),
+        instance_name: Some(ask.instance_name.clone()),
+        os: Some(ask.os.clone()),
+        arch: Some(ask.arch.clone()),
+        app_version: Some(ask.app_version.clone()),
     };
     // Writing a struct of strings to memory has no failing case. Were there
     // one, what it leaves is the empty segment, which `decode` refuses.
@@ -314,13 +369,15 @@ mod tests {
             Ok(AuthorizeRequest {
                 code_challenge: CHALLENGE.to_owned(),
                 redirect_uri: REDIRECT.to_owned(),
-                dpop_jkt: JKT.to_owned(),
-                scopes: vec![Scope::Read, Scope::Spend],
                 state: "xyz-123".to_owned(),
-                instance_name: "Workstation".to_owned(),
-                os: "linux".to_owned(),
-                arch: "x86_64".to_owned(),
-                app_version: "1.4.0".to_owned(),
+                ask: PairingAsk {
+                    dpop_jkt: JKT.to_owned(),
+                    scopes: vec![Scope::Read, Scope::Spend],
+                    instance_name: "Workstation".to_owned(),
+                    os: "linux".to_owned(),
+                    arch: "x86_64".to_owned(),
+                    app_version: "1.4.0".to_owned(),
+                },
             })
         );
     }
@@ -469,7 +526,7 @@ mod tests {
         ];
         for (scope, expected) in asked {
             let request = validate(&with(|p| &mut p.scope, Some(scope)));
-            assert_eq!(request.map(|r| r.scopes), Ok(expected), "{scope:?}");
+            assert_eq!(request.map(|r| r.ask.scopes), Ok(expected), "{scope:?}");
         }
     }
 
@@ -565,10 +622,10 @@ mod tests {
         params.arch = Some("aarch64 ".to_owned());
         params.app_version = Some("\t2.0.0-rc.1".to_owned());
         let request = validate(&params).unwrap();
-        assert_eq!(request.instance_name, "Büro-PC 東京");
-        assert_eq!(request.os, "macos");
-        assert_eq!(request.arch, "aarch64");
-        assert_eq!(request.app_version, "2.0.0-rc.1");
+        assert_eq!(request.ask.instance_name, "Büro-PC 東京");
+        assert_eq!(request.ask.os, "macos");
+        assert_eq!(request.ask.arch, "aarch64");
+        assert_eq!(request.ask.app_version, "2.0.0-rc.1");
     }
 
     #[test]
@@ -715,5 +772,51 @@ mod tests {
             "{refused} of {}",
             segment.len()
         );
+    }
+
+    fn device_form() -> DeviceAuthorizationParams {
+        let params = valid();
+        DeviceAuthorizationParams {
+            scope: params.scope,
+            instance_name: params.instance_name,
+            os: params.os,
+            arch: params.arch,
+            app_version: params.app_version,
+        }
+    }
+
+    #[test]
+    fn a_device_form_is_held_to_the_scope_and_label_rules_of_authorize() {
+        let ask = validate_device(&device_form(), JKT).unwrap();
+        assert_eq!(ask, validate(&valid()).unwrap().ask);
+
+        for scope in [
+            None,
+            Some(""),
+            Some("read read"),
+            Some("read  spend"),
+            Some("logs"),
+        ] {
+            let form = DeviceAuthorizationParams {
+                scope: scope.map(str::to_owned),
+                ..device_form()
+            };
+            assert_eq!(
+                validate_device(&form, JKT),
+                Err(AuthorizeRefusal::Scope),
+                "{scope:?}"
+            );
+        }
+        for name in [None, Some(""), Some("a\u{202e}b")] {
+            let form = DeviceAuthorizationParams {
+                instance_name: name.map(str::to_owned),
+                ..device_form()
+            };
+            assert_eq!(
+                validate_device(&form, JKT),
+                Err(AuthorizeRefusal::Label),
+                "{name:?}"
+            );
+        }
     }
 }

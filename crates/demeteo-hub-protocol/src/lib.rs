@@ -26,7 +26,10 @@ mod request;
 mod scope;
 mod snapshot;
 
-pub use canonical::{endorsement_challenge, gate_challenge, revocation_challenge, EncodeError};
+pub use canonical::{
+    device_approval_challenge, endorsement_challenge, gate_challenge, revocation_challenge,
+    EncodeError,
+};
 pub use message::{
     CursorAck, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult, RunEvent,
     RunEventKind, RunEventPayload,

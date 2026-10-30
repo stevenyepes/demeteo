@@ -1,6 +1,7 @@
-//! What desktop pairing with the Demeteo Hub, and the requests it relays,
-//! need from the outside world: the OS keyring, SQLite, the Hub's `/token`,
-//! `/socket` and `/attachments`, and a browser.
+//! What pairing with the Demeteo Hub, and the requests it relays, need from
+//! the outside world: the OS keyring (or a runner's sealed store), SQLite,
+//! the Hub's `/token`, `/device_authorization`, `/socket` and
+//! `/attachments`, and a browser.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
@@ -9,6 +10,7 @@
 use async_trait::async_trait;
 use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 
+use crate::domain::hub_pairing::device::{DeviceAuthorization, DeviceGrantEnd};
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
@@ -19,8 +21,8 @@ use crate::domain::hub_request::{
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 
-/// The OS keyring, addressed by the account names in
-/// [`crate::domain::hub_pairing::keyring_names`].
+/// The OS keyring on a desktop, the sealed store on a runner; addressed by
+/// the account names in [`crate::domain::hub_pairing::keyring_names`].
 ///
 /// The stored refresh token has a **single writer**. The Hub rotates it on
 /// every use and treats a replayed one as theft: two concurrent refreshes, or
@@ -34,6 +36,23 @@ pub trait HubSecretStore: Send + Sync {
     fn set(&self, account: &str, value: &str) -> Result<(), AppError>;
     /// Deleting a missing entry is `Ok(())`.
     fn delete(&self, account: &str) -> Result<(), AppError>;
+}
+
+/// One value as [`crate::adapters::hub::sealed_store::SealedSecretStore`]
+/// seals it: AES-256-GCM, with the account name as associated data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedSecret {
+    pub nonce: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+}
+
+/// The `hub_sealed_secrets` table (V68). It holds ciphertext only, and only a
+/// `demeteo-runner` writes it; a desktop's secrets are in the OS keyring.
+pub trait HubSealedSecretRepository: Send + Sync {
+    fn load_sealed(&self, account: &str) -> Result<Option<SealedSecret>, AppError>;
+    fn store_sealed(&self, account: &str, sealed: &SealedSecret) -> Result<(), AppError>;
+    /// Deleting a missing row is `Ok(())`.
+    fn delete_sealed(&self, account: &str) -> Result<(), AppError>;
 }
 
 /// The `hub_install`, `hub_pairing` and `hub_pinned_passkeys` tables (V64).
@@ -165,6 +184,31 @@ pub trait HubRefreshEndpoint: Send + Sync {
         form_body: String,
         dpop: String,
     ) -> Result<RefreshAnswer, RefreshEnd>;
+}
+
+/// The device authorization grant: `POST /device_authorization` and the
+/// device-code `/token` poll (docs/HUB.md §4 *Pairing a runner by device
+/// code*). A trait of its own, so a double of [`HubTokenEndpoint`] is not
+/// obliged to answer it.
+#[async_trait]
+pub trait HubDeviceEndpoint: Send + Sync {
+    /// POST `form_body` with exactly one DPoP header. Never retried: each
+    /// call starts a pairing the Hub holds until it expires.
+    async fn authorize_device(
+        &self,
+        url: &str,
+        form_body: String,
+        dpop: String,
+    ) -> Result<DeviceAuthorization, HubPairingError>;
+
+    /// One poll, never retried here: when to poll again is
+    /// [`crate::domain::hub_pairing::device::after_device_poll`]'s.
+    async fn poll_device(
+        &self,
+        token_url: &str,
+        form_body: String,
+        dpop: String,
+    ) -> Result<PairingAnswer, DeviceGrantEnd>;
 }
 
 /// What a dial of the Hub's `GET /socket` presents. `Debug` prints the

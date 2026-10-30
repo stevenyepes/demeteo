@@ -19,6 +19,7 @@ const INSTANCE: FleetInstance = {
   arch: 'x86_64',
   version: '1.4.2',
   scopes: ['read'],
+  kind: 'desktop',
   readGranted: true,
   lastSeen: NOW - 120,
   liveRuns: 1,
@@ -71,6 +72,22 @@ describe('PresenceDot', () => {
 });
 
 describe('InstanceCard', () => {
+  it.each([
+    ['desktop', 'Desktop'],
+    ['runner', 'Runner'],
+  ] as const)('names a %s instance in words, not by its icon alone', (kind, label) => {
+    render(<InstanceCard instance={{ ...INSTANCE, kind }} runs={[]} now={NOW} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('names no kind for one this build does not know', () => {
+    render(<InstanceCard instance={{ ...INSTANCE, kind: null }} runs={[]} now={NOW} />);
+
+    expect(screen.queryByText('Desktop')).toBeNull();
+    expect(screen.queryByText('Runner')).toBeNull();
+  });
+
   it('shows presence, platform, harnesses, projects and when it was seen', () => {
     const { container } = render(<InstanceCard instance={INSTANCE} runs={[]} now={NOW} />);
 

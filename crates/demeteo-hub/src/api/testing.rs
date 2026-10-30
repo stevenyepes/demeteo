@@ -22,7 +22,7 @@ use crate::socket::port::SocketStore;
 use crate::socket::requests::OutcomeChange;
 use crate::socket::testing::{MemoryHub, MemoryStore, RequestView};
 use crate::store::attachments::{AttachmentMeta, NewAttachment, StagedAttachment, WrappedKey};
-use crate::store::instances::{Instance, NewInstanceLabels};
+use crate::store::instances::{Instance, InstanceKind, NewInstanceLabels};
 use crate::store::requests::{NewRequest, QueuedRequest, RequestId, RequestRecord, RequestState};
 use crate::store::run_mirror::MirrorRecord;
 use crate::store::{InstanceId, StoreError, UserId};
@@ -401,6 +401,7 @@ fn instance_row(held: &Held) -> Instance {
     Instance {
         id: held.hub.instance_id(),
         user_id: held.hub.user_id(),
+        kind: InstanceKind::Desktop.as_str().to_owned(),
         name: held.labels.name.clone(),
         os: view.os.unwrap_or_else(|| held.labels.os.clone()),
         arch: view.arch.unwrap_or_else(|| held.labels.arch.clone()),

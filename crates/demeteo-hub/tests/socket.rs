@@ -29,7 +29,7 @@ use demeteo_hub::socket::testing::FakeInstance;
 use demeteo_hub::store::device_keys::{instance_of_key, NewDeviceKey};
 use demeteo_hub::store::instances::{
     granted_scopes, list_instances, pair_instance, record_departure, record_hello, Greeted,
-    Instance, NewInstanceLabels, NewPairing,
+    Instance, InstanceKind, NewInstanceLabels, NewPairing,
 };
 use demeteo_hub::store::pool::create_user;
 use demeteo_hub::store::requests::{
@@ -82,6 +82,7 @@ async fn paired_with_tokens(db: &Db, user: UserId) -> (InstanceId, String, Fresh
     let pair = FreshPair::generate().unwrap();
     let rows = pair.rows(family_id, &key.jkt, NOW).unwrap();
     let new = NewPairing {
+        kind: InstanceKind::Desktop,
         instance: NewInstanceLabels {
             name: "laptop".to_owned(),
             os: "linux".to_owned(),

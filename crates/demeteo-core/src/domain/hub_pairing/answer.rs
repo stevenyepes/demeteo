@@ -36,6 +36,10 @@ pub struct HubPins {
 pub struct SecretString(String);
 
 impl SecretString {
+    pub(super) fn new(value: String) -> Self {
+        Self(value)
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -159,7 +163,7 @@ pub fn refresh_form_body(refresh_token: &str) -> String {
 }
 
 /// Every byte outside RFC 3986's unreserved set as `%XX`.
-fn percent_encode(value: &str) -> String {
+pub(super) fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {

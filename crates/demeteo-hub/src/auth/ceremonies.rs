@@ -10,8 +10,9 @@ use super::challenge::{
 use super::webauthn::{RegistrationState, SignInState};
 use crate::store::pool::ReservedUser;
 use crate::store::requests::RequestId;
+use crate::store::tokens::TokenHash;
 use crate::store::{InstanceId, UserId};
-use demeteo_hub_protocol::Decision;
+use demeteo_hub_protocol::{Decision, Scope};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -76,6 +77,18 @@ pub enum Ceremony {
         expires_at: u64,
         challenge: [u8; 32],
     },
+    /// An approval of one runner's device-code pairing, between the challenge
+    /// and the assertion over it. `device` names the pairing, and the key and
+    /// scopes are what `challenge` was computed over, so the pairing that is
+    /// approved is the one the passkey signed for whatever the finish says.
+    Device {
+        user: UserId,
+        holder: Vec<u8>,
+        device: TokenHash,
+        dpop_jkt: String,
+        scopes: Vec<Scope>,
+        challenge: [u8; 32],
+    },
 }
 
 /// Whose allowance an entry is held under.
@@ -98,7 +111,8 @@ impl Ceremony {
             Ceremony::Add { holder, .. }
             | Ceremony::Endorse { holder, .. }
             | Ceremony::Revoke { holder, .. }
-            | Ceremony::Gate { holder, .. } => Budget::Holder(holder),
+            | Ceremony::Gate { holder, .. }
+            | Ceremony::Device { holder, .. } => Budget::Holder(holder),
         }
     }
 }
@@ -356,7 +370,8 @@ mod tests {
             | Ceremony::Endorse { .. }
             | Ceremony::Register { .. }
             | Ceremony::SignIn { .. }
-            | Ceremony::Add { .. } => None,
+            | Ceremony::Add { .. }
+            | Ceremony::Device { .. } => None,
         }
     }
 
@@ -374,7 +389,8 @@ mod tests {
             | Ceremony::Register { .. }
             | Ceremony::SignIn { .. }
             | Ceremony::Add { .. }
-            | Ceremony::Gate { .. } => None,
+            | Ceremony::Gate { .. }
+            | Ceremony::Device { .. } => None,
         }
     }
 

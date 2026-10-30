@@ -21,10 +21,12 @@ use thiserror::Error;
 
 pub mod answer;
 pub mod callback;
+pub mod device;
 pub mod dpop;
 pub mod jwk;
 pub mod keyring_names;
 pub mod pkce;
+pub mod sealed;
 
 pub use answer::{
     HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, RefreshAnswer, SecretString,
@@ -93,6 +95,9 @@ pub enum HubPairingError {
     InvalidHubUrl(String),
     #[error("no OS keyring is available to hold the Hub credentials")]
     KeyringUnavailable,
+    /// A store that can say why it is unavailable, as a sealed one can.
+    #[error("the {backend} store cannot hold the Hub credentials: {reason}")]
+    SecretStoreUnavailable { backend: String, reason: String },
     #[error("a Hub pairing is already in progress")]
     PairingInProgress,
     #[error("already paired with {origin}; disconnect before pairing with another Hub")]
@@ -101,6 +106,8 @@ pub enum HubPairingError {
     CallbackTimeout,
     #[error("the pairing was denied on the Hub")]
     Denied,
+    #[error("the pairing code expired before it was approved on the Hub")]
+    DeviceCodeExpired,
     #[error("the Hub callback was refused")]
     CallbackRefused,
     #[error("the Hub refused the pairing: {error}")]
@@ -207,11 +214,25 @@ pub struct HubMachine {
     pub app_version: String,
 }
 
+/// What [`consent_machine`] names a desktop whose host name is unreadable.
+pub const DESKTOP_INSTANCE_FALLBACK: &str = "Demeteo desktop";
+
+/// What [`consent_machine`] names a `demeteo-runner` host whose host name is
+/// unreadable.
+pub const RUNNER_INSTANCE_FALLBACK: &str = "Demeteo runner";
+
 /// The single spelling of [`HubMachine`], which pairing sends and settings
-/// shows, so the two cannot drift. An unreadable host name arrives as `""`.
-pub fn consent_machine(host_name: &str, os: &str, arch: &str, app_version: &str) -> HubMachine {
+/// shows, so the two cannot drift. An unreadable host name arrives as `""`,
+/// and is shown as `fallback_name`.
+pub fn consent_machine(
+    host_name: &str,
+    fallback_name: &str,
+    os: &str,
+    arch: &str,
+    app_version: &str,
+) -> HubMachine {
     HubMachine {
-        instance_name: consent_label(host_name, MAX_INSTANCE_NAME_CHARS, "Demeteo desktop"),
+        instance_name: consent_label(host_name, MAX_INSTANCE_NAME_CHARS, fallback_name),
         os: consent_label(os, MAX_PLATFORM_LABEL_CHARS, "unknown"),
         arch: consent_label(arch, MAX_PLATFORM_LABEL_CHARS, "unknown"),
         app_version: consent_label(app_version, MAX_PLATFORM_LABEL_CHARS, "unknown"),
@@ -222,6 +243,21 @@ pub fn consent_machine(host_name: &str, os: &str, arch: &str, app_version: &str)
 pub struct KeyringStatus {
     pub backend: &'static str,
     pub available: bool,
+    /// Why it is unavailable, when the store can tell.
+    pub reason: Option<&'static str>,
+}
+
+impl KeyringStatus {
+    /// What pairing refuses with when a store is `!available`.
+    pub fn unavailable_error(&self) -> HubPairingError {
+        match self.reason {
+            Some(reason) => HubPairingError::SecretStoreUnavailable {
+                backend: self.backend.to_owned(),
+                reason: reason.to_owned(),
+            },
+            None => HubPairingError::KeyringUnavailable,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

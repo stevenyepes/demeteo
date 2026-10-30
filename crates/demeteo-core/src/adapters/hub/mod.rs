@@ -1,9 +1,11 @@
-//! Desktop pairing with the Demeteo Hub — the choreography half. Every
-//! decision is [`crate::domain::hub_pairing`]'s; this module only orders the
-//! I/O, and the order is the contract (spec §4.3):
+//! Pairing with the Demeteo Hub — the choreography half, for a desktop by
+//! loopback redirect ([`HubPairing::pair`]) and for a runner by device code
+//! ([`HubPairing::begin_device_pairing`]). Every decision is
+//! [`crate::domain::hub_pairing`]'s; this module only orders the I/O, and the
+//! order is the contract (spec §4.3), the same for both grants:
 //!
-//! - The device key reaches the keyring **before** `/authorize`, which binds
-//!   the pairing to its thumbprint. A key lost after that point would leave a
+//! - The device key reaches the keyring **before** `/authorize` (or
+//!   `/device_authorization`), which binds the pairing to its thumbprint. A key lost after that point would leave a
 //!   pairing nobody can prove.
 //! - The refresh token reaches the keyring before the pins reach SQLite, and
 //!   is deleted again if they do not. Pins without a token read as
@@ -26,15 +28,23 @@
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
+use tokio::sync::{watch, OwnedMutexGuard};
+use tokio::task::JoinHandle;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 
 use crate::domain::hub_pairing::answer::{refresh_form_body, token_form_body};
+use crate::domain::hub_pairing::device::{
+    after_device_poll, device_authorization_form_body, device_authorization_url,
+    device_token_form_body, DeviceGrant, DevicePairing, DevicePollStep, DeviceTicket,
+};
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
 use crate::domain::hub_pairing::pkce::s256_challenge;
 use crate::domain::hub_pairing::{
     authorize_url, check_pairing_origin, consent_machine, hub_origin, hub_status, token_url,
-    AuthorizeRequest, HubMachine, HubPairingError, HubSecret, HubStatus, SecretString, SCOPES,
+    AuthorizeRequest, HubMachine, HubPairingError, HubSecret, HubStatus, PairingAnswer,
+    SecretString, DESKTOP_INSTANCE_FALLBACK, SCOPES,
 };
 use crate::domain::hub_socket::connection::{
     after_local_restart, view, ConnectionFacts, HubConnection,
@@ -42,8 +52,8 @@ use crate::domain::hub_socket::connection::{
 use crate::domain::hub_socket::{sends_events, RefreshEnd};
 use crate::error::AppError;
 use crate::ports::hub::{
-    BrowserLauncher, HubAttachmentFetcher, HubPinRepository, HubPolicyReader, HubRefreshEndpoint,
-    HubRequestHandler, HubSecretStore, HubTokenEndpoint,
+    BrowserLauncher, HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository, HubPolicyReader,
+    HubRefreshEndpoint, HubRequestHandler, HubSecretStore, HubTokenEndpoint,
 };
 use crate::shared::time::now_secs;
 use crate::state::AppVersion;
@@ -53,13 +63,14 @@ use self::device_key::DeviceKey;
 use self::loopback::CallbackListener;
 use self::socket::session::{RequestHandlerSlot, SessionContext};
 use self::socket::status::ConnectionCell;
-use self::socket::{SocketConfig, SocketTask, SupervisorDeps};
+use self::socket::{Sleeper, SocketConfig, SocketTask, SupervisorDeps, TokioSleeper};
 
 pub mod attachments;
 pub mod device_key;
 #[cfg(feature = "keyring")]
 pub mod keyring_store;
 pub mod loopback;
+pub mod sealed_store;
 pub mod snapshot_source;
 pub mod socket;
 #[cfg(any(test, feature = "test-support"))]
@@ -72,13 +83,20 @@ pub struct HubPairing {
     /// [`sends_events`]).
     policy: Arc<dyn HubPolicyReader>,
     app_version: AppVersion,
-    /// Held for a whole `pair`. A tokio mutex because the guard lives across
-    /// the browser wait, and `try_lock` because a second pairing is refused,
+    instance_fallback: &'static str,
+    /// Held for a whole `pair`, and by a device pairing's poll task for as
+    /// long as it polls. A tokio mutex because the guard lives across the
+    /// browser wait, and `try_lock` because a second pairing is refused,
     /// not queued: it would race the first for the same keyring entries.
     /// `disconnect` is refused by it too, for the same reason: it would
     /// delete the device key `pair` still holds in memory, and `pair` would
     /// go on to store a refresh token and pins naming a key no longer there.
-    in_flight: tokio::sync::Mutex<()>,
+    /// A device pairing is cancelled instead, and its task awaited, before
+    /// either takes it (see [`HubPairing::begin_device_pairing`]).
+    in_flight: Arc<tokio::sync::Mutex<()>>,
+    device: Option<Arc<dyn HubDeviceEndpoint>>,
+    device_sleeper: Arc<dyn Sleeper>,
+    device_flow: std::sync::Mutex<DeviceFlow>,
     refresher: Refresher,
     socket_config: Option<SocketConfig>,
     socket: std::sync::Mutex<Option<SocketTask>>,
@@ -106,6 +124,20 @@ struct Refresher {
     /// `PairingInProgress` when none was.
     lock: Arc<tokio::sync::Mutex<()>>,
     access: Arc<std::sync::Mutex<Option<HeldAccess>>>,
+}
+
+/// The device pairing in progress, if any, and the state the last one left.
+struct DeviceFlow {
+    state: DevicePairing,
+    cancel: Option<watch::Sender<bool>>,
+    task: Option<JoinHandle<()>>,
+}
+
+/// What both grants have in hand once the store holds a device key.
+struct Prepared {
+    origin: String,
+    install_id: String,
+    device_key: DeviceKey,
 }
 
 /// The access token, in this process's memory and nowhere else.
@@ -145,7 +177,15 @@ impl HubPairing {
             token,
             policy,
             app_version: AppVersion::default(),
-            in_flight: tokio::sync::Mutex::new(()),
+            instance_fallback: DESKTOP_INSTANCE_FALLBACK,
+            in_flight: Arc::default(),
+            device: None,
+            device_sleeper: Arc::new(TokioSleeper),
+            device_flow: std::sync::Mutex::new(DeviceFlow {
+                state: DevicePairing::Idle,
+                cancel: None,
+                task: None,
+            }),
             refresher: Refresher {
                 pins,
                 secrets,
@@ -163,6 +203,19 @@ impl HubPairing {
     /// Without one, [`Self::refresh_access`] fails rather than refreshing.
     pub fn with_refresh_endpoint(mut self, endpoint: Arc<dyn HubRefreshEndpoint>) -> Self {
         self.refresher.endpoint = Some(endpoint);
+        self
+    }
+
+    /// Without one, [`Self::begin_device_pairing`] is refused.
+    pub fn with_device_endpoint(mut self, endpoint: Arc<dyn HubDeviceEndpoint>) -> Self {
+        self.device = Some(endpoint);
+        self
+    }
+
+    /// What a device pairing waits between polls with; a test's returns at
+    /// once.
+    pub fn with_device_sleeper(mut self, sleeper: Arc<dyn Sleeper>) -> Self {
+        self.device_sleeper = sleeper;
         self
     }
 
@@ -214,10 +267,23 @@ impl HubPairing {
         self
     }
 
+    /// The name the Hub is sent when the host name is unreadable; a desktop's
+    /// unless set.
+    pub fn with_instance_fallback(mut self, name: &'static str) -> Self {
+        self.instance_fallback = name;
+        self
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn instance_fallback(&self) -> &'static str {
+        self.instance_fallback
+    }
+
     /// What the Hub's consent page was, or would be, shown for this machine.
     pub fn machine(&self) -> HubMachine {
         consent_machine(
             &host_name().unwrap_or_default(),
+            self.instance_fallback,
             std::env::consts::OS,
             std::env::consts::ARCH,
             self.app_version.get(),
@@ -235,16 +301,11 @@ impl HubPairing {
             .try_lock()
             .map_err(|_| HubPairingError::PairingInProgress)?;
 
-        let origin = hub_origin(hub_url)?;
-        let paired = self.refresher.pins.load().map_err(storage)?;
-        check_pairing_origin(paired.as_ref().map(|p| p.hub_origin.as_str()), &origin)?;
-
-        if !self.refresher.secrets.status().available {
-            return Err(HubPairingError::KeyringUnavailable);
-        }
-
-        let install_id = self.refresher.pins.install_id().map_err(storage)?;
-        let device_key = self.device_key(&install_id)?;
+        let Prepared {
+            origin,
+            install_id,
+            device_key,
+        } = self.prepare(hub_url)?;
         let jkt = device_key.jkt();
 
         let (listener, redirect) = CallbackListener::bind()?;
@@ -282,9 +343,46 @@ impl HubPairing {
             )
             .await?;
 
+        self.commit(&origin, &jkt, &install_id, answer, now).await
+    }
+
+    /// What both grants do before the Hub is asked anything: the origin
+    /// checked against any existing pairing, the store checked for
+    /// availability (refused with its reason, when it gives one), and the
+    /// device key loaded, or created and stored.
+    fn prepare(&self, hub_url: &str) -> Result<Prepared, HubPairingError> {
+        let origin = hub_origin(hub_url)?;
+        let paired = self.refresher.pins.load().map_err(storage)?;
+        check_pairing_origin(paired.as_ref().map(|p| p.hub_origin.as_str()), &origin)?;
+
+        let store = self.refresher.secrets.status();
+        if !store.available {
+            return Err(store.unavailable_error());
+        }
+
+        let install_id = self.refresher.pins.install_id().map_err(storage)?;
+        let device_key = self.device_key(&install_id)?;
+        Ok(Prepared {
+            origin,
+            install_id,
+            device_key,
+        })
+    }
+
+    /// What both grants do with the pairing response, in the order the
+    /// module header gives. `now` is when the grant was asked, which the
+    /// access token's expiry is counted from.
+    async fn commit(
+        &self,
+        origin: &str,
+        jkt: &str,
+        install_id: &str,
+        answer: PairingAnswer,
+        now: u64,
+    ) -> Result<HubStatus, HubPairingError> {
         let expires_at = now.saturating_add(answer.expires_in());
-        let (pins, tokens) = answer.split(&origin, &jkt, i64::try_from(now).unwrap_or(i64::MAX));
-        let refresh_account = hub_keyring_account(&install_id, HubSecret::RefreshToken);
+        let (pins, tokens) = answer.split(origin, jkt, i64::try_from(now).unwrap_or(i64::MAX));
+        let refresh_account = hub_keyring_account(install_id, HubSecret::RefreshToken);
         let _refresh_lock = self.refresher.lock.lock().await;
         self.refresher
             .secrets
@@ -303,6 +401,144 @@ impl HubPairing {
         self.start_socket();
 
         self.status()
+    }
+
+    /// Starts a pairing by device code and returns once the Hub has answered
+    /// `/device_authorization`, with what to show the human. Polling goes on
+    /// in a task of its own, which [`Self::device_pairing`] reports on; an
+    /// approval is committed exactly as [`Self::pair`] commits one, socket
+    /// included.
+    ///
+    /// A pending device pairing is cancelled first and its task awaited, so
+    /// a second call replaces the first; [`Self::disconnect`] and
+    /// [`Self::cancel_device_pairing`] cancel the same way. A cancel lands
+    /// while the task waits or polls, never while it commits, so once the
+    /// cancel returns there is either nothing new stored or a whole pairing.
+    /// Refused with [`HubPairingError::PairingInProgress`] while a
+    /// [`Self::pair`] waits on the browser, and with the store's own reason,
+    /// before any network call, when the store is unavailable.
+    ///
+    /// A pairing that fails keeps its device key, as [`Self::pair`]'s does,
+    /// for the next attempt to reuse.
+    pub async fn begin_device_pairing(
+        self: &Arc<Self>,
+        hub_url: &str,
+    ) -> Result<DeviceTicket, HubPairingError> {
+        let endpoint = self.device.clone().ok_or_else(|| {
+            HubPairingError::Transport("device-code pairing is not configured".into())
+        })?;
+        self.cancel_device_pairing().await;
+        let in_flight = self
+            .in_flight
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| HubPairingError::PairingInProgress)?;
+
+        let prepared = self.prepare(hub_url)?;
+        let url = device_authorization_url(&prepared.origin);
+        let now = now_secs();
+        let proof = prepared
+            .device_key
+            .dpop_proof(&url, now, &random_token()?)?;
+        let form = device_authorization_form_body(SCOPES, &self.machine());
+        let grant = endpoint.authorize_device(&url, form, proof).await?.accept(
+            &prepared.origin,
+            prepared.device_key.fingerprint(),
+            now,
+        )?;
+        let ticket = grant.ticket.clone();
+
+        let (cancel, cancelled) = watch::channel(false);
+        let mut flow = self.lock_device_flow();
+        flow.state = DevicePairing::Pending(ticket.clone());
+        flow.cancel = Some(cancel);
+        flow.task = Some(tokio::spawn(
+            Arc::clone(self).poll_device(endpoint, prepared, grant, cancelled, in_flight),
+        ));
+        Ok(ticket)
+    }
+
+    /// Idle, pending with its ticket, or how the last one failed. A success
+    /// reads `Idle`; [`Self::status`] is what says paired.
+    pub fn device_pairing(&self) -> DevicePairing {
+        self.lock_device_flow().state.clone()
+    }
+
+    /// Stops a pending device pairing, awaits its task, and leaves `Idle`.
+    /// With none pending it only clears a failure.
+    pub async fn cancel_device_pairing(&self) {
+        let (cancel, task) = {
+            let mut flow = self.lock_device_flow();
+            (flow.cancel.take(), flow.task.take())
+        };
+        if let Some(cancel) = cancel {
+            cancel.send_replace(true);
+        }
+        if let Some(task) = task {
+            if let Err(e) = task.await {
+                tracing::warn!(error = %e, "the Hub device pairing task did not end cleanly");
+            }
+        }
+        self.lock_device_flow().state = DevicePairing::Idle;
+    }
+
+    fn lock_device_flow(&self) -> std::sync::MutexGuard<'_, DeviceFlow> {
+        self.device_flow
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Polls until the Hub answers for good, holding `_in_flight` throughout.
+    /// Returns without touching the state when cancelled: the canceller
+    /// sets it.
+    async fn poll_device(
+        self: Arc<Self>,
+        endpoint: Arc<dyn HubDeviceEndpoint>,
+        prepared: Prepared,
+        grant: DeviceGrant,
+        mut cancelled: watch::Receiver<bool>,
+        _in_flight: OwnedMutexGuard<()>,
+    ) {
+        let token_url = token_url(&prepared.origin);
+        let mut interval_secs = grant.interval_secs;
+        let ended = loop {
+            tokio::select! {
+                () = self.device_sleeper.sleep(Duration::from_secs(interval_secs)) => {}
+                _ = cancelled.wait_for(|cancelled| *cancelled) => return,
+            }
+            let now = now_secs();
+            let proof = match random_token()
+                .and_then(|jti| prepared.device_key.dpop_proof(&token_url, now, &jti))
+            {
+                Ok(proof) => proof,
+                Err(e) => break Err(e),
+            };
+            let body = device_token_form_body(grant.device_code.expose());
+            let polled = tokio::select! {
+                polled = endpoint.poll_device(&token_url, body, proof) => polled,
+                _ = cancelled.wait_for(|cancelled| *cancelled) => return,
+            };
+            let end = match polled {
+                Ok(answer) => {
+                    let jkt = prepared.device_key.jkt();
+                    break self
+                        .commit(&prepared.origin, &jkt, &prepared.install_id, answer, now)
+                        .await
+                        .map(|_| ());
+                }
+                Err(end) => end,
+            };
+            match after_device_poll(end, interval_secs, now_secs(), grant.ticket.expires_at) {
+                DevicePollStep::Wait {
+                    interval_secs: next,
+                } => interval_secs = next,
+                DevicePollStep::Fail(e) => break Err(e),
+            }
+        };
+        self.lock_device_flow().state = match ended {
+            Ok(()) => DevicePairing::Idle,
+            Err(e) => DevicePairing::Failed(e),
+        };
     }
 
     /// Rotates the stored refresh token for a new access token. One `/token`
@@ -485,8 +721,9 @@ impl HubPairing {
     }
 
     /// Forgets the Hub on this machine only: both keyring entries, then the
-    /// pins. Refused with [`HubPairingError::PairingInProgress`] while a
-    /// `pair` is waiting on the browser; it can be retried once that ends. The Hub has no revoke route, so the instance stays listed there
+    /// pins. A pending device pairing is cancelled first. Refused with
+    /// [`HubPairingError::PairingInProgress`] while a `pair` is waiting on
+    /// the browser; it can be retried once that ends. The Hub has no revoke route, so the instance stays listed there
     /// and its refresh family lapses on its own within 30 days. Idempotent,
     /// and it touches no table but the pins — runs carry on unaffected.
     ///
@@ -511,6 +748,7 @@ impl HubPairing {
     /// Taking the lock before raising the stop would wait on a refresh the
     /// endpoint may never answer.
     pub async fn disconnect(&self) -> Result<HubStatus, HubPairingError> {
+        self.cancel_device_pairing().await;
         let _in_flight = self
             .in_flight
             .try_lock()

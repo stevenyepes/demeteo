@@ -3,6 +3,7 @@
 //! ```text
 //! demeteo-runner submit <spec.json>   # one-shot, in-process (M1)
 //! demeteo-runner serve                # long-lived daemon + control RPC (M3)
+//! demeteo-runner hub <command>        # Hub pairing, through serve (hub::cli)
 //! ```
 //!
 //! Both build the same engine the desktop app uses
@@ -23,6 +24,7 @@ mod away_notify;
 mod credentials;
 mod driver;
 mod git_askpass;
+mod hub;
 mod notify_bridge;
 mod reconcile;
 mod rpc;
@@ -31,9 +33,14 @@ mod services;
 
 use away_notify::{AwayNotifier, NoopAwayNotifier, WebhookAwayNotifier};
 use credentials::{CredentialStore, RunnerCredentialSource};
-use demeteo_core::composition::{build_core_context_with_credentials, CoreConfig, ExecutionMode};
+use demeteo_core::adapters::database::SqliteAdapter;
+use demeteo_core::adapters::hub::sealed_store::{load_store_key, SealedSecretStore};
+use demeteo_core::composition::{build_core_context_with_hub_store, CoreConfig, ExecutionMode};
+use demeteo_core::domain::hub_pairing::sealed::{SEALED_BACKEND, STORE_KEY_LEN};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
+use demeteo_core::ports::hub::HubSecretStore;
+use hub::HubControl;
 use notify_bridge::RunEventBridge;
 use services::RunnerServices;
 use std::path::{Path, PathBuf};
@@ -85,6 +92,28 @@ fn ensure_private_data_dir(dir: &Path) -> std::io::Result<()> {
 
 fn print_usage() {
     eprintln!("usage: demeteo-runner serve | demeteo-runner submit <spec.json> | demeteo-runner --version");
+    eprintln!("{}", hub::cli::USAGE);
+}
+
+/// Where systemd put the unit's credentials (decision 64).
+const CREDENTIALS_DIRECTORY: &str = "CREDENTIALS_DIRECTORY";
+
+/// The key `serve` seals its Hub secrets under, read once, before any thread
+/// or child exists. The variable is then removed from this process's own
+/// environment, so no child inherits it whether or not its spawn sanitizes.
+fn take_store_key() -> Result<[u8; STORE_KEY_LEN], &'static str> {
+    let directory = std::env::var_os(CREDENTIALS_DIRECTORY);
+    std::env::remove_var(CREDENTIALS_DIRECTORY);
+    load_store_key(directory.as_deref())
+}
+
+/// The probe [`enrich_path_from_login_shell`] runs. It is a login shell of
+/// the runner's user, as an agent is, so it gets an agent's environment.
+fn login_path_probe() -> std::process::Command {
+    let mut cmd = std::process::Command::new("bash");
+    cmd.args(["-lic", "printf %s \"$PATH\""]);
+    demeteo_core::shared::proc::sanitize_child_env(&mut cmd);
+    cmd
 }
 
 /// Enrich the process `PATH` from a login + interactive shell so agent
@@ -108,9 +137,7 @@ fn print_usage() {
 /// mutation happens while the process is still single-threaded. Best-effort:
 /// any probe failure leaves `PATH` untouched.
 fn enrich_path_from_login_shell() {
-    let output = std::process::Command::new("bash")
-        .args(["-lic", "printf %s \"$PATH\""])
-        .output();
+    let output = login_path_probe().output();
     let login_path = match output {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         Ok(o) => {
@@ -177,14 +204,34 @@ fn main() {
             std::process::exit(exit_code);
         }
         Some("serve") => {
+            let store_key = take_store_key();
             enrich_path_from_login_shell();
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .expect("failed to build tokio runtime");
             let handle = rt.handle().clone();
-            let exit_code = rt.block_on(serve(handle));
+            let exit_code = rt.block_on(serve(handle, store_key));
             std::process::exit(exit_code);
+        }
+        Some("hub") => {
+            let command = match hub::cli::parse(&args[2..]) {
+                Ok(command) => command,
+                Err(e) => {
+                    eprintln!("error: {e}\n\n{}", hub::cli::USAGE);
+                    std::process::exit(2);
+                }
+            };
+            let data_dir = runner_data_dir();
+            if let Err(e) = ensure_private_data_dir(&data_dir) {
+                eprintln!("[demeteo-runner] failed to secure data dir (0700): {}", e);
+                std::process::exit(1);
+            }
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime");
+            std::process::exit(rt.block_on(hub::cli::run(command, &data_dir)));
         }
         _ => {
             print_usage();
@@ -193,12 +240,81 @@ fn main() {
     }
 }
 
-async fn serve(runtime: tokio::runtime::Handle) -> i32 {
+/// The context both entry points run on, and the runner-only state around
+/// it. The Hub pairing is built over the sealed store either way; only
+/// `serve` starts its socket or answers the `hub_*` methods.
+fn runner_services(
+    app_data_dir: &Path,
+    runtime: tokio::runtime::Handle,
+    store_key: Result<[u8; STORE_KEY_LEN], &'static str>,
+) -> Result<Arc<RunnerServices>, String> {
+    let sealed_repo = demeteo_core::db::init_db(app_data_dir.to_path_buf())
+        .map_err(|e| e.to_string())
+        .and_then(SqliteAdapter::new)
+        .map_err(|e| format!("failed to open the database for the Hub store: {e}"))?;
+    let secrets: Arc<dyn HubSecretStore> = Arc::new(SealedSecretStore::new(
+        Arc::new(sealed_repo),
+        store_key,
+        SEALED_BACKEND,
+    ));
+    // Bridge the engine's live `DomainEvent` stream into the run event log
+    // so remote runs report per-step progress / retries / failures, not just
+    // coarse lifecycle events. Wired *after* the context is built (it needs
+    // the `run_events`/`runner_runs` ports the build constructs); until then
+    // it drops events exactly as the old noop adapter did.
+    let notify_bridge = Arc::new(RunEventBridge::new());
+    let creds = Arc::new(CredentialStore::new());
+    let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), app_data_dir));
+    let (ctx, policy_writer) = build_core_context_with_hub_store(
+        CoreConfig {
+            app_data_dir: app_data_dir.to_path_buf(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        notify_bridge.clone(),
+        runtime,
+        git_credentials.clone(),
+        secrets.clone(),
+    );
+    let ctx = Arc::new(ctx);
+    ctx.app_version.set(VERSION.to_owned());
+    notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
+    git_credentials.bind(ctx.runner_runs.clone());
+    let askpass_path = git_askpass::ensure_askpass_script(app_data_dir)
+        .map_err(|e| format!("failed to write askpass helper: {e}"))?;
+    let away_notifier: Arc<dyn AwayNotifier> = match WebhookAwayNotifier::from_env() {
+        Some(n) => Arc::new(n),
+        None => Arc::new(NoopAwayNotifier),
+    };
+    Ok(Arc::new(RunnerServices {
+        hub: HubControl {
+            pairing: ctx.hub.clone(),
+            secrets,
+            policy: ctx.hub_policy.clone(),
+            policy_writer,
+        },
+        ctx,
+        creds,
+        askpass_path,
+        away_notifier,
+        drivers: Arc::default(),
+    }))
+}
+
+async fn serve(
+    runtime: tokio::runtime::Handle,
+    store_key: Result<[u8; STORE_KEY_LEN], &'static str>,
+) -> i32 {
     let app_data_dir = runner_data_dir();
     eprintln!("[demeteo-runner] data dir: {}", app_data_dir.display());
     if let Err(e) = ensure_private_data_dir(&app_data_dir) {
         eprintln!("[demeteo-runner] failed to secure data dir (0700): {}", e);
         return 1;
+    }
+    if let Err(reason) = &store_key {
+        eprintln!(
+            "[demeteo-runner] this runner cannot pair with a Hub: {reason}; run \
+             `demeteo-runner hub seal`, then restart it"
+        );
     }
 
     // Read before the context is built: `reconcile_on_startup` separates gate
@@ -211,39 +327,20 @@ async fn serve(runtime: tokio::runtime::Handle) -> i32 {
     // below is the M2.3 layer on top: it re-attaches runner_runs rows
     // (this daemon's own submit/status mirror) to whatever the engine
     // just resumed, under a bounded reboot-retry budget.
-    // Bridge the engine's live `DomainEvent` stream into the run event log
-    // so remote runs report per-step progress / retries / failures, not just
-    // coarse lifecycle events. Wired *after* the context is built (it needs
-    // the `run_events`/`runner_runs` ports the build constructs); until then
-    // it drops events exactly as the old noop adapter did.
-    let notify_bridge = Arc::new(RunEventBridge::new());
-    let creds = Arc::new(CredentialStore::new());
-    let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), &app_data_dir));
-    let ctx = Arc::new(build_core_context_with_credentials(
-        CoreConfig {
-            app_data_dir: app_data_dir.clone(),
-            execution_mode: ExecutionMode::LocalOnly,
-        },
-        notify_bridge.clone(),
-        runtime,
-        git_credentials.clone(),
-    ));
-    notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
-    git_credentials.bind(ctx.runner_runs.clone());
-    let askpass_path = git_askpass::ensure_askpass_script(&app_data_dir)
-        .unwrap_or_else(|e| panic!("failed to write askpass helper: {}", e));
-    let away_notifier: Arc<dyn AwayNotifier> = match WebhookAwayNotifier::from_env() {
-        Some(n) => Arc::new(n),
-        None => Arc::new(NoopAwayNotifier),
+    let svc = match runner_services(&app_data_dir, runtime, store_key) {
+        Ok(svc) => svc,
+        Err(e) => {
+            eprintln!("[demeteo-runner] {e}");
+            return 1;
+        }
     };
-    let svc = Arc::new(RunnerServices {
-        ctx: ctx.clone(),
-        creds,
-        askpass_path,
-        away_notifier,
-        drivers: Arc::default(),
-    });
+    let ctx = svc.ctx.clone();
     reconcile::reconcile_on_startup(svc.clone(), process_started_at).await;
+    // After the version, which the socket's `Hello` announces. Unpaired, it
+    // starts nothing.
+    if let Some(hub) = &ctx.hub {
+        hub.start_socket();
+    }
 
     let socket_path = rpc::socket_path(&app_data_dir);
     let rpc_svc = svc.clone();
@@ -310,22 +407,17 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
         return 1;
     }
 
-    let notify_bridge = Arc::new(RunEventBridge::new());
-    let creds = Arc::new(CredentialStore::new());
-    let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), &app_data_dir));
-    let ctx = Arc::new(build_core_context_with_credentials(
-        CoreConfig {
-            app_data_dir: app_data_dir.clone(),
-            execution_mode: ExecutionMode::LocalOnly,
-        },
-        notify_bridge.clone(),
+    let svc = match runner_services(
+        &app_data_dir,
         runtime,
-        git_credentials.clone(),
-    ));
-    notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
-    git_credentials.bind(ctx.runner_runs.clone());
-    let askpass_path = git_askpass::ensure_askpass_script(&app_data_dir)
-        .unwrap_or_else(|e| panic!("failed to write askpass helper: {}", e));
+        Err("a one-shot submit does not hold the Hub pairing"),
+    ) {
+        Ok(svc) => svc,
+        Err(e) => {
+            eprintln!("[demeteo-runner] {e}");
+            return 1;
+        }
+    };
 
     // No RPC client submitted this, so there's no laptop-generated
     // run_id (M3.2) to key the event log by — mint one so `submit`'s run
@@ -337,20 +429,8 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
     // in-memory store for just this run so the same askpass path serves
     // both entry points.
     if let Ok(pat) = std::env::var(run::GIT_PAT_ENV) {
-        creds.insert(&run_id, pat);
+        svc.creds.insert(&run_id, pat);
     }
-
-    let away_notifier: Arc<dyn AwayNotifier> = match WebhookAwayNotifier::from_env() {
-        Some(n) => Arc::new(n),
-        None => Arc::new(NoopAwayNotifier),
-    };
-    let svc = Arc::new(RunnerServices {
-        ctx,
-        creds,
-        askpass_path,
-        away_notifier,
-        drivers: Arc::default(),
-    });
     match run::execute_run(&svc, &run_id, &spec).await {
         Ok(outcome) if outcome.pushed_branch.is_some() => 0,
         Ok(outcome) => {
@@ -366,3 +446,7 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

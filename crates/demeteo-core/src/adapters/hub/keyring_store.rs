@@ -35,6 +35,7 @@ impl HubSecretStore for KeyringSecretStore {
         KeyringStatus {
             backend: keyring_backend_name(std::env::consts::OS),
             available: Entry::store_status().is_ok(),
+            reason: None,
         }
     }
 
