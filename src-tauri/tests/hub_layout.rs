@@ -494,6 +494,11 @@ fn hub_socket_dep_violations(core: &Value) -> Vec<String> {
         ));
     }
     let enabled = feature_list(core, HUB_SOCKET_FEATURE);
+    if enabled.contains(&"keyring") {
+        out.push(format!(
+            "`{HUB_SOCKET_FEATURE}` enables `keyring`: a runner's socket pairs through its sealed store"
+        ));
+    }
     for name in HUB_SOCKET_DEPS {
         let entries: Vec<&Value> = dependencies(core)
             .iter()
@@ -646,6 +651,10 @@ fn hub_socket_detectors_fire_on_violations() {
     assert!(hub_socket_dep_violations(&good).is_empty());
     let off_by_default = core(all_deps(), vec!["keyring"], enabling.clone());
     assert_eq!(hub_socket_dep_violations(&off_by_default).len(), 1);
+    let mut with_keyring = enabling.clone();
+    with_keyring.push("keyring");
+    let keyring_implied = core(all_deps(), vec![HUB_SOCKET_FEATURE], with_keyring);
+    assert_eq!(hub_socket_dep_violations(&keyring_implied).len(), 1);
     for name in HUB_SOCKET_DEPS {
         let required = HUB_SOCKET_DEPS.iter().map(|n| dep(n, *n != name)).collect();
         let pkg = core(required, vec![HUB_SOCKET_FEATURE], enabling.clone());

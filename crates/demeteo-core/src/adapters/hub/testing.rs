@@ -6,7 +6,8 @@
 //! derives for its install id, so a secret written under any other name fails
 //! the test instead of landing quietly in the map.
 //!
-//! [`ScriptedRefreshEndpoint`] and [`ScriptedSocketDialer`] answer only from
+//! [`ScriptedRefreshEndpoint`], [`ScriptedDeviceEndpoint`] and
+//! [`ScriptedSocketDialer`] answer only from
 //! their scripts, and a [`ScriptedConnection`] closes when its script runs out
 //! rather than waiting for a frame nobody will send, unless the test scripted
 //! that silence or holds the frames back to release them itself. Each counts
@@ -35,15 +36,18 @@ use async_trait::async_trait;
 use demeteo_hub_protocol::{AttachmentRef, Snapshot};
 use tokio::sync::{mpsc, watch, Notify};
 
+use crate::domain::hub_pairing::device::{DeviceAuthorization, DeviceGrantEnd};
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
-use crate::domain::hub_pairing::{HubPins, HubSecret, KeyringStatus, RefreshAnswer};
+use crate::domain::hub_pairing::{
+    HubPairingError, HubPins, HubSecret, KeyringStatus, PairingAnswer, RefreshAnswer,
+};
 use crate::domain::hub_socket::RefreshEnd;
 use crate::domain::models::GateDecision;
 use crate::error::AppError;
 use crate::ports::hub::{
-    AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubPinRepository, HubRefreshEndpoint,
-    HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer, SocketGone,
-    SocketReceived, SocketUpgrade,
+    AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository,
+    HubRefreshEndpoint, HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer,
+    SocketGone, SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::ports::step_executor::GatePresenter;
@@ -136,6 +140,7 @@ impl HubSecretStore for MemorySecretStore {
         KeyringStatus {
             backend: "in-memory test store",
             available: self.available.load(Ordering::SeqCst),
+            reason: None,
         }
     }
 
@@ -268,6 +273,117 @@ impl HubRefreshEndpoint for ScriptedRefreshEndpoint {
         next.unwrap_or_else(|| {
             self.unscripted.fetch_add(1, Ordering::SeqCst);
             Err(RefreshEnd::Unanswered)
+        })
+    }
+}
+
+/// One request a [`ScriptedDeviceEndpoint`] received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceCall {
+    pub url: String,
+    pub form_body: String,
+    pub dpop: String,
+}
+
+/// The Hub's `/device_authorization` and device-code `/token`, answering
+/// each from its own script. An unscripted authorization is a `Transport`
+/// error and an unscripted poll a `Refused` one — never `Pending`, which
+/// would keep a pairing polling that the test did not script — and each is
+/// counted by [`Self::unscripted`].
+#[derive(Default)]
+pub struct ScriptedDeviceEndpoint {
+    authorizations: Mutex<VecDeque<Result<DeviceAuthorization, HubPairingError>>>,
+    polls: Mutex<VecDeque<Result<PairingAnswer, DeviceGrantEnd>>>,
+    authorize_calls: Mutex<Vec<DeviceCall>>,
+    poll_calls: Mutex<Vec<DeviceCall>>,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedDeviceEndpoint {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Scripts the Hub's `200`, in its own JSON shape, for `origin`.
+    pub fn authorize(&self, origin: &str, device_code: &str, user_code: &str, interval: u64) {
+        let verification_uri = format!("{origin}/#/device");
+        let body = serde_json::json!({
+            "device_code": device_code,
+            "user_code": user_code,
+            "verification_uri_complete": format!("{verification_uri}/{user_code}"),
+            "verification_uri": verification_uri,
+            "expires_in": 600,
+            "interval": interval,
+        });
+        let answer = serde_json::from_value(body)
+            .unwrap_or_else(|e| panic!("the scripted device authorization does not parse: {e}"));
+        locked(&self.authorizations).push_back(Ok(answer));
+    }
+
+    pub fn refuse_authorization(&self, error: HubPairingError) {
+        locked(&self.authorizations).push_back(Err(error));
+    }
+
+    pub fn poll_answers(&self, answer: PairingAnswer) {
+        locked(&self.polls).push_back(Ok(answer));
+    }
+
+    pub fn poll_ends(&self, end: DeviceGrantEnd) {
+        locked(&self.polls).push_back(Err(end));
+    }
+
+    pub fn authorize_calls(&self) -> Vec<DeviceCall> {
+        locked(&self.authorize_calls).clone()
+    }
+
+    pub fn poll_calls(&self) -> Vec<DeviceCall> {
+        locked(&self.poll_calls).clone()
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl HubDeviceEndpoint for ScriptedDeviceEndpoint {
+    async fn authorize_device(
+        &self,
+        url: &str,
+        form_body: String,
+        dpop: String,
+    ) -> Result<DeviceAuthorization, HubPairingError> {
+        locked(&self.authorize_calls).push(DeviceCall {
+            url: url.to_owned(),
+            form_body,
+            dpop,
+        });
+        let next = locked(&self.authorizations).pop_front();
+        next.unwrap_or_else(|| {
+            self.unscripted.fetch_add(1, Ordering::SeqCst);
+            Err(HubPairingError::Transport(
+                "unscripted authorization".into(),
+            ))
+        })
+    }
+
+    async fn poll_device(
+        &self,
+        token_url: &str,
+        form_body: String,
+        dpop: String,
+    ) -> Result<PairingAnswer, DeviceGrantEnd> {
+        locked(&self.poll_calls).push(DeviceCall {
+            url: token_url.to_owned(),
+            form_body,
+            dpop,
+        });
+        let next = locked(&self.polls).pop_front();
+        next.unwrap_or_else(|| {
+            self.unscripted.fetch_add(1, Ordering::SeqCst);
+            Err(DeviceGrantEnd::Refused(HubPairingError::Transport(
+                "unscripted poll".into(),
+            )))
         })
     }
 }

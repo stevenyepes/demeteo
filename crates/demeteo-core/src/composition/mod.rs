@@ -86,6 +86,7 @@ pub fn build_core_context_with_policy_writer(
         notif,
         runtime,
         Arc::new(adapters::git_credentials::KeyringCredentialSource),
+        None,
     )
 }
 
@@ -98,7 +99,28 @@ pub fn build_core_context_with_credentials(
     runtime: tokio::runtime::Handle,
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
 ) -> AppContext {
-    build_core_context_parts(cfg, notif, runtime, git_credentials).0
+    build_core_context_parts(cfg, notif, runtime, git_credentials, None).0
+}
+
+/// [`build_core_context_with_credentials`] for a process that pairs with the
+/// Hub through `hub_secrets` rather than the OS keyring: a `demeteo-runner`,
+/// whose store is [`adapters::hub::sealed_store::SealedSecretStore`]
+/// (decision 64). `ctx.hub` is then built in `LocalOnly` too, its socket
+/// attached but not started, as on the desktop; the caller sets
+/// `ctx.app_version` and calls `start_socket`. The policy writer is returned
+/// for the same reason [`build_core_context_with_policy_writer`] returns it.
+///
+/// Hub requests are not bound in `LocalOnly`: a request reaching a runner's
+/// socket goes unanswered and is delivered again on a later connection,
+/// until the runner judges requests itself.
+pub fn build_core_context_with_hub_store(
+    cfg: CoreConfig,
+    notif: Arc<dyn NotificationPort>,
+    runtime: tokio::runtime::Handle,
+    git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
+    hub_secrets: Arc<dyn ports::hub::HubSecretStore>,
+) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
+    build_core_context_parts(cfg, notif, runtime, git_credentials, Some(hub_secrets))
 }
 
 fn build_core_context_parts(
@@ -106,6 +128,7 @@ fn build_core_context_parts(
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
+    hub_secrets: Option<Arc<dyn ports::hub::HubSecretStore>>,
 ) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
     let CoreConfig {
         app_data_dir,
@@ -396,9 +419,14 @@ fn build_core_context_parts(
     let hub_passkey_reader: Arc<dyn ports::hub::HubPasskeyReader> = db_adapter.clone();
 
     let app_version = AppVersion::default();
-    let hub = match execution_mode {
-        ExecutionMode::Router => hub_pairing(
+    let hub_secrets = hub_secrets.or_else(|| match execution_mode {
+        ExecutionMode::Router => keyring_secret_store(),
+        ExecutionMode::LocalOnly => None,
+    });
+    let hub = hub_secrets.and_then(|secrets| {
+        hub_pairing(
             hub_pins.clone(),
+            secrets,
             hub_policy_reader.clone(),
             app_version.clone(),
             hub_socket(
@@ -418,9 +446,8 @@ fn build_core_context_parts(
                 snapshot_wake,
                 runtime.clone(),
             ),
-        ),
-        ExecutionMode::LocalOnly => None,
-    };
+        )
+    });
 
     let ctx = AppContext {
         machines: machines_repo,
@@ -493,7 +520,8 @@ fn build_core_context_parts(
 
     // Before `start_socket`, which `src-tauri/src/lib.rs` calls once this
     // returns, so the first connection already answers what it is sent.
-    if let Some(hub) = &ctx.hub {
+    // Desktop only: see `build_core_context_with_hub_store`.
+    if let (ExecutionMode::Router, Some(hub)) = (&execution_mode, &ctx.hub) {
         hub.bind_requests(Arc::new(application::hub_requests::HubRequests::new(
             Arc::new(ctx.clone()),
             application::hub_requests::HubRequestPorts {
@@ -516,9 +544,9 @@ fn build_core_context_parts(
 /// The socket is attached here but not started: its `Hello` announces that
 /// same version, which is still unset until this returns, so the desktop
 /// starts it (`src-tauri/src/lib.rs`) once the version is set.
-#[cfg(feature = "keyring")]
 fn hub_pairing(
     pins: Arc<dyn ports::hub::HubPinRepository>,
+    secrets: Arc<dyn ports::hub::HubSecretStore>,
     policy: Arc<dyn ports::hub::HubPolicyReader>,
     app_version: AppVersion,
     socket: Option<adapters::hub::socket::SocketConfig>,
@@ -530,28 +558,27 @@ fn hub_pairing(
             return None;
         }
     };
-    let pairing = adapters::hub::HubPairing::new(
-        pins,
-        Arc::new(adapters::hub::keyring_store::KeyringSecretStore),
-        token.clone(),
-        policy,
-    )
-    .with_refresh_endpoint(token)
-    .with_app_version(app_version);
+    let pairing = adapters::hub::HubPairing::new(pins, secrets, token.clone(), policy)
+        .with_refresh_endpoint(token.clone())
+        .with_device_endpoint(token)
+        .with_app_version(app_version);
     Some(Arc::new(match socket {
         Some(socket) => pairing.with_socket(socket),
         None => pairing,
     }))
 }
 
-/// No keyring, no pairing: a file in its place is what AGENTS.md §2 forbids.
+#[cfg(feature = "keyring")]
+fn keyring_secret_store() -> Option<Arc<dyn ports::hub::HubSecretStore>> {
+    Some(Arc::new(adapters::hub::keyring_store::KeyringSecretStore))
+}
+
+/// A build without the keyring pairs only through a store its caller hands
+/// [`build_core_context_with_hub_store`]. The one store allowed in place of
+/// the keyring is a runner's sealed one (decision 64, AGENTS.md §2), and
+/// only the runner can say whether its host sealed a key.
 #[cfg(not(feature = "keyring"))]
-fn hub_pairing(
-    _pins: Arc<dyn ports::hub::HubPinRepository>,
-    _policy: Arc<dyn ports::hub::HubPolicyReader>,
-    _app_version: AppVersion,
-    _socket: Option<adapters::hub::socket::SocketConfig>,
-) -> Option<Arc<adapters::hub::HubPairing>> {
+fn keyring_secret_store() -> Option<Arc<dyn ports::hub::HubSecretStore>> {
     None
 }
 

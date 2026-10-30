@@ -21,10 +21,12 @@ use thiserror::Error;
 
 pub mod answer;
 pub mod callback;
+pub mod device;
 pub mod dpop;
 pub mod jwk;
 pub mod keyring_names;
 pub mod pkce;
+pub mod sealed;
 
 pub use answer::{
     HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, RefreshAnswer, SecretString,
@@ -93,6 +95,9 @@ pub enum HubPairingError {
     InvalidHubUrl(String),
     #[error("no OS keyring is available to hold the Hub credentials")]
     KeyringUnavailable,
+    /// A store that can say why it is unavailable, as a sealed one can.
+    #[error("the {backend} store cannot hold the Hub credentials: {reason}")]
+    SecretStoreUnavailable { backend: String, reason: String },
     #[error("a Hub pairing is already in progress")]
     PairingInProgress,
     #[error("already paired with {origin}; disconnect before pairing with another Hub")]
@@ -101,6 +106,8 @@ pub enum HubPairingError {
     CallbackTimeout,
     #[error("the pairing was denied on the Hub")]
     Denied,
+    #[error("the pairing code expired before it was approved on the Hub")]
+    DeviceCodeExpired,
     #[error("the Hub callback was refused")]
     CallbackRefused,
     #[error("the Hub refused the pairing: {error}")]
@@ -222,6 +229,21 @@ pub fn consent_machine(host_name: &str, os: &str, arch: &str, app_version: &str)
 pub struct KeyringStatus {
     pub backend: &'static str,
     pub available: bool,
+    /// Why it is unavailable, when the store can tell.
+    pub reason: Option<&'static str>,
+}
+
+impl KeyringStatus {
+    /// What pairing refuses with when a store is `!available`.
+    pub fn unavailable_error(&self) -> HubPairingError {
+        match self.reason {
+            Some(reason) => HubPairingError::SecretStoreUnavailable {
+                backend: self.backend.to_owned(),
+                reason: reason.to_owned(),
+            },
+            None => HubPairingError::KeyringUnavailable,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

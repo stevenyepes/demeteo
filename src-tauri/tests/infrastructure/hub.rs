@@ -1891,6 +1891,7 @@ fn hub_status_without_a_keyring_cannot_read_as_paired() {
     let gone = KeyringStatus {
         backend: "Secret Service",
         available: false,
+        reason: None,
     };
     let status = hub_status(Some(&pins), gone, true, true);
     assert_eq!(status.state, HubPairingState::Incomplete);
@@ -1929,6 +1930,37 @@ async fn a_router_context_can_pair() {
     let ctx = core_context("router", ExecutionMode::Router);
     assert!(ctx.hub.is_some());
     assert!(pairing(&ctx).is_ok());
+}
+
+/// A runner's composition: a pairing over the store it was handed, with a
+/// socket to start, and no request handler, so a request reaching its socket
+/// stays queued on the Hub.
+#[tokio::test]
+async fn a_local_only_context_handed_a_store_pairs_through_it_and_binds_no_requests() {
+    // Unavailable, so `status` names it without reading accounts this
+    // double was not made for.
+    let secrets = Arc::new(MemorySecretStore::new("unused"));
+    secrets.set_available(false);
+    let (ctx, _writer) = demeteo_core::composition::build_core_context_with_hub_store(
+        CoreConfig {
+            app_data_dir: demeteo_core::test_dir::scratch("demeteo-hub-cmd-runner"),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotificationAdapter),
+        tokio::runtime::Handle::current(),
+        Arc::new(crate::adapters::git_credentials::KeyringCredentialSource),
+        secrets,
+    );
+    let hub = ctx
+        .hub
+        .as_ref()
+        .expect("a store makes a LocalOnly context pair");
+    assert!(hub.socket_wake().is_some(), "a socket to start");
+    assert!(!hub.requests_bound());
+    let status = hub.status().expect("a status");
+    assert_eq!(status.state, HubPairingState::Unpaired);
+    assert_eq!(status.keyring_backend, "in-memory test store");
+    assert!(!status.keyring_available);
 }
 
 /// Bound by the time `build_core_context` returns, which is before the
