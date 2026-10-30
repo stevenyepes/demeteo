@@ -889,3 +889,70 @@ async fn hydrate_keeps_a_shadow_the_desktop_saw_merge() {
         "a runner that has not seen the merge must not put a landed ticket back in flight"
     );
 }
+
+fn status_events(
+    notif: &crate::support::notification_capture::CapturingNotificationPort,
+) -> Vec<String> {
+    notif
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::ports::notification::DomainEvent::FeatureStatusChanged { status, .. } => {
+                Some(status)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A detached run's own events stay on its runner, so a shadow's status
+/// change is the only word of how it ended that reaches the desktop's log —
+/// and a paired Hub. A poll that changes nothing must say nothing.
+#[tokio::test]
+async fn a_shadow_logs_each_status_it_moves_to_and_nothing_on_an_unchanged_poll() {
+    let (mut ctx, _temp_dir) =
+        make_sequence_test_ctx("shadow_status_log", Ok(serde_json::Value::Null));
+    let notif = Arc::new(crate::support::notification_capture::CapturingNotificationPort::new());
+    ctx.notif = notif.clone();
+    let mut running = sequence_test_feature();
+    running.status = "running".to_string();
+    ctx.features.add(running).unwrap();
+    let mut finished = sequence_test_feature();
+    finished.status = "completed".to_string();
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(finished).unwrap(),
+        serde_json::json!([]),
+        Ok(serde_json::Value::Null),
+    ));
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "completed")
+        .await
+        .unwrap();
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "completed")
+        .await
+        .unwrap();
+
+    assert_eq!(status_events(&notif), ["completed"]);
+}
+
+#[tokio::test]
+async fn a_pre_clone_credential_park_logs_the_block() {
+    let (mut ctx, _temp_dir) =
+        make_sequence_test_ctx("pre_clone_park_log", Ok(serde_json::Value::Null));
+    let notif = Arc::new(crate::support::notification_capture::CapturingNotificationPort::new());
+    ctx.notif = notif.clone();
+    let mut submitted = sequence_test_feature();
+    submitted.status = "pending".to_string();
+    ctx.features.add(submitted).unwrap();
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::Value::Null,
+        serde_json::json!([]),
+        Ok(serde_json::Value::Null),
+    ));
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "needs-credentials")
+        .await
+        .unwrap();
+
+    assert_eq!(status_events(&notif), ["needs-credentials"]);
+}

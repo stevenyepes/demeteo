@@ -313,6 +313,17 @@ pub fn run() {
             run_event_recorder.wire(ctx.run_events.clone());
 
             commands::workflows::seed_starter_workflows(&ctx.workflows);
+            // Before the socket, so its first page already carries the rows.
+            match demeteo_core::application::run_end_backfill::backfill_run_ends(
+                &*ctx.projects,
+                &*ctx.features,
+                &*ctx.run_events,
+                demeteo_core::paths::now_ms(),
+            ) {
+                Ok(0) => {}
+                Ok(n) => eprintln!("[demeteo] logged the end of {n} run(s) the log had missed"),
+                Err(e) => eprintln!("[demeteo] run-end backfill failed: {e}"),
+            }
             ctx.app_version.set(app.package_info().version.to_string());
             // After the version, which the socket's `Hello` announces.
             if let Some(hub) = &ctx.hub {

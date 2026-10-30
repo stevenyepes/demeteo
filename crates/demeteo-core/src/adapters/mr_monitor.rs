@@ -194,6 +194,12 @@ fn record_merged(
             ..Default::default()
         },
     )?;
+    // The run log, and through it a paired Hub, learns of the merge only
+    // from this event: without it the run reads as running there for good.
+    let _ = notif.emit(&DomainEvent::FeatureStatusChanged {
+        feature_id: feature.id.clone(),
+        status: "completed".to_string(),
+    });
 
     // 2. Persist a notification row.
     let url = feature.mr_url.clone().unwrap_or_default();

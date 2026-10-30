@@ -5,7 +5,9 @@
 //! one. What crosses the socket is decided here and only here: [`hub_event`]
 //! is the allowlist a `run_events` row has to pass, [`hello`] the scopes
 //! an instance announces, and [`snapshot`] what an instance reports of its
-//! Projects. What follows a connection's end is decided here
+//! Projects. Which `feature_status` row the log still owes the Hub before a
+//! run reads as ended there is [`status_backfill`] and [`removal_logs_cancel`].
+//! What follows a connection's end is decided here
 //! too: [`after`], [`after_close`], [`resets_backoff`], [`refresh_refusal`],
 //! [`after_refresh`] and [`backoff`]. What the Settings tab is told of the
 //! socket is [`connection::view`].
@@ -14,10 +16,12 @@ use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
 pub mod connection;
 mod projection;
+mod run_end;
 mod snapshot;
 mod verdict;
 
 pub use projection::{hub_event, MAX_FEATURE_ID_BYTES};
+pub use run_end::{removal_logs_cancel, run_has_ended, status_backfill};
 pub use snapshot::{
     snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
     MAX_REPORTED_FEATURES, MAX_SNAPSHOT_BYTES, MAX_TITLE_CHARS, SNAPSHOT_DEBOUNCE_SECS,

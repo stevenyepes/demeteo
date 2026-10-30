@@ -1024,3 +1024,49 @@ async fn keep_tells_the_runner_the_freshly_fetched_pr_state() {
         [pending(CacheReleaseReason::Merged)]
     );
 }
+
+fn status_events(
+    notif: &crate::support::notification_capture::CapturingNotificationPort,
+) -> Vec<String> {
+    notif
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            DomainEvent::FeatureStatusChanged { status, .. } => Some(status),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `archived` and `deleted` have no Hub kind, so a run removed mid-flight
+/// would keep the last thing a paired Hub saw — a gate waiting on a human.
+#[tokio::test]
+async fn removing_a_run_that_had_not_ended_logs_it_cancelled() {
+    for (policy, force) in [("archive", None), ("auto_delete", Some(true))] {
+        let (mut ctx, _features, _mirrors, _calls) =
+            cleanup_context_with(policy, "awaiting_gate", "none", None);
+        let notif =
+            Arc::new(crate::support::notification_capture::CapturingNotificationPort::new());
+        ctx.notif = notif.clone();
+
+        feature_cleanup(&ctx, "f-cleanup".to_string(), force)
+            .await
+            .unwrap();
+
+        assert_eq!(status_events(&notif), ["cancelled"], "{policy}");
+    }
+}
+
+#[tokio::test]
+async fn removing_a_run_that_had_ended_keeps_how_it_ended() {
+    let (mut ctx, _features, _mirrors, _calls) =
+        cleanup_context_with("archive", "completed", "merged", None);
+    let notif = Arc::new(crate::support::notification_capture::CapturingNotificationPort::new());
+    ctx.notif = notif.clone();
+
+    feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+        .await
+        .unwrap();
+
+    assert!(status_events(&notif).is_empty());
+}
