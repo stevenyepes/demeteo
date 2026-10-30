@@ -120,7 +120,23 @@ pub fn build_core_context_with_hub_store(
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
     hub_secrets: Arc<dyn ports::hub::HubSecretStore>,
 ) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
-    build_core_context_parts(cfg, notif, runtime, git_credentials, Some(hub_secrets))
+    build_core_context_parts(
+        cfg,
+        notif,
+        runtime,
+        git_credentials,
+        Some(HubStore {
+            secrets: hub_secrets,
+            instance_fallback: crate::domain::hub_pairing::RUNNER_INSTANCE_FALLBACK,
+        }),
+    )
+}
+
+/// The store a caller of [`build_core_context_with_hub_store`] pairs
+/// through, and what the Hub calls its host when the host name is unreadable.
+struct HubStore {
+    secrets: Arc<dyn ports::hub::HubSecretStore>,
+    instance_fallback: &'static str,
 }
 
 fn build_core_context_parts(
@@ -128,7 +144,7 @@ fn build_core_context_parts(
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
-    hub_secrets: Option<Arc<dyn ports::hub::HubSecretStore>>,
+    hub_store: Option<HubStore>,
 ) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
     let CoreConfig {
         app_data_dir,
@@ -419,14 +435,17 @@ fn build_core_context_parts(
     let hub_passkey_reader: Arc<dyn ports::hub::HubPasskeyReader> = db_adapter.clone();
 
     let app_version = AppVersion::default();
-    let hub_secrets = hub_secrets.or_else(|| match execution_mode {
-        ExecutionMode::Router => keyring_secret_store(),
+    let hub_store = hub_store.or_else(|| match execution_mode {
+        ExecutionMode::Router => keyring_secret_store().map(|secrets| HubStore {
+            secrets,
+            instance_fallback: crate::domain::hub_pairing::DESKTOP_INSTANCE_FALLBACK,
+        }),
         ExecutionMode::LocalOnly => None,
     });
-    let hub = hub_secrets.and_then(|secrets| {
+    let hub = hub_store.and_then(|store| {
         hub_pairing(
             hub_pins.clone(),
-            secrets,
+            store,
             hub_policy_reader.clone(),
             app_version.clone(),
             hub_socket(
@@ -546,7 +565,7 @@ fn build_core_context_parts(
 /// starts it (`src-tauri/src/lib.rs`) once the version is set.
 fn hub_pairing(
     pins: Arc<dyn ports::hub::HubPinRepository>,
-    secrets: Arc<dyn ports::hub::HubSecretStore>,
+    store: HubStore,
     policy: Arc<dyn ports::hub::HubPolicyReader>,
     app_version: AppVersion,
     socket: Option<adapters::hub::socket::SocketConfig>,
@@ -558,10 +577,11 @@ fn hub_pairing(
             return None;
         }
     };
-    let pairing = adapters::hub::HubPairing::new(pins, secrets, token.clone(), policy)
+    let pairing = adapters::hub::HubPairing::new(pins, store.secrets, token.clone(), policy)
         .with_refresh_endpoint(token.clone())
         .with_device_endpoint(token)
-        .with_app_version(app_version);
+        .with_app_version(app_version)
+        .with_instance_fallback(store.instance_fallback);
     Some(Arc::new(match socket {
         Some(socket) => pairing.with_socket(socket),
         None => pairing,

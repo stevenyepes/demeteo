@@ -109,6 +109,14 @@ impl HubSecretStore for SealedSecretStore {
     }
 }
 
+/// A fresh store key from the OS, for `demeteo-runner hub seal` to hand
+/// `systemd-creds` without writing it anywhere.
+pub fn generate_store_key() -> Result<[u8; STORE_KEY_LEN], String> {
+    let mut key = [0u8; STORE_KEY_LEN];
+    getrandom::fill(&mut key).map_err(|e| format!("no OS randomness for a store key: {e}"))?;
+    Ok(key)
+}
+
 /// The store key a unit loaded with `LoadCredentialEncrypted=`, given the
 /// value of `$CREDENTIALS_DIRECTORY`; or why there is none, for
 /// [`SealedSecretStore::new`].

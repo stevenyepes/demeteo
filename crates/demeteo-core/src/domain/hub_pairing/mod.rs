@@ -214,11 +214,25 @@ pub struct HubMachine {
     pub app_version: String,
 }
 
+/// What [`consent_machine`] names a desktop whose host name is unreadable.
+pub const DESKTOP_INSTANCE_FALLBACK: &str = "Demeteo desktop";
+
+/// What [`consent_machine`] names a `demeteo-runner` host whose host name is
+/// unreadable.
+pub const RUNNER_INSTANCE_FALLBACK: &str = "Demeteo runner";
+
 /// The single spelling of [`HubMachine`], which pairing sends and settings
-/// shows, so the two cannot drift. An unreadable host name arrives as `""`.
-pub fn consent_machine(host_name: &str, os: &str, arch: &str, app_version: &str) -> HubMachine {
+/// shows, so the two cannot drift. An unreadable host name arrives as `""`,
+/// and is shown as `fallback_name`.
+pub fn consent_machine(
+    host_name: &str,
+    fallback_name: &str,
+    os: &str,
+    arch: &str,
+    app_version: &str,
+) -> HubMachine {
     HubMachine {
-        instance_name: consent_label(host_name, MAX_INSTANCE_NAME_CHARS, "Demeteo desktop"),
+        instance_name: consent_label(host_name, MAX_INSTANCE_NAME_CHARS, fallback_name),
         os: consent_label(os, MAX_PLATFORM_LABEL_CHARS, "unknown"),
         arch: consent_label(arch, MAX_PLATFORM_LABEL_CHARS, "unknown"),
         app_version: consent_label(app_version, MAX_PLATFORM_LABEL_CHARS, "unknown"),

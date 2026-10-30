@@ -44,7 +44,7 @@ use crate::domain::hub_pairing::pkce::s256_challenge;
 use crate::domain::hub_pairing::{
     authorize_url, check_pairing_origin, consent_machine, hub_origin, hub_status, token_url,
     AuthorizeRequest, HubMachine, HubPairingError, HubSecret, HubStatus, PairingAnswer,
-    SecretString, SCOPES,
+    SecretString, DESKTOP_INSTANCE_FALLBACK, SCOPES,
 };
 use crate::domain::hub_socket::connection::{
     after_local_restart, view, ConnectionFacts, HubConnection,
@@ -83,6 +83,7 @@ pub struct HubPairing {
     /// [`sends_events`]).
     policy: Arc<dyn HubPolicyReader>,
     app_version: AppVersion,
+    instance_fallback: &'static str,
     /// Held for a whole `pair`, and by a device pairing's poll task for as
     /// long as it polls. A tokio mutex because the guard lives across the
     /// browser wait, and `try_lock` because a second pairing is refused,
@@ -176,6 +177,7 @@ impl HubPairing {
             token,
             policy,
             app_version: AppVersion::default(),
+            instance_fallback: DESKTOP_INSTANCE_FALLBACK,
             in_flight: Arc::default(),
             device: None,
             device_sleeper: Arc::new(TokioSleeper),
@@ -265,10 +267,23 @@ impl HubPairing {
         self
     }
 
+    /// The name the Hub is sent when the host name is unreadable; a desktop's
+    /// unless set.
+    pub fn with_instance_fallback(mut self, name: &'static str) -> Self {
+        self.instance_fallback = name;
+        self
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn instance_fallback(&self) -> &'static str {
+        self.instance_fallback
+    }
+
     /// What the Hub's consent page was, or would be, shown for this machine.
     pub fn machine(&self) -> HubMachine {
         consent_machine(
             &host_name().unwrap_or_default(),
+            self.instance_fallback,
             std::env::consts::OS,
             std::env::consts::ARCH,
             self.app_version.get(),
