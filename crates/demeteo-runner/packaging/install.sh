@@ -27,8 +27,19 @@ cp "$BIN_SRC" "$BIN_DST"
 chmod +x "$BIN_DST"
 cp "$UNIT_SRC" "$UNIT_DST"
 
+# The key the runner seals its Hub pairing under (docs/HUB.md §4). Kept as is
+# on a re-install. A host that cannot seal one still runs work; it just
+# cannot pair with a Demeteo Hub.
+if ! "$BIN_DST" hub seal; then
+    echo "warning: no Hub store key was sealed, so this runner cannot pair with a Demeteo Hub" >&2
+    echo "         (see the error above). Everything else works." >&2
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable --now demeteo-runner
+# A re-install replaces a running binary and may add the credential drop-in;
+# neither takes effect until the service restarts.
+systemctl --user restart demeteo-runner
 
 echo "demeteo-runner installed and started as a systemd --user service."
 echo "Check status with: systemctl --user status demeteo-runner"
