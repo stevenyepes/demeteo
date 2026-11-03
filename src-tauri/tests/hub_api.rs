@@ -133,6 +133,7 @@ fn with_project(id: &str) -> Snapshot {
             id: id.to_owned(),
             name: id.to_owned(),
             remote_url: None,
+            provider_kind: None,
         }],
         workflows: Vec::new(),
         run_shape: Vec::new(),
@@ -503,11 +504,13 @@ fn two_projects() -> Snapshot {
                 id: "p-1".to_owned(),
                 name: "demeteo".to_owned(),
                 remote_url: Some("https://git.example/demeteo.git".to_owned()),
+                provider_kind: None,
             },
             ProjectSnapshot {
                 id: "p-2".to_owned(),
                 name: "scratch".to_owned(),
                 remote_url: None,
+                provider_kind: None,
             },
         ],
         workflows: Vec::new(),
@@ -1316,6 +1319,7 @@ async fn a_dispatch_queues_one_start_feature_that_is_the_body_field_for_field() 
             max_budget_cents: Some(1250),
             max_wall_clock_secs: Some(3600),
             attachments: Vec::new(),
+            runner: None,
         })
     );
     assert_eq!(answer.request_id, base64url_encode(&row.id));
@@ -2429,6 +2433,7 @@ impl Populated {
                             id: format!("project-{tag}"),
                             name: format!("name-{tag}"),
                             remote_url: Some(format!("https://git.example/{tag}.git")),
+                            provider_kind: None,
                         }],
                         workflows: Vec::new(),
                         run_shape: Vec::new(),

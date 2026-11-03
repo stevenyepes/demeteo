@@ -165,6 +165,7 @@ fn snapshot(project_names: &[&str]) -> Snapshot {
                 id: format!("p-{name}"),
                 name: (*name).to_owned(),
                 remote_url: None,
+                provider_kind: None,
             })
             .collect(),
         workflows: Vec::new(),
@@ -874,6 +875,7 @@ async fn a_signed_request_read_back_from_jsonb_still_verifies_under_the_key_that
                 size: u64::MAX - 1,
                 sha256: "ab".repeat(32),
             }],
+            runner: None,
         });
         let mut new = request([0x5a; 16], id, payload, NOW + 300);
         let signed = new.envelope.signing_bytes().unwrap();

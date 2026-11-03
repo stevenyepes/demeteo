@@ -43,7 +43,7 @@ full.
 | Part | State |
 |---|---|
 | `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On an instance*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
-| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots (Features and harness kinds included, decision 70), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
+| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, a `start_feature`'s optional `runner` start (§6.1), snapshots (Features, harness kinds and each Project's `provider_kind` included, decision 70), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management, the two pairing approval pages and the Fleet and Instance reads built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`; Runs, Run and Dispatch are placeholders with no data wiring yet, so no view uploads an attachment. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first. **For a runner** (§4 *Pairing a runner by device code*), `demeteo-core` also has the device-code client (`HubPairing::begin_device_pairing`) and the sealed store (`SealedSecretStore`, migration `V68__hub_sealed_secrets.sql`), and composes both in `ExecutionMode::LocalOnly` when the caller hands it a store (`build_core_context_with_hub_store`). `demeteo-runner serve` holds that pairing and starts its socket; `demeteo-runner hub pair`, `status`, `policy`, `log` and `disconnect` call the `hub_*` methods of its control socket (`crates/demeteo-runner/src/rpc/hub.rs`), which a desktop's Settings › Machines calls over SSH too (the runner's Hub panel, below); and `demeteo-runner hub seal`, which both installers run, seals the store key and writes the unit drop-in that loads it |
@@ -846,6 +846,13 @@ or when what is left after the strip still holds an `@`, whitespace or a
 control character. A Workflow document that does not parse omits its whole
 version.
 
+Beside it, a Project carries `provider_kind` (`github` or `gitlab`), the kind
+of the provider that same Repository names, because a host alone does not say
+which provider serves it and the Hub never guesses (§6.1 *On a runner*). It is
+`#[serde(default)]`, so a Hub reads an older desktop's Project as having none;
+an older Hub refuses a snapshot carrying it, as for `features` (§11 item 8).
+The desktop builder does not fill it yet: every Project reports `null`.
+
 A local path a step names anywhere but `cwd` — in its `command` or a prompt
 template — is not stripped, and those fields are not safe either: §11 item 11.
 
@@ -929,6 +936,17 @@ the parsed request, and verifies the signature against the key it pinned at pair
 (§4). The byte layout is specified once, in the module rustdoc of
 [`canonical.rs`](../crates/demeteo-hub-protocol/src/canonical.rs) and on
 `signing_bytes`, and is not repeated here.
+
+**One field is appended, not encoded as an `opt`.** `start_feature`'s `runner`
+— the Project's repository and the Workflow version a Hub resolves from a
+desktop's snapshot for a start addressed to a runner (§6.1 *On a runner*) —
+adds **no bytes at all** when absent, so a start without it signs exactly as
+it did before the field existed; present, it follows `attachments`. An `opt`
+would have added a `0x00` to every start, and every desktop that predates the
+field would have dropped every start as a bad signature. It is also omitted
+from the JSON when absent. It is a wire change with no `v` bump: a body
+carrying it does not parse in a build that predates it, so the Hub ships
+first, then runners, then desktops.
 
 **The signature is Ed25519 over `signing_bytes()` itself.** There is no separate
 SHA-256: the message handed to the signer, and to the instance's verifier, is the
@@ -1155,7 +1173,7 @@ read the runner's activity log, newest first, at most 500 rows a read.
 
 | Kind | Scope | Effect on the instance |
 |---|---|---|
-| `start_feature` | `spend` | start a Feature on a named Project and Workflow snapshot, with a description, optional attachments (§6.3) and optional per-step assignments. Refused locally if it would exceed a ceiling (§7). A desktop only: a runner refuses every one `unknown_kind`, nothing fetched (§6.1 *On a runner*) |
+| `start_feature` | `spend` | start a Feature on a named Project and Workflow snapshot, with a description, optional attachments (§6.3) and optional per-step assignments. Refused locally if it would exceed a ceiling (§7). One for a runner carries `runner`, the repository and Workflow version a desktop would read from its own database (§6.1). A desktop only so far: a runner refuses every one `unknown_kind`, nothing fetched (§6.1 *On a runner*) |
 | `cancel_feature` | `spend` | cancel a running Feature. A `spend` request because it is run control, not an approval |
 | `set_step_assignment` | `spend` | re-point one step's agent, model or effort mid-run. Exactly [decision 54](DECISIONS.md#54--mid-run-assignment-detail): tier 1 only, refused in `running` and `verifying`, refused for a kind that spawns no agent, refused for a harness the build has not registered |
 | `gate_decision` | `gates` | decide a pending Gate. Carries a WebAuthn assertion; §8 |

@@ -689,6 +689,7 @@ async fn a_signed_start_to_a_runner_is_unknown_kind_and_fetches_nothing() {
             attachment("0b5e4c1a-2f7d-4e8b-9a3c-6d1f0e2b7a94"),
             attachment("1c6f5d2b-3a8e-4f9c-8b4d-7e2a1f3c8ba5"),
         ],
+        runner: None,
     });
     let text = runner.signed("r-start", start, now_secs() + 600).await;
 

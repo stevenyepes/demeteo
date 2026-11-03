@@ -1,7 +1,8 @@
 use demeteo_hub_protocol::{
     endorsement_challenge, gate_challenge, revocation_challenge, AttachmentRef, CancelFeature,
     Decision, Effort, GateDecision, PasskeyEndorsement, PasskeyRevocation, RequestPayload,
-    SetStepAssignment, SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
+    RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment, SignedRequest, StartFeature,
+    StepOverride, WebAuthnAssertion,
 };
 
 fn assertion() -> WebAuthnAssertion {
@@ -35,6 +36,24 @@ fn start_feature() -> StartFeature {
             size: 42,
             sha256: "digest".into(),
         }],
+        runner: None,
+    }
+}
+
+fn runner_start() -> RunnerStart {
+    RunnerStart {
+        source_instance_id: "src".into(),
+        repository: RunnerRepository {
+            provider_kind: "github".into(),
+            host: "github.com".into(),
+            full_name: "o/r".into(),
+        },
+        workflow: RunnerWorkflow {
+            workflow_id: "wf".into(),
+            version: 3,
+            name: "n".into(),
+            steps_json: "[]".into(),
+        },
     }
 }
 
@@ -91,6 +110,138 @@ fn cancel_feature_matches_hand_written_golden_bytes() {
         0x00, 0x00, 0x00, 0x04, 0x66, 0x65, 0x61, 0x74,
     ];
     assert_eq!(cancel().signing_bytes(), Ok(golden));
+}
+
+fn minimal_start(runner: Option<Box<RunnerStart>>) -> SignedRequest {
+    request(RequestPayload::StartFeature(StartFeature {
+        project_id: "p".into(),
+        workflow_id: "w".into(),
+        title: "t".into(),
+        description: "d".into(),
+        agent_kind: None,
+        model: None,
+        effort: None,
+        step_overrides: Vec::new(),
+        max_budget_cents: None,
+        max_wall_clock_secs: None,
+        attachments: Vec::new(),
+        runner,
+    }))
+}
+
+/// The bytes every desktop already verifies a start against. `runner` was
+/// added after desktops shipped, so a start without it must sign exactly as
+/// before or every one of them drops every start as a bad signature.
+const MINIMAL_START_GOLDEN: &[u8] = &[
+    // str("demeteo-hub/v1/request")
+    0x00, 0x00, 0x00, 0x16, 0x64, 0x65, 0x6D, 0x65, 0x74, 0x65, 0x6F, 0x2D, 0x68, 0x75, 0x62, 0x2F,
+    0x76, 0x31, 0x2F, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, // u32 v = 1
+    0x00, 0x00, 0x00, 0x01, // str request_id "req"
+    0x00, 0x00, 0x00, 0x03, 0x72, 0x65, 0x71, // str instance_id "inst"
+    0x00, 0x00, 0x00, 0x04, 0x69, 0x6E, 0x73, 0x74, // u64 issued_at = 100
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, // u64 expires_at = 200
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC8, // u8 tag: start_feature
+    0x01, // str project_id "p"
+    0x00, 0x00, 0x00, 0x01, 0x70, // str workflow_id "w"
+    0x00, 0x00, 0x00, 0x01, 0x77, // str title "t"
+    0x00, 0x00, 0x00, 0x01, 0x74, // str description "d"
+    0x00, 0x00, 0x00, 0x01, 0x64, // opt agent_kind, opt model, opt effort: none
+    0x00, 0x00, 0x00, // vec step_overrides: empty
+    0x00, 0x00, 0x00, 0x00, // opt max_budget_cents, opt max_wall_clock_secs: none
+    0x00, 0x00, // vec attachments: empty, and nothing after it
+    0x00, 0x00, 0x00, 0x00,
+];
+
+#[test]
+fn start_feature_without_a_runner_matches_hand_written_golden_bytes() {
+    assert_eq!(
+        minimal_start(None).signing_bytes(),
+        Ok(MINIMAL_START_GOLDEN.to_vec())
+    );
+}
+
+#[test]
+fn a_runner_start_appends_its_fields_after_the_unchanged_desktop_bytes() {
+    let suffix: Vec<u8> = [
+        &[0x01][..], // u8: runner present
+        &[0, 0, 0, 3],
+        b"src", // str source_instance_id
+        &[0, 0, 0, 6],
+        b"github", // str repository.provider_kind
+        &[0, 0, 0, 10],
+        b"github.com", // str repository.host
+        &[0, 0, 0, 3],
+        b"o/r", // str repository.full_name
+        &[0, 0, 0, 2],
+        b"wf",         // str workflow.workflow_id
+        &[0, 0, 0, 3], // u32 workflow.version
+        &[0, 0, 0, 1],
+        b"n", // str workflow.name
+        &[0, 0, 0, 2],
+        b"[]", // str workflow.steps_json
+    ]
+    .concat();
+    let expected = [MINIMAL_START_GOLDEN, &suffix].concat();
+    assert_eq!(
+        minimal_start(Some(Box::new(runner_start()))).signing_bytes(),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn every_runner_field_changes_the_bytes() {
+    let with_runner = |f: fn(&mut RunnerStart)| {
+        let mut r = runner_start();
+        f(&mut r);
+        bytes(&with_start(|b| b.runner = Some(Box::new(r))))
+    };
+    let base = with_runner(|_| {});
+    assert_ne!(
+        base,
+        bytes(&request(RequestPayload::StartFeature(start_feature())))
+    );
+    for (field, v) in [
+        (
+            "source_instance_id",
+            with_runner(|r| r.source_instance_id = "s2".into()),
+        ),
+        (
+            "repository.provider_kind",
+            with_runner(|r| r.repository.provider_kind = "gitlab".into()),
+        ),
+        (
+            "repository.host",
+            with_runner(|r| r.repository.host = "h2".into()),
+        ),
+        (
+            "repository.full_name",
+            with_runner(|r| r.repository.full_name = "o/r2".into()),
+        ),
+        (
+            "workflow.workflow_id",
+            with_runner(|r| r.workflow.workflow_id = "wf2".into()),
+        ),
+        ("workflow.version", with_runner(|r| r.workflow.version = 4)),
+        (
+            "workflow.name",
+            with_runner(|r| r.workflow.name = "n2".into()),
+        ),
+        (
+            "workflow.steps_json",
+            with_runner(|r| r.workflow.steps_json = "[{}]".into()),
+        ),
+    ] {
+        assert_ne!(v, base, "changing {field} must change the bytes");
+    }
+}
+
+#[test]
+fn a_runner_start_bytes_survive_a_json_round_trip() {
+    let sent = with_start(|b| b.runner = Some(Box::new(runner_start())));
+    let json = serde_json::to_string(&sent).unwrap();
+    let received: SignedRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(received, sent);
+    assert_eq!(bytes(&received), bytes(&sent));
 }
 
 #[test]

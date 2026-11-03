@@ -454,6 +454,7 @@ mod tests {
             max_budget_cents: Some(1),
             max_wall_clock_secs: None,
             attachments: Vec::new(),
+            runner: None,
         })
     }
 

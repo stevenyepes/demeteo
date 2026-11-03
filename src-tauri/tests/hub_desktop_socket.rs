@@ -1760,6 +1760,7 @@ fn one_project(name: &str) -> Snapshot {
             id: "p-1".to_owned(),
             name: name.to_owned(),
             remote_url: None,
+            provider_kind: None,
         }],
         workflows: Vec::new(),
         run_shape: Vec::new(),

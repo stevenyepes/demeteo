@@ -447,6 +447,7 @@ mod tests {
                 max_budget_cents: None,
                 max_wall_clock_secs: None,
                 attachments: Vec::new(),
+                runner: None,
             }),
             cancel(),
             RequestPayload::SetStepAssignment(SetStepAssignment {

@@ -192,6 +192,7 @@ mod decision {
             max_budget_cents: cap_cents,
             max_wall_clock_secs: None,
             attachments: Vec::new(),
+            runner: None,
         })
     }
 
@@ -770,6 +771,7 @@ mod signature {
                 max_budget_cents: Some(500),
                 max_wall_clock_secs: None,
                 attachments: Vec::new(),
+                runner: None,
             }),
             signature: String::new(),
         };
@@ -1690,6 +1692,7 @@ mod handler {
                 max_budget_cents: Some(250),
                 max_wall_clock_secs: None,
                 attachments,
+                runner: None,
             }),
             signature: String::new(),
         }

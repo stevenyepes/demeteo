@@ -199,6 +199,7 @@ fn project(input: &ProjectInput, providers: &[ProviderInstance]) -> Option<Proje
         id: input.project.id.as_str().to_owned(),
         name: input.project.name.clone(),
         remote_url: remote_url(input.repositories.first(), providers),
+        provider_kind: None,
     };
     let strings = [Some(&out.id), Some(&out.name), out.remote_url.as_ref()];
     no_nul(strings).then_some(out)

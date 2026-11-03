@@ -380,6 +380,7 @@ fn start_feature(body: DispatchBody) -> StartFeature {
         max_budget_cents: body.max_budget_cents,
         max_wall_clock_secs: body.max_wall_clock_secs,
         attachments: Vec::new(),
+        runner: None,
     }
 }
 

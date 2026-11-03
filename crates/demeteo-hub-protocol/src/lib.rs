@@ -36,8 +36,8 @@ pub use message::{
 };
 pub use request::{
     AttachmentRef, CancelFeature, GateDecision, PasskeyEndorsement, PasskeyRevocation,
-    RequestPayload, SetStepAssignment, SignedRequest, StartFeature, StepOverride,
-    WebAuthnAssertion,
+    RequestPayload, RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment,
+    SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
 };
 pub use scope::{Decision, Effort, Scope};
 pub use snapshot::{

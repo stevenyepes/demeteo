@@ -19,6 +19,12 @@ pub struct ProjectSnapshot {
     pub name: String,
     #[serde(default)]
     pub remote_url: Option<String>,
+    /// `github` or `gitlab`, from the provider the Project's Repository names;
+    /// what a Hub reads to start a runner on this Project, since a host does
+    /// not say which provider serves it. `None` from a desktop that predates
+    /// the field, and from a Project with no provider.
+    #[serde(default)]
+    pub provider_kind: Option<String>,
 }
 
 /// One stored version of a Workflow. Field names mirror `demeteo-core`'s
@@ -96,10 +102,11 @@ pub struct FeatureSnapshot {
 /// Everything the Hub knows about an instance's Projects. A snapshot replaces
 /// the previous one wholesale; the Hub never merges.
 ///
-/// `features` and `harnesses` were added after the first Hub shipped and
-/// default when absent, so a newer Hub reads an older desktop's snapshot. The
-/// reverse does not hold: `deny_unknown_fields` makes an older Hub refuse a
-/// snapshot carrying either, so the Hub ships first (HUB.md §11 item 8).
+/// `features`, `harnesses` and [`ProjectSnapshot::provider_kind`] were added
+/// after the first Hub shipped and default when absent, so a newer Hub reads
+/// an older desktop's snapshot. The reverse does not hold:
+/// `deny_unknown_fields` makes an older Hub refuse a snapshot carrying any of
+/// them, so the Hub ships first (HUB.md §11 item 8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {

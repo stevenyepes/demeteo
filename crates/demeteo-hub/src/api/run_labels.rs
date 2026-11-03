@@ -145,6 +145,7 @@ mod tests {
                 id: "p-1".to_owned(),
                 name: "checkout-api".to_owned(),
                 remote_url: None,
+                provider_kind: None,
             }],
             workflows: vec![version(1, "Old review"), version(2, "Review")],
             run_shape: Vec::new(),
