@@ -176,6 +176,36 @@ impl RunnerRunPort for SqliteAdapter {
             other => Err(other.to_string()),
         })
     }
+
+    fn record_hub_commitment(&self, run_id: &str, cents: u64) -> Result<(), String> {
+        let cents = i64::try_from(cents).map_err(|e| e.to_string())?;
+        let conn = self.conn.lock()?;
+        let updated = conn
+            .execute(
+                "UPDATE runner_runs SET hub_committed_cents = ?2 WHERE run_id = ?1",
+                params![run_id, cents],
+            )
+            .map_err(|e| e.to_string())?;
+        if updated == 0 {
+            return Err(format!(
+                "no runner run {run_id} to record a Hub commitment on"
+            ));
+        }
+        Ok(())
+    }
+
+    fn hub_committed_cents_since(&self, since_ms: i64) -> Result<u64, String> {
+        let conn = self.conn.lock()?;
+        let cents: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(hub_committed_cents), 0)
+                 FROM runner_runs WHERE created_at >= ?1",
+                params![since_ms],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        u64::try_from(cents).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]

@@ -217,6 +217,7 @@ impl ResolvedSubmit {
             project_settings: self.project_settings.clone(),
             origin: Some(RunOrigin::Supported(launch.origin.clone())),
             diff_base_branch: launch.diff_base_branch.clone(),
+            launched_by: launch.launched_by,
         }
     }
 }

@@ -851,7 +851,9 @@ of the provider that same Repository names, because a host alone does not say
 which provider serves it and the Hub never guesses (§6.1 *On a runner*). It is
 `#[serde(default)]`, so a Hub reads an older desktop's Project as having none;
 an older Hub refuses a snapshot carrying it, as for `features` (§11 item 8).
-The desktop builder does not fill it yet: every Project reports `null`.
+The desktop builder reports it only beside the `remote_url` it describes, and
+only when the stored kind is one of those two: a withheld remote, or a provider
+of any other kind, reports `null`.
 
 A local path a step names anywhere but `cwd` — in its `command` or a prompt
 template — is not stripped, and those fields are not safe either: §11 item 11.
@@ -992,8 +994,13 @@ alike. A start and a cancel land in the instance's `HubRunControl`
 (`ports/hub.rs`): the calls its own control surface makes, which is how
 decision 64's "same application functions" is read — per instance. A
 desktop's is `DesktopRuns`, its launch and stop buttons; a runner's is
-`RunnerHubRuns`, its control socket's (*On a runner*, below). Assignment and
-gate decisions reach the same call on either. A desktop binds the handler as
+`RunnerHubRuns`, its control socket's (*On a runner*, below). Everything a
+start needs that differs between the two is asked of it and of nothing else:
+whether it launches starts at all, the committed total its daily ceiling is
+judged against (§7), whether it can launch what a start names (its
+*resolution*), and the launch itself, which answers the Feature id and any
+note for the log row. Assignment and gate decisions reach the same call on
+either. A desktop binds the handler as
 it composes; a runner is handed a `HubRequestBinding` by composition and
 `demeteo-runner serve` binds it over `RunnerHubRuns` before it starts the
 socket, since a request delivered with no handler bound stays queued on the
@@ -1048,9 +1055,18 @@ except as *On a runner* says:
   the Hub's clock said when it was sent. The ten minutes cover this desktop's
   clock stepping backwards after a prune, which would make a pruned id live
   again. A prune that fails is logged and changes nothing about the request.
-- **`start_feature`** is judged against the ceilings (§7), then its Project and
-  Workflow are looked up (`unknown_project`, `unknown_workflow`), then the
-  harness and identifier refusals `set_step_assignment` applies are applied to
+- **`start_feature`** is judged against the ceilings (§7), then resolved by the
+  instance. A desktop refuses one carrying a `runner` start as
+  `malformed_body`: it was resolved for a runner, and launching it here would
+  run what this desktop's database holds under the same ids rather than what
+  the Hub signed. It then looks the Project and Workflow up
+  (`unknown_project`, `unknown_workflow`). A runner that launches starts reads
+  the signed `runner` start instead (*On a runner*), through
+  [`runner_spec.rs`](../crates/demeteo-core/src/domain/hub_request/runner_spec.rs):
+  a missing one, a provider kind other than `github` or `gitlab`, an empty
+  host or `full_name`, a `workflow_id` that is not the start's, or steps a
+  runner could not ingest are each `malformed_body`, since the Hub resolved
+  and signed all of them. Then the harness and identifier refusals `set_step_assignment` applies are applied to
   its feature-wide `agent_kind` and `model` and to every step override:
   `harness_not_registered` for a harness this desktop does not have, then
   `malformed_body` for a value that starts with `-` or holds whitespace or a
@@ -1069,9 +1085,14 @@ except as *On a runner* says:
   is `attachment_mismatch` too, answered before anything is launched, because
   the bootstrap would refuse to commit it after an accept. The run is launched by the call the desktop's own
   launch button makes, as a local run, and the Feature is stored with
-  `launched_by = 'hub'`. **`max_wall_clock_secs` is ignored**: a local run has
-  no wall-clock cap to give it. The request is still accepted, and its log row
-  records that the cap was ignored.
+  `launched_by = 'hub'`. **`max_wall_clock_secs` is ignored on a desktop**: a
+  local run has no wall-clock cap to give it. The request is still accepted,
+  and its log row records that the cap was ignored. A runner's run is the
+  `RunSpec` `runner_run_spec` builds: the signed repository and workflow, the
+  cap as both the per-turn budget and the run's hard cost cap, the wall clock
+  as its hard time cap, unattended as every detached run is, from the default
+  branch, with no project settings, so the runner's detected defaults apply,
+  and `launched_by = hub`.
 - **A launch that fails after every check passed is answered
   `malformed_body`.** `RefusalReason` has no generic failure. The id is already
   spent, so leaving it unanswered would only get a `replayed` from the
@@ -1506,9 +1527,15 @@ raise. The ceiling is the part of this design that makes `spend` a bounded risk
 instead of a delegated one.
 
 **What they count.** Both are integer cents, like the `max_budget_cents` they
-are compared with (§6.1). The rolling total is the sum of the **committed caps**:
-the `max_budget_usd`, in cents, of every Feature with `launched_by = 'hub'`
-created in the 24 hours before the desktop's clock. It is not the cost incurred.
+are compared with (§6.1). The rolling total is the sum of the **committed caps**
+of Hub-started runs created in the 24 hours before the instance's clock, read
+through its `HubRunControl` (§6.1 *On an instance*). It is not the cost
+incurred. A desktop sums the `max_budget_usd`, in cents, of every Feature with
+`launched_by = 'hub'`; it writes that row before its launch returns, so an
+accepted start is always counted. A runner sums `runner_runs.hub_committed_cents`
+(V70), written when it accepts a start, because a run there can fail — on its
+clone, say — before it has a Feature row, and a cap committed by a run that
+failed early is still spent against the day.
 A `start_feature` is accepted only if its cap is at most the per-run ceiling,
 refused `over_run_ceiling` otherwise, and if the total plus the cap is at most
 the rolling ceiling, refused `over_rolling_ceiling` otherwise. Both bounds are

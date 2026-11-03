@@ -244,6 +244,41 @@ fn the_first_repository_is_the_one_reported() {
     );
 }
 
+/// The kind is the stored kind of the provider the reported remote is on,
+/// never read off its host: a GitLab on a host named `github.example` is
+/// still GitLab.
+#[test]
+fn the_reported_remote_carries_its_providers_kind() {
+    let mut gitlab = one_project_on("github.example");
+    gitlab.providers[0].kind = "gitlab".to_owned();
+    let shot = snapshot(&gitlab);
+    assert_eq!(shot.projects[0].provider_kind.as_deref(), Some("gitlab"));
+    assert_eq!(
+        shot.projects[0].remote_url.as_deref(),
+        Some("https://github.example/acme/app")
+    );
+
+    let shot = snapshot(&one_project_on("github.com"));
+    assert_eq!(shot.projects[0].provider_kind.as_deref(), Some("github"));
+}
+
+#[test]
+fn a_kind_is_reported_only_beside_a_remote_and_only_when_known() {
+    let mut unknown = one_project_on("github.com");
+    unknown.providers[0].kind = "bitbucket".to_owned();
+    let shot = snapshot(&unknown);
+    assert_eq!(shot.projects[0].provider_kind, None);
+    assert!(shot.projects[0].remote_url.is_some());
+
+    let withheld = snapshot(&one_project_on("u:p/ss@github.com"));
+    assert_eq!(withheld.projects[0].remote_url, None);
+    assert_eq!(withheld.projects[0].provider_kind, None);
+
+    let mut no_provider = one_project_on("github.com");
+    no_provider.providers.clear();
+    assert_eq!(snapshot(&no_provider).projects[0].provider_kind, None);
+}
+
 #[test]
 fn a_dollar_budget_is_reported_in_cents() {
     assert_eq!(budget_cents(12.5), Some(1250));
@@ -652,6 +687,7 @@ fn the_repository_source_reports_a_bare_remote_and_only_the_latest_version() {
         shot.projects[0].remote_url.as_deref(),
         Some("https://github.com/acme/app")
     );
+    assert_eq!(shot.projects[0].provider_kind.as_deref(), Some("github"));
     assert_eq!(shot.run_shape.len(), 1, "{shot:?}");
     assert_eq!(shot.run_shape[0].default_model.as_deref(), Some("opus"));
     let versions: Vec<(&str, u32)> = shot
