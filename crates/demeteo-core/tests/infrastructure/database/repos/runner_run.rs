@@ -49,3 +49,43 @@ fn legacy_rows_read_back_empty_owner() {
     let run = adapter.get_or_create("run-legacy", "{}", "", 1).unwrap();
     assert_eq!(run.owner_client_id, "");
 }
+
+/// Counted from the run row whatever its status, so a Hub start that failed
+/// before its Feature row existed still counts; a desktop's run, which
+/// records nothing, and a run older than the window do not.
+#[test]
+fn the_hub_committed_total_sums_recorded_caps_inside_the_window() {
+    let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+    adapter.get_or_create("run-old", "{}", "hub", 10).unwrap();
+    adapter.record_hub_commitment("run-old", 700).unwrap();
+    adapter
+        .get_or_create("run-failed", "{}", "hub", 100)
+        .unwrap();
+    adapter.record_hub_commitment("run-failed", 250).unwrap();
+    adapter
+        .update_status(
+            "run-failed",
+            "failed",
+            None,
+            None,
+            Some("clone failed"),
+            None,
+            101,
+        )
+        .unwrap();
+    adapter.get_or_create("run-hub", "{}", "hub", 200).unwrap();
+    adapter.record_hub_commitment("run-hub", 125).unwrap();
+    adapter
+        .get_or_create("run-desktop", "{}", "laptop-1", 300)
+        .unwrap();
+
+    assert_eq!(adapter.hub_committed_cents_since(100), Ok(375));
+    assert_eq!(adapter.hub_committed_cents_since(301), Ok(0));
+}
+
+#[test]
+fn recording_a_commitment_on_no_run_is_an_error() {
+    let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+    assert!(adapter.record_hub_commitment("run-missing", 100).is_err());
+    assert_eq!(adapter.hub_committed_cents_since(0), Ok(0));
+}

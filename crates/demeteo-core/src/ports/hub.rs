@@ -316,11 +316,42 @@ pub trait HubRequestHandler: Send + Sync {
 }
 
 pub use crate::domain::hub_request::StartSupport;
+/// The protocol types [`HubRunControl`] is written in, so an implementor
+/// does not need a dependency of its own on `demeteo-hub-protocol`.
+pub use demeteo_hub_protocol::{RefusalReason, RunnerStart, StartFeature};
+
+/// A start that passed every check, its attachments fetched.
+#[derive(Debug, Clone)]
+pub struct HubLaunch {
+    /// The request as signed. A runner builds its run from this and its
+    /// [`RunnerStart`], through
+    /// [`crate::domain::hub_request::runner_run_spec`]; the wall clock and
+    /// the cap in cents are only here.
+    pub start: StartFeature,
+    /// The same start as the launch button would hand it over, attachments
+    /// as fetched bytes with their sniffed type and no `source_path`.
+    pub launch: crate::ports::step_executor::FeatureLaunch,
+}
+
+/// What a launch started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubLaunched {
+    pub feature_id: crate::domain::ids::FeatureId,
+    /// Logged with the accepted start: what of it this instance did not
+    /// honour, such as a wall clock a desktop has no way to cap.
+    pub note: Option<String>,
+}
 
 /// What a Hub start and a Hub cancel land in on this instance: the calls its
 /// own control surface makes (decision 64, read per instance). A desktop's
 /// is its launch and stop buttons; a runner's is its control socket's
-/// cancel, which also ends the run's row and drops its credential.
+/// cancel, which also ends the run's row and drops its credential, and its
+/// submit for the starts it launches.
+///
+/// What differs between instances is here and nowhere in the handler: where
+/// Hub-started runs are counted, what a start must name to be launched, and
+/// what of it is honoured. The policy each answers with lives in
+/// [`crate::domain::hub_request`].
 ///
 /// Assignment and gate decisions are not here: they already reach the same
 /// call on every instance, [`crate::application::step_control`] and the
@@ -332,11 +363,24 @@ pub trait HubRunControl: Send + Sync {
     /// must be refused first.
     fn starts(&self) -> StartSupport;
 
-    /// Never called when [`Self::starts`] is [`StartSupport::Refused`].
-    async fn launch(
-        &self,
-        launch: crate::ports::step_executor::FeatureLaunch,
-    ) -> Result<crate::domain::ids::FeatureId, AppError>;
+    /// What Hub-started runs accepted at or after `since_ms` (unix ms) have
+    /// committed, in whole cents. Counted where this instance records a Hub
+    /// start from its acceptance on, so a run that fails before it has a
+    /// Feature row still counts. Never called when [`Self::starts`] is
+    /// [`StartSupport::Refused`].
+    fn committed_cents_since(&self, since_ms: i64) -> Result<u64, String>;
+
+    /// Whether this instance can launch what `start` names, judged after the
+    /// ceilings and before any attachment is fetched. A desktop looks the
+    /// project and workflow up in its own database; a runner, which has
+    /// neither, reads the signed `runner` part instead. Never called when
+    /// [`Self::starts`] is [`StartSupport::Refused`].
+    fn resolve(&self, start: &StartFeature) -> Result<(), RefusalReason>;
+
+    /// Never called when [`Self::starts`] is [`StartSupport::Refused`], nor
+    /// for a start [`Self::resolve`] refused. An `Err` is answered
+    /// `malformed_body`, its detail kept to this instance's log.
+    async fn launch(&self, launch: HubLaunch) -> Result<HubLaunched, AppError>;
 
     /// Stop the run of `feature_id`, wherever it executes.
     async fn cancel(&self, feature_id: &crate::domain::ids::FeatureId) -> Result<(), AppError>;

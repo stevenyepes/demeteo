@@ -73,4 +73,23 @@ pub trait RunnerRunPort: Send + Sync {
     /// `cancel_run` racing the run's own just-finished status update
     /// can't stomp a real outcome back to `cancelled` (M3.3).
     fn cancel_if_active(&self, run_id: &str, now: i64) -> Result<Option<RunnerRun>, String>;
+
+    /// Records the cap a Hub start committed when this runner accepted it
+    /// (`hub_committed_cents`, V70). A row that does not exist is an error,
+    /// not a no-op: an accepted start the ceiling does not count would let
+    /// the next one past it.
+    ///
+    /// Defaults to an error, as do the other Hub methods here, so a double
+    /// that was not written for them cannot answer for them.
+    fn record_hub_commitment(&self, _run_id: &str, _cents: u64) -> Result<(), String> {
+        Err("recording a Hub commitment is not implemented by this repository".into())
+    }
+
+    /// The caps recorded by [`Self::record_hub_commitment`] on runs created
+    /// at or after `since_ms` (unix ms), in whole cents, whatever became of
+    /// those runs. Defaults to an error: a double answering zero would let
+    /// every Hub start under the ceiling.
+    fn hub_committed_cents_since(&self, _since_ms: i64) -> Result<u64, String> {
+        Err("summing Hub-committed budgets is not implemented by this repository".into())
+    }
 }

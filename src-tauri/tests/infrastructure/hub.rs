@@ -1948,10 +1948,21 @@ impl crate::ports::hub::HubRunControl for RefusingStarts {
         crate::ports::hub::StartSupport::Refused
     }
 
+    fn committed_cents_since(&self, _: i64) -> Result<u64, String> {
+        panic!("a refused start read the committed total")
+    }
+
+    fn resolve(
+        &self,
+        _: &crate::ports::hub::StartFeature,
+    ) -> Result<(), crate::ports::hub::RefusalReason> {
+        panic!("a refused start was resolved")
+    }
+
     async fn launch(
         &self,
-        _: crate::ports::step_executor::FeatureLaunch,
-    ) -> Result<FeatureId, crate::error::AppError> {
+        _: crate::ports::hub::HubLaunch,
+    ) -> Result<crate::ports::hub::HubLaunched, crate::error::AppError> {
         panic!("a refused start was launched")
     }
 

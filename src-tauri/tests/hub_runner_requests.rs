@@ -56,7 +56,9 @@ use demeteo_core::domain::step_assignment::StepAssignment;
 use demeteo_core::domain::sync_resolver::SyncResolverChoice;
 use demeteo_core::domain::upstream_feature::DivergenceReconcile;
 use demeteo_core::error::AppError;
-use demeteo_core::ports::hub::{HubRunControl, HubTokenEndpoint, SocketReceived, StartSupport};
+use demeteo_core::ports::hub::{
+    HubLaunch, HubLaunched, HubRunControl, HubTokenEndpoint, SocketReceived, StartSupport,
+};
 use demeteo_core::ports::step_executor::{
     FeatureLaunch, StepExecutor, SyncOutcomeView, SyncResolverView,
 };
@@ -185,7 +187,16 @@ impl HubRunControl for RunnerControl {
         StartSupport::Refused
     }
 
-    async fn launch(&self, _: FeatureLaunch) -> Result<FeatureId, AppError> {
+    fn committed_cents_since(&self, _: i64) -> Result<u64, String> {
+        Err("a refused start read the committed total".into())
+    }
+
+    fn resolve(&self, _: &StartFeature) -> Result<(), RefusalReason> {
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        Err(RefusalReason::UnknownKind)
+    }
+
+    async fn launch(&self, _: HubLaunch) -> Result<HubLaunched, AppError> {
         self.launches.fetch_add(1, Ordering::SeqCst);
         Err(AppError::validation("a refused start was launched"))
     }

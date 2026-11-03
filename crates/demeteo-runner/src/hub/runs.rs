@@ -12,8 +12,9 @@ use crate::services::RunnerServices;
 use async_trait::async_trait;
 use demeteo_core::domain::ids::FeatureId;
 use demeteo_core::error::AppError;
-use demeteo_core::ports::hub::{HubRunControl, StartSupport};
-use demeteo_core::ports::step_executor::FeatureLaunch;
+use demeteo_core::ports::hub::{
+    HubLaunch, HubLaunched, HubRunControl, RefusalReason, StartFeature, StartSupport,
+};
 use std::sync::Arc;
 
 pub struct RunnerHubRuns {
@@ -34,7 +35,15 @@ impl HubRunControl for RunnerHubRuns {
         StartSupport::Refused
     }
 
-    async fn launch(&self, _: FeatureLaunch) -> Result<FeatureId, AppError> {
+    fn committed_cents_since(&self, _: i64) -> Result<u64, String> {
+        Err("this runner does not start runs for the Hub".into())
+    }
+
+    fn resolve(&self, _: &StartFeature) -> Result<(), RefusalReason> {
+        Err(RefusalReason::UnknownKind)
+    }
+
+    async fn launch(&self, _: HubLaunch) -> Result<HubLaunched, AppError> {
         Err(AppError::validation(
             "this runner does not start runs for the Hub",
         ))

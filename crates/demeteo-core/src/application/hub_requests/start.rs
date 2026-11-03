@@ -1,5 +1,5 @@
-//! A Hub start, once its id is spent: the lookups, the attachment fetch
-//! and the launch. What is decided is decided in
+//! A Hub start, once its id is spent: the instance's own resolution, the
+//! attachment fetch and the launch. What is decided is decided in
 //! [`crate::domain::hub_request`], including a start this instance does not
 //! launch, which never reaches here.
 
@@ -17,9 +17,8 @@ use crate::domain::hub_request::log::launch_failure_reason;
 use crate::domain::hub_request::{
     attachment_refusal, effort_level, start_refusal, step_override, AttachmentLimits,
 };
-use crate::domain::ids::{ProjectId, WorkflowId};
 use crate::domain::models::LaunchedBy;
-use crate::ports::hub::AttachmentFetchError;
+use crate::ports::hub::{AttachmentFetchError, HubLaunch};
 use crate::ports::step_executor::FeatureLaunch;
 use crate::shared::secret_scrub::scrub_secrets;
 
@@ -79,31 +78,10 @@ impl HubRequests {
     /// failure from here on is answered rather than left for a redelivery
     /// that would read as `Replayed`. `RefusalReason` has no generic failure,
     /// so one that is not a lookup or an attachment is `MalformedBody`, with
-    /// the detail kept to this desktop's own log.
+    /// the detail kept to this instance's own log.
     pub(super) async fn start(&self, start: &StartFeature) -> Settled {
-        match self
-            .ctx
-            .projects
-            .get_project(&ProjectId::from(start.project_id.clone()))
-        {
-            Ok(Some(_)) => {}
-            Ok(None) => return Settled::refused(RefusalReason::UnknownProject),
-            Err(e) => {
-                tracing::warn!(error = %e, "Hub start refused: the project lookup failed");
-                return Settled::refused(RefusalReason::MalformedBody);
-            }
-        }
-        match self
-            .ctx
-            .workflows
-            .get(&WorkflowId::from(start.workflow_id.clone()))
-        {
-            Ok(Some(_)) => {}
-            Ok(None) => return Settled::refused(RefusalReason::UnknownWorkflow),
-            Err(e) => {
-                tracing::warn!(error = %e, "Hub start refused: the workflow lookup failed");
-                return Settled::refused(RefusalReason::MalformedBody);
-            }
+        if let Err(reason) = self.runs.resolve(start) {
+            return Settled::refused(reason);
         }
         if let Some(reason) = start_refusal(start, &self.registered()) {
             return Settled::refused(reason);
@@ -134,13 +112,12 @@ impl HubRequests {
                 None => return Settled::refused(RefusalReason::AttachmentMismatch),
             }
         }
-        // A local run has no wall-clock cap to give it: `check_options`
-        // refuses one for `RunPlacement::Local`, so it is not passed on.
-        let note = start
-            .max_wall_clock_secs
-            .map(|_| "max_wall_clock_secs ignored".to_owned());
-        match self.runs.launch(feature_launch(start, typed)).await {
-            Ok(feature_id) => Settled::accepted(Some(feature_id.to_string()), note),
+        let launch = HubLaunch {
+            launch: feature_launch(start, typed),
+            start: start.clone(),
+        };
+        match self.runs.launch(launch).await {
+            Ok(launched) => Settled::accepted(Some(launched.feature_id.to_string()), launched.note),
             Err(e) => {
                 tracing::warn!(error = %e, "Hub start refused: the launch failed");
                 let detail = scrub_secrets(&e.to_string()).into_owned();

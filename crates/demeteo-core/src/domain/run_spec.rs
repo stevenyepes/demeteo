@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::feature_origin::FeatureOrigin;
-use crate::domain::models::{EffortLevel, ProjectSettings, StepOverride};
+use crate::domain::models::{EffortLevel, LaunchedBy, ProjectSettings, StepOverride};
 
 /// A pre-launch attachment for a detached run. The laptop spools the
 /// bytes onto the runner host over SFTP (`ExecutionPort::write_file_bytes`)
@@ -165,6 +165,11 @@ pub struct RunSpec {
     /// [`FeatureOrigin::base_branch`].
     #[serde(default)]
     pub diff_base_branch: Option<String>,
+    /// Who started the run, for the runner's Feature row and the Hub's
+    /// committed total. Defaults to [`LaunchedBy::Desktop`], which is what a
+    /// spec from a desktop that predates the field always meant.
+    #[serde(default)]
+    pub launched_by: LaunchedBy,
 }
 
 impl RunSpec {

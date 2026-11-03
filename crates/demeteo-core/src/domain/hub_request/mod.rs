@@ -28,10 +28,12 @@ pub mod ceiling;
 pub mod cose;
 pub mod log;
 pub mod passkeys;
+pub mod runner_spec;
 pub mod verify;
 
 pub use ceiling::spend_verdict;
 pub use log::{HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome};
+pub use runner_spec::{runner_run_spec, runner_start_refusal};
 pub use verify::verify_signature;
 
 /// The desktop's own word on what the Hub may do here. Written only from
@@ -386,6 +388,18 @@ pub fn start_refusal(start: &StartFeature, registered: &[&str]) -> Option<Refusa
         .iter()
         .find_map(identifier_refusal)
         .map(|_| RefusalReason::MalformedBody)
+}
+
+/// A start a desktop refuses before its lookups: one carrying a
+/// [`RunnerStart`](demeteo_hub_protocol::RunnerStart) was resolved for a
+/// runner, and a desktop launching it would run what its own database holds
+/// under the same ids, not what the Hub signed. It is `MalformedBody` because
+/// a Hub that sends one has addressed the wrong kind of instance.
+pub fn desktop_start_refusal(start: &StartFeature) -> Option<RefusalReason> {
+    start
+        .runner
+        .is_some()
+        .then_some(RefusalReason::MalformedBody)
 }
 
 /// The bounds the bootstrap holds a Feature's attachments to, passed in

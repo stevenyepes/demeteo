@@ -288,7 +288,7 @@ impl HubRequests {
 
     fn committed_cents(&self, now_ms: u64) -> Result<u64, String> {
         let since = i64::try_from(now_ms.saturating_sub(DAY_MS)).unwrap_or(0);
-        self.ctx.features.hub_committed_cents_since(since)
+        self.runs.committed_cents_since(since)
     }
 
     /// `Err` is the answer to send: the feature does not exist, or its lookup
