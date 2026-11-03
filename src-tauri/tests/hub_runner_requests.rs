@@ -782,6 +782,44 @@ async fn a_signed_cancel_by_feature_id_ends_the_runners_run() {
     runner.assert_untouched();
 }
 
+/// A Feature the runner holds with no run under it has nothing to cancel,
+/// which is the Feature's run being unknown here, not a malformed request.
+#[tokio::test]
+async fn a_signed_cancel_of_a_feature_with_no_run_is_unknown_feature() {
+    let runner = Runner::start(
+        "cancel-no-run",
+        policy(),
+        Vec::new(),
+        ScriptedGatePresenter::refusing_all(),
+        |ctx| {
+            seed_project(ctx);
+            ctx.features.add(feature(FEATURE)).expect("add the feature");
+        },
+    )
+    .await;
+    let cancel = RequestPayload::CancelFeature(CancelFeature {
+        feature_id: FEATURE.into(),
+    });
+    let text = runner.signed("r-cancel", cancel, now_secs() + 600).await;
+
+    assert_eq!(
+        runner.deliver("r-cancel", text).await,
+        RequestOutcome::Refused {
+            reason: RefusalReason::UnknownFeature
+        }
+    );
+    assert_eq!(
+        runner.last_log(),
+        (
+            LogKind::CancelFeature,
+            LogOutcome::Refused,
+            Some("unknown_feature".into())
+        )
+    );
+    assert!(runner.executor.cancels.lock().expect("lock").is_empty());
+    runner.assert_untouched();
+}
+
 /// A gate of a run the runner owns, named by the Feature id it reports the
 /// run under, is decided: the runner has no mirror row, so it is neither
 /// `runner_owned` nor, under that id, `unknown_feature`. The run's rows and

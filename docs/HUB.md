@@ -1061,7 +1061,9 @@ except as *On a runner* says:
   title and description cut out, stays in the desktop's own log row. A cancel
   or an assignment that fails in its call is answered the same way, and so is
   a passkey counter or trusted-set write that fails after its assertion
-  verified.
+  verified — except a cancel that finds no run of a Feature the instance
+  holds, which is `unknown_feature` (`cancel_refusal` in
+  [`domain/hub_request`](../crates/demeteo-core/src/domain/hub_request/mod.rs)).
 - **`cancel_feature`** answers `unknown_feature` for a Feature the desktop does
   not hold. Otherwise it is the call the desktop's stop button makes,
   `step_control::cancel_feature`, which resolves the run's owner and sends it
@@ -1129,7 +1131,7 @@ differs in three ways:
   [`control.rs`](../crates/demeteo-runner/src/control.rs) cancels the
   Feature, ends the run row with `cancel_if_active`, logs one `cancelled`
   event and wipes the run's credential, whoever asked. A Feature the runner
-  holds with no run is a failed call, answered `malformed_body`.
+  holds with no run is answered `unknown_feature`.
 - **The Hub acts on any run the runner holds**, whichever desktop's
   `client_id` submitted it: a cancel skips the owner check the control socket
   makes, and an assignment or a gate decision is the runner's own

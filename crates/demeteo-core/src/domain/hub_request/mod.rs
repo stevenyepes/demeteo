@@ -21,6 +21,7 @@ use crate::domain::run_control::{out_of_band_refusal, RunAction};
 use crate::domain::step_assignment::{
     assignment_refusal, harness_refusal, identifier_refusal, kind_refusal, StepAssignment,
 };
+use crate::error::AppError;
 
 pub mod assertion;
 pub mod ceiling;
@@ -421,6 +422,21 @@ pub fn attachment_refusal(
     }
 }
 
+/// The reason a cancel of a Feature this instance holds is refused when its
+/// call fails.
+///
+/// `NotFound` is the instance holding the Feature but no run of it to stop, as
+/// a runner answers for a Feature row with no `runner_runs` row under it. The
+/// Hub names a run only by its Feature, so that is the Feature's run being
+/// unknown here, the reason a desktop gives for a Feature it does not hold. Every other failure is the instance's own,
+/// and `RefusalReason` has no generic failure (docs/HUB.md §6.1).
+pub fn cancel_refusal(error: &AppError) -> RefusalReason {
+    match error {
+        AppError::NotFound { .. } => RefusalReason::UnknownFeature,
+        _ => RefusalReason::MalformedBody,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +494,24 @@ mod tests {
             ),
             Verdict::Refuse(RefusalReason::UnknownKind)
         );
+    }
+
+    #[test]
+    fn a_cancel_with_no_run_to_stop_is_an_unknown_feature() {
+        assert_eq!(
+            cancel_refusal(&AppError::not_found("no run of feature f-1")),
+            RefusalReason::UnknownFeature
+        );
+        for failed in [
+            AppError::internal("run vanished during cancel"),
+            AppError::database("database query failed"),
+            AppError::transport("ssh error: -7"),
+        ] {
+            assert_eq!(
+                cancel_refusal(&failed),
+                RefusalReason::MalformedBody,
+                "{failed}"
+            );
+        }
     }
 }

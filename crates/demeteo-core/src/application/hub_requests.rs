@@ -31,7 +31,7 @@ use tokio::sync::{Mutex, MutexGuard};
 use crate::application::step_control;
 use crate::domain::hub_request::log::parse_scope;
 use crate::domain::hub_request::{
-    decide, effective_scopes, latest_execution, needs_committed_total, precheck,
+    cancel_refusal, decide, effective_scopes, latest_execution, needs_committed_total, precheck,
     reassignment_refusal, required_scope, step_assignment, unparsed_refusal, verify_signature,
     DropReason, ExecuteKind, HubRequestLogEntry, LogKind, LogOutcome, Precheck, Verdict,
     MAX_REQUEST_ID_LEN,
@@ -313,7 +313,7 @@ impl HubRequests {
             Ok(()) => Settled::accepted(Some(feature_id.to_owned()), None),
             Err(e) => {
                 tracing::warn!(error = %e, "Hub cancel refused: the cancel failed");
-                Settled::refused(RefusalReason::MalformedBody)
+                Settled::refused(cancel_refusal(&e))
             }
         }
     }
