@@ -1,7 +1,8 @@
 // Runner services over a real database, for the tests of what stops a run.
 // Only the executor is a double: it records every `feature_cancel` and errors
 // on any other call, so "the executor was not asked" is read from what it
-// recorded rather than from a default answer.
+// recorded rather than from a default answer. `Rig::with_engine` keeps the
+// real one instead, for what a cancel leaves on the feature row.
 
 use crate::away_notify::NoopAwayNotifier;
 use crate::credentials::{CredentialStore, RunnerCredentialSource};
@@ -11,9 +12,11 @@ use demeteo_core::adapters::database::SqliteAdapter;
 use demeteo_core::adapters::hub::sealed_store::SealedSecretStore;
 use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
 use demeteo_core::composition::{build_core_context_with_hub_store, CoreConfig, ExecutionMode};
+use demeteo_core::domain::feature_origin::FeatureOrigin;
 use demeteo_core::domain::hub_pairing::sealed::SEALED_BACKEND;
+use demeteo_core::domain::ids::{FeatureId, ProjectId};
 use demeteo_core::domain::models::{
-    EffortLevel, Feature, FeatureDivergence, FeatureDrift, StepExecution,
+    EffortLevel, Feature, FeatureDivergence, FeatureDrift, Project, StepExecution,
 };
 use demeteo_core::domain::step_assignment::StepAssignment;
 use demeteo_core::domain::sync_resolver::SyncResolverChoice;
@@ -35,6 +38,16 @@ pub(crate) struct Rig {
 
 impl Rig {
     pub fn new(tag: &str) -> Self {
+        Self::build(tag, true)
+    }
+
+    /// The composed `DagStepExecutor`, with no driver running for any feature.
+    /// `executor` is then never called and records nothing.
+    pub fn with_engine(tag: &str) -> Self {
+        Self::build(tag, false)
+    }
+
+    fn build(tag: &str, spy: bool) -> Self {
         let dir = TestDir::new(tag);
         let db = SqliteAdapter::new(demeteo_core::db::init_db(dir.path().to_path_buf()).unwrap())
             .unwrap();
@@ -54,7 +67,9 @@ impl Rig {
             )),
         );
         let executor = Arc::new(CancelSpy::default());
-        ctx.executor = executor.clone();
+        if spy {
+            ctx.executor = executor.clone();
+        }
         Self {
             svc: Arc::new(RunnerServices {
                 ctx: Arc::new(ctx),
@@ -75,6 +90,66 @@ impl Rig {
         runs.update_status(run_id, status, Some("p-1"), Some(feature_id), None, None, 2)
             .unwrap();
         self.svc.creds.insert(run_id, format!("pat-of-{run_id}"));
+    }
+
+    /// A feature row at `status`, under a project of its own.
+    pub fn seed_feature(&self, feature_id: &str, status: &str) {
+        let ctx = &self.svc.ctx;
+        ctx.projects
+            .add(Project {
+                id: ProjectId::from("p-1"),
+                name: "p-1".to_string(),
+                compute_type: "local".to_string(),
+                remote_host: None,
+                status: "idle".to_string(),
+                nodes: 0,
+                spend: 0.0,
+                tokens: 0,
+                created_at: 1,
+            })
+            .unwrap();
+        ctx.features
+            .add(Feature {
+                id: FeatureId::from(feature_id.to_string()),
+                project_id: ProjectId::from("p-1"),
+                workflow_id: None,
+                workflow_version_id: None,
+                title: feature_id.to_string(),
+                description: String::new(),
+                status: status.to_string(),
+                total_cost: 0.0,
+                duration: "0s".to_string(),
+                tokens: 0,
+                created_at: 1,
+                agent_kind: None,
+                model: None,
+                effort: None,
+                mr_url: None,
+                mr_state: Some("none".to_string()),
+                pr_title: None,
+                pr_body: None,
+                commit_artifacts: None,
+                loop_iterations: None,
+                max_budget_usd: None,
+                step_overrides: Vec::new(),
+                attachments: Vec::new(),
+                harness_baseline: None,
+                origin: FeatureOrigin::DefaultBranch,
+                diff_base_branch: None,
+                resolved_branch: None,
+                launched_by: Default::default(),
+            })
+            .unwrap();
+    }
+
+    pub fn feature_status(&self, feature_id: &str) -> String {
+        self.svc
+            .ctx
+            .features
+            .get(&FeatureId::from(feature_id.to_string()))
+            .unwrap()
+            .expect("feature")
+            .status
     }
 
     pub fn run(&self, run_id: &str) -> RunnerRun {

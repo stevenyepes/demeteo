@@ -61,3 +61,22 @@ async fn a_feature_resolves_to_its_newest_run_and_an_unknown_one_to_none() {
         "a run id is not a feature id"
     );
 }
+
+// A run whose feature has no driver here — its driver panicked, or a restart
+// could not re-arm it — has nothing for `feature_cancel` to signal. The row
+// the Hub and the desktop read is the feature's, so it must still end.
+#[tokio::test]
+async fn a_run_with_no_live_driver_still_ends_its_feature_cancelled() {
+    for parked in ["running", "awaiting_gate"] {
+        let rig = Rig::with_engine("runner_control_driverless");
+        rig.seed_feature("f-1", parked);
+        rig.seed_run("run-1", "f-1", "laptop-1", "running");
+
+        let run = cancel_run(&rig.svc.ctx, &rig.svc.creds, rig.run("run-1"))
+            .await
+            .expect("cancelled");
+
+        assert_eq!(run.status, "cancelled", "{parked}");
+        assert_eq!(rig.feature_status("f-1"), "cancelled", "{parked}");
+    }
+}

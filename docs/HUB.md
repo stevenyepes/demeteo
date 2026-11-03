@@ -1067,7 +1067,13 @@ except as *On a runner* says:
 - **`cancel_feature`** answers `unknown_feature` for a Feature the desktop does
   not hold. Otherwise it is the call the desktop's stop button makes,
   `step_control::cancel_feature`, which resolves the run's owner and sends it
-  to the runner when a `demeteo-runner` owns the run.
+  to the runner when a `demeteo-runner` owns the run. Either way the Hub
+  learns the run ended from the `feature_status` row of `cancelled`: a live
+  driver writes it as it stops, and `feature_cancel` writes it itself for a
+  Feature no driver is running — one whose driver died, or that a restart
+  could not re-arm — when `driverless_cancel_ends` in
+  [`domain/run_control.rs`](../crates/demeteo-core/src/domain/run_control.rs)
+  says nothing else will.
 - **`set_step_assignment`** resolves the step to its latest execution
   (`unknown_step`), then applies the refusals of
   [decision 54](DECISIONS.md#54--mid-run-assignment-detail) before the
@@ -1130,8 +1136,10 @@ differs in three ways:
   run executing the named Feature is found by its Feature id, and
   [`control.rs`](../crates/demeteo-runner/src/control.rs) cancels the
   Feature, ends the run row with `cancel_if_active`, logs one `cancelled`
-  event and wipes the run's credential, whoever asked. A Feature the runner
-  holds with no run is answered `unknown_feature`.
+  event and wipes the run's credential, whoever asked. That `cancelled` event
+  is not on the Hub's allowlist; the Feature's `feature_status` row is, and
+  is written as on a desktop. A Feature the runner holds with no run is
+  answered `unknown_feature`.
 - **The Hub acts on any run the runner holds**, whichever desktop's
   `client_id` submitted it: a cancel skips the owner check the control socket
   makes, and an assignment or a gate decision is the runner's own
