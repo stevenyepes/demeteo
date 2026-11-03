@@ -599,3 +599,60 @@ mod release_feature_cache {
         }
     }
 }
+
+// ── cancel_run vs a Hub cancel ──────────────────────────────────────
+//
+// Decision 64, read per instance: a Hub cancel lands in the body of the
+// control socket's own, and only the owner check differs, so the two leave
+// the same trace.
+mod cancel_parity {
+    use crate::hub::RunnerHubRuns;
+    use crate::test_services::Rig;
+    use demeteo_core::domain::ids::FeatureId;
+    use demeteo_core::ports::hub::HubRunControl;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn the_socket_and_the_hub_leave_the_same_row_events_and_credentials() {
+        let rig = Rig::new("runner_cancel_parity");
+        rig.seed_run("run-rpc", "f-rpc", "laptop-1", "running");
+        rig.seed_run("run-hub", "f-hub", "laptop-1", "running");
+
+        super::super::cancel_run(&rig.svc, json!({ "run_id": "run-rpc" }), "laptop-1")
+            .await
+            .expect("the owner cancels");
+        RunnerHubRuns::new(rig.svc.clone())
+            .cancel(&FeatureId::from("f-hub"))
+            .await
+            .expect("the Hub cancels");
+
+        let trace = |run_id: &str| {
+            let run = rig.run(run_id);
+            (
+                run.status,
+                run.error,
+                run.pushed_branch,
+                run.owner_client_id,
+                rig.event_kinds(run_id),
+                rig.svc.creds.get(run_id),
+            )
+        };
+        assert_eq!(trace("run-rpc"), trace("run-hub"));
+        assert_eq!(trace("run-hub").0, "cancelled");
+        assert_eq!(rig.executor.cancels(), ["f-rpc", "f-hub"]);
+    }
+
+    #[tokio::test]
+    async fn the_socket_still_refuses_another_clients_run() {
+        let rig = Rig::new("runner_cancel_rpc_owner");
+        rig.seed_run("run-1", "f-1", "laptop-1", "running");
+
+        let error = super::super::cancel_run(&rig.svc, json!({ "run_id": "run-1" }), "laptop-2")
+            .await
+            .expect_err("not the owner");
+
+        assert!(error.contains("run-1"), "{error}");
+        assert!(rig.executor.cancels().is_empty());
+        assert_eq!(rig.run("run-1").status, "running");
+    }
+}

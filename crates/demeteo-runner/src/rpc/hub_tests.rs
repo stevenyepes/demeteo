@@ -14,6 +14,7 @@ use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::domain::hub_pairing::device::DeviceGrantEnd;
 use demeteo_core::domain::hub_pairing::sealed::SEALED_BACKEND;
 use demeteo_core::domain::hub_pairing::{HubPairingError, PairingAnswer};
+use demeteo_core::domain::hub_request::{HubRequestLogEntry, LogKind, LogOutcome};
 use demeteo_core::ports::hub::{HubSecretStore, HubTokenEndpoint};
 use demeteo_core::test_dir::TestDir;
 use serde_json::{json, Value};
@@ -88,7 +89,8 @@ impl Rig {
                 pairing: Some(Arc::new(pairing)),
                 secrets,
                 policy: db.clone(),
-                policy_writer: db,
+                policy_writer: db.clone(),
+                requests: db,
             },
         }
     }
@@ -246,4 +248,50 @@ async fn disconnect_on_an_unpaired_runner_reads_unpaired() {
     );
     let status = rig.call("hub_disconnect", json!({})).await.unwrap();
     assert_eq!(status["state"], "unpaired");
+}
+
+#[tokio::test]
+async fn the_request_log_answers_newest_first_within_the_limit() {
+    let rig = Rig::new("runner_hub_log", Err(NO_KEY), Arc::new(InstantSleeper));
+    for (n, outcome) in [
+        LogOutcome::Accepted,
+        LogOutcome::Refused,
+        LogOutcome::Accepted,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        rig.hub
+            .requests
+            .append_log(&HubRequestLogEntry {
+                request_id: format!("req-{n}"),
+                kind: LogKind::CancelFeature,
+                scope: None,
+                outcome,
+                reason: None,
+                feature_id: Some("f-1".into()),
+                received_at_ms: 1_000 + n as i64,
+            })
+            .unwrap();
+    }
+
+    let page = rig
+        .call("hub_request_log", json!({ "limit": 2 }))
+        .await
+        .unwrap();
+    let ids: Vec<&str> = page
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row["request_id"].as_str().expect("an id"))
+        .collect();
+    assert_eq!(ids, ["req-2", "req-1"]);
+    assert_eq!(page[1]["outcome"], "refused");
+    assert_eq!(page[1]["kind"], "cancel_feature");
+
+    let error = rig
+        .call("hub_request_log", json!({}))
+        .await
+        .expect_err("a limit is required");
+    assert!(error.starts_with("invalid params"), "{error}");
 }
