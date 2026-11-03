@@ -52,7 +52,7 @@ full.
 | Desktop side: a runner's Hub panel in Settings › Machines | **built** — `src/components/RunnerHubPanel.tsx`, mounted on each machine whose runner reports a version. Its `remote_hub_*` commands (`src-tauri/src/commands/remote_runner_hub.rs`, wrappers in `src/lib/runnerHub.ts`) each call one of the runner's `hub_*` methods over SSH through `application/remote_runs/runner_hub.rs`. It pairs by device code (the code, the Hub's verification URL and the runner's fingerprint, polling `hub_pair_state` every 2 s until it settles), shows the runner's status, connection and machine, sets its toggles and ceilings through `hub_policy_set`, disconnects it, and shows its activity log; a runner refusal, such as one with no sealed store, is shown in the runner's own words, and a runner predating `hub_status` or `hub_request_log` is named as too old rather than failing. A pairing change made here refreshes `machine_hub_state` at once (§5 *Events and the cursor*) |
 | Desktop side: passkey pin set, request verification, local ceilings | **built** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`, and each passkey's signature counter by `V66__hub_passkey_sign_count.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On an instance*, §7). The WebAuthn assertion a `gate_decision` or a `passkey_revocation` carries is verified on the desktop against the pinned set before the request has any effect: a gate is then decided by the desktop's own `gate_decide`, and a key is removed in one transaction with the signer's counter (§8). Every `passkey_endorsement` is consumed and refused `unknown_kind` without its assertion being read (§11 item 20). A gate of a run a `demeteo-runner` owns is not decided by the desktop: it is refused `runner_owned`, and a paired runner decides it for its own report of the run (§10) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
-| Runner dispatch from the Hub | **partly built** — a paired runner verifies, judges and answers the requests the Hub queues for it, as a desktop does (§6.1 *On an instance*): `cancel_feature`, `set_step_assignment` and `gate_decision` land in its own control socket's calls, on any run it holds whichever desktop submitted it. **Not built:** a runner starts nothing for the Hub — every `start_feature` is refused `unknown_kind` before its committed total is loaded or any attachment fetched, until the Hub can build a `RunSpec` from a snapshot — and the Hub mints no git token (decisions 64 and 71); see §10 |
+| Runner dispatch from the Hub | **partly built** — a paired runner verifies, judges and answers the requests the Hub queues for it, as a desktop does (§6.1 *On an instance*): `cancel_feature`, `set_step_assignment` and `gate_decision` land in its own control socket's calls, on any run it holds whichever desktop submitted it. A `start_feature` the Hub resolved from a source desktop's snapshot maps to a `RunSpec` and is submitted through the control socket's own `submit`, owned by `HUB_CLIENT_ID`, its cap committed on the run row (§6.1 *On a runner*). **Not built:** the git access that launch needs. The Hub mints no git token, so production composes no credential seam and a runner still refuses every start `unknown_kind`, nothing fetched (decisions 64 and 71); see §10 |
 
 The design mockup in [`hub-design/`](hub-design/README.md) exists. It is a
 picture of the Hub, not a part of it, and where it disagrees with this document
@@ -1165,12 +1165,30 @@ log as a desktop, against its own pins, toggles and ceilings (§7). Its
 `RunnerHubRuns` ([`crates/demeteo-runner/src/hub/runs.rs`](../crates/demeteo-runner/src/hub/runs.rs))
 differs in three ways:
 
-- **It starts nothing.** Every `start_feature` is refused `unknown_kind` once
-  its id is spent and before any ceiling: its committed total is not loaded,
-  so a total that fails to load does not defer it, and none of its attachments
-  is fetched, since a fetch deletes the Hub's copy. A redelivery reads
-  `replayed`. A run on a runner is submitted with a spec, project settings and
-  a git credential, and a Hub start carries none of them (§10).
+- **It starts a run only once it has a way to give that run git access.**
+  Until then, and production composes none ([decision 64's *Hub-started
+  runner runs*](DECISIONS.md#64--hub-instances-detail)), every
+  `start_feature` is refused `unknown_kind` once its id is spent and before
+  any ceiling: its committed total is not loaded, so a total that fails to
+  load does not defer it, and none of its attachments is fetched, since a
+  fetch deletes the Hub's copy. A redelivery reads `replayed`. With that seam
+  composed, a start is resolved from its signed `runner` part rather than a
+  database the runner does not have (`runner_start_refusal` in
+  [`domain/hub_request/runner_spec.rs`](../crates/demeteo-core/src/domain/hub_request/runner_spec.rs)),
+  and launched through the same `submit` the control socket's `submit_run`
+  calls ([`rpc/lifecycle.rs`](../crates/demeteo-runner/src/rpc/lifecycle.rs)).
+  The runner mints the run and Feature ids, spools the fetched attachments
+  under its own data directory where a desktop's SFTP would put them, builds
+  the spec with `runner_run_spec` and submits it owned by the reserved client
+  id `HUB_CLIENT_ID`, which the control socket refuses from any caller. The
+  cap is recorded on the run row (`hub_committed_cents`, migration V70)
+  before the run's driver starts, and the runner's 24-hour total sums those
+  rows rather than Features, so a run that fails before it has a Feature
+  still counts. A submit that comes back `failed`, because the named agent is
+  not installed, is answered `malformed_body` with its commitment zeroed. The
+  wall clock is honoured, as the run's hard budget; the run carries no project
+  settings, so the runner's detected defaults apply; and it is unattended, as
+  every detached run is.
 - **A cancel stops the run as the control socket's `cancel_run` does.** The
   run executing the named Feature is found by its Feature id, and
   [`control.rs`](../crates/demeteo-runner/src/control.rs) cancels the
@@ -1194,7 +1212,7 @@ read the runner's activity log, newest first, at most 500 rows a read.
 
 | Kind | Scope | Effect on the instance |
 |---|---|---|
-| `start_feature` | `spend` | start a Feature on a named Project and Workflow snapshot, with a description, optional attachments (§6.3) and optional per-step assignments. Refused locally if it would exceed a ceiling (§7). One for a runner carries `runner`, the repository and Workflow version a desktop would read from its own database (§6.1). A desktop only so far: a runner refuses every one `unknown_kind`, nothing fetched (§6.1 *On a runner*) |
+| `start_feature` | `spend` | start a Feature on a named Project and Workflow snapshot, with a description, optional attachments (§6.3) and optional per-step assignments. Refused locally if it would exceed a ceiling (§7). One for a runner carries `runner`, the repository and Workflow version a desktop would read from its own database (§6.1). A runner launches one only once a git-access seam is composed, and production composes none yet: until then it refuses every one `unknown_kind`, nothing fetched (§6.1 *On a runner*) |
 | `cancel_feature` | `spend` | cancel a running Feature. A `spend` request because it is run control, not an approval |
 | `set_step_assignment` | `spend` | re-point one step's agent, model or effort mid-run. Exactly [decision 54](DECISIONS.md#54--mid-run-assignment-detail): tier 1 only, refused in `running` and `verifying`, refused for a kind that spawns no agent, refused for a harness the build has not registered |
 | `gate_decision` | `gates` | decide a pending Gate. Carries a WebAuthn assertion; §8 |
@@ -2028,10 +2046,21 @@ calls, on any run it holds (§6.1 *On a runner*). So is the Hub's half of a
 start: a dispatch to a runner names a source desktop, and the Hub resolves the
 repository and pinned Workflow version from that desktop's snapshot and signs
 them into the `start_feature` (§6.4), refusing a Project or Workflow it cannot
-resolve as a `409` rather than queueing a guess. The rest is not. Mapping that
-start to a `RunSpec` is what a runner's `start_feature` waits on, and until
-then the runner refuses every one `unknown_kind` with nothing fetched;
-minting and delivering a git token comes after it.
+resolve as a `409` rather than queueing a guess. So is the runner's: it maps
+that start to a `RunSpec` and submits it through its control socket's own
+`submit` (§6.1 *On a runner*). What is not built is the git access the run
+needs. A runner launches a start only when a credential seam is composed, and
+production composes none, so until the Hub mints and delivers a token every
+start is still refused `unknown_kind` with nothing fetched. The first token is
+to be fetched over the socket once the start is accepted, never signed into it
+([decision 71](DECISIONS.md#71--runner-git-credentials-detail)).
+
+**A run that fails before its Feature row exists never reaches the Hub** — a
+clone the provider refuses, say. A runner reports its runs under their Feature
+ids (§5), and a run's rows from before it has one are not re-keyed, so the
+Hub's Run for that start stays where its acceptance left it. The runner's own
+run row and event log record the failure, and its committed cap still counts
+against the runner's ceiling.
 
 Two things about it are easy to get wrong:
 
@@ -2243,6 +2272,16 @@ what a desktop client implements.
     **What remains:** a substituted ceremony can still spend that one ceremony
     on one gate decision the user did not mean, or on revoking one of the
     user's other pinned keys — never the last, and never adding one.
+21. **Workflow text in a stored envelope.** A `start_feature` to a runner
+    signs the Workflow it runs, `steps_json` with every step's commands and
+    prompts, and the stored envelope keeps it for as long as the request row
+    lives, which is for good (§9), as item 19's digest is. A desktop's start
+    names its Workflow by id, so this is new with runner dispatch. The Hub
+    refuses a Workflow carrying the snapshot's scrub mask (§6.4), so no
+    secret the desktop scrubbed is signed; what a prompt says in the clear is.
+    **Default built:** kept, so the stored signature still verifies. Redacting
+    it once the request is answered or expired, or deleting old request rows,
+    is open, and is the same choice as item 19's.
 
 ### Pairing's carried defaults
 
