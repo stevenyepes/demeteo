@@ -9,19 +9,22 @@ const OUTCOME_PILL: Readonly<Record<HubRequestOutcome, string>> = {
   deferred: 'bg-white/5 text-slate-300 border-slate-700/60',
 };
 
+const DESKTOP_DESCRIPTION =
+  'Every request the Hub sent this desktop, newest first, and what this desktop did with it.';
+
 interface HubActivityLogProps {
   entries: HubRequestLogEntry[];
+  /** Whose log this is, said in full: a runner's panel shows the same rows. */
+  description?: string;
 }
 
-export function HubActivityLog({ entries }: HubActivityLogProps) {
+export function HubActivityLog({ entries, description = DESKTOP_DESCRIPTION }: HubActivityLogProps) {
   return (
     <div className="panel p-6 space-y-4">
       <h3 className="font-heading text-sm font-semibold text-slate-300 flex items-center gap-2">
         <Activity className="w-4 h-4 text-slate-400" /> Hub activity
       </h3>
-      <p className="text-xs text-slate-400 leading-relaxed">
-        Every request the Hub sent this desktop, newest first, and what this desktop did with it.
-      </p>
+      <p className="text-xs text-slate-400 leading-relaxed">{description}</p>
       {entries.length === 0 ? (
         <p className="text-xs text-slate-500 italic">No request from the Hub has arrived yet.</p>
       ) : (
