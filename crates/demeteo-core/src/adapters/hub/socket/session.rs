@@ -6,15 +6,16 @@
 //! nothing below what the Hub already holds, and a Hub that lost rows is
 //! refilled from where it says it is.
 //!
-//! It reads the desktop's own `run_events` and nothing else, whichever
-//! transport ran the Feature a row belongs to.
+//! It reads the instance's own `run_events` and nothing else, whichever
+//! transport ran the Feature a row belongs to, and sends each row under the
+//! Feature id [`SessionContext::run_keys`] reports it under, or not at all.
 //!
 //! A request the Hub relays is handed to the bound [`HubRequestHandler`] on
 //! a task of its own, and its `RequestResult` comes back to the loop to be
 //! sent: a start can take as long as a launch and an attachment fetch, and
 //! the loop that reads the Hub's pings cannot wait that out.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::ready;
 use std::sync::{Arc, OnceLock};
@@ -25,13 +26,15 @@ use serde::Serialize;
 use tokio::sync::{mpsc, watch, Mutex, Notify, OwnedMutexGuard};
 use tokio::time::{sleep_until, timeout, Instant};
 
+use crate::adapters::hub::run_keys::ReportedAsIs;
 use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
     hello, hub_event, SocketEnd, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS, PAGE_SIZE,
     SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 use crate::ports::hub::{
-    HubRequestHandler, HubSnapshotSource, HubSocketConnection, SocketGone, SocketReceived,
+    HubRequestHandler, HubRunKeys, HubSnapshotSource, HubSocketConnection, SocketGone,
+    SocketReceived,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::shared::time::now_ms;
@@ -41,7 +44,8 @@ use super::status::ConnectionCell;
 
 /// RFC 6455 §7.4.1, for an endpoint that is going away.
 const GOING_AWAY: u16 = 1001;
-/// RFC 6455 §7.4.1: the desktop could not read its own run log. The Hub is
+/// RFC 6455 §7.4.1: the desktop could not read its own run log, or could not
+/// tell which Feature its rows are reported under. The Hub is
 /// told to expect the connection back, which [`crate::domain::hub_socket::after`]
 /// makes it.
 const INTERNAL_ERROR: u16 = 1011;
@@ -67,6 +71,10 @@ pub struct SessionContext {
     /// `run_events`; it has to be that decorator's, or an append wakes
     /// nothing and a live row waits for the next connection.
     pub wake: Arc<Notify>,
+    /// Which Feature id each run-log row goes out under; a row it names no
+    /// id for is not sent. Every key as itself until [`Self::with_run_keys`]
+    /// says otherwise.
+    pub run_keys: Arc<dyn HubRunKeys>,
     pub snapshots: Arc<dyn HubSnapshotSource>,
     /// Fired by [`super::snapshot_wake`]'s decorators on every write to
     /// what [`Self::snapshots`] reads; the same pairing rule as
@@ -134,6 +142,7 @@ impl SessionContext {
             relaying: false,
             run_events,
             wake,
+            run_keys: Arc::new(ReportedAsIs),
             snapshots,
             snapshot_wake,
             snapshot_debounce: Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS),
@@ -147,6 +156,11 @@ impl SessionContext {
 
     pub fn with_relaying(mut self, relaying: bool) -> Self {
         self.relaying = relaying;
+        self
+    }
+
+    pub fn with_run_keys(mut self, run_keys: Arc<dyn HubRunKeys>) -> Self {
+        self.run_keys = run_keys;
         self
     }
 
@@ -226,7 +240,7 @@ enum Exit {
     /// The connection is over; nothing is sent on it again.
     Ended(SocketEnd),
     Stop,
-    /// The run log could not be read.
+    /// The run log could not be read, or its keys not resolved.
     Failed,
 }
 
@@ -293,7 +307,7 @@ impl Session {
                 facts.in_flight = outbox.in_flight.len();
             });
             if outbox.pending.is_empty() && !outbox.caught_up {
-                if outbox.read(&ctx.run_events).await? {
+                if outbox.read(&ctx.run_events, &ctx.run_keys).await? {
                     snapshots.woken(ctx.snapshot_debounce);
                 }
                 continue;
@@ -459,18 +473,33 @@ impl Outbox {
         }
     }
 
-    /// One page, read off the runtime: every repository shares one SQLite
-    /// lock, which `list_after` takes and releases inside the blocking task.
-    /// `true` when the page held an event of a Feature not
-    /// [`seen`](Self::seen) before.
-    async fn read(&mut self, run_events: &Arc<dyn RunEventsPort>) -> Result<bool, Exit> {
+    /// One page, read and its keys resolved off the runtime: every
+    /// repository shares one SQLite lock, which each read takes and releases
+    /// inside the blocking task. `true` when the page held an event of a
+    /// Feature not [`seen`](Self::seen) before.
+    ///
+    /// Each row is re-keyed to its reported Feature id before
+    /// [`hub_event`] judges it, or dropped. The page's raw rows advance
+    /// [`Self::read_through`] either way, so a page of rows nothing reports
+    /// is not read again.
+    async fn read(
+        &mut self,
+        run_events: &Arc<dyn RunEventsPort>,
+        run_keys: &Arc<dyn HubRunKeys>,
+    ) -> Result<bool, Exit> {
         let run_events = Arc::clone(run_events);
+        let run_keys = Arc::clone(run_keys);
         let after = self.read_through;
-        let page = tokio::task::spawn_blocking(move || run_events.list_after(after, PAGE_SIZE))
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|page| page);
-        let rows: Vec<RunEvent> = page.map_err(|error| {
+        let page = tokio::task::spawn_blocking(move || {
+            let rows = run_events.list_after(after, PAGE_SIZE)?;
+            let keys: BTreeSet<String> = rows.iter().map(|row| row.run_id.clone()).collect();
+            let ids = run_keys.reported_ids(&keys)?;
+            Ok::<_, String>((rows, ids))
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|page| page);
+        let (rows, ids) = page.map_err(|error| {
             tracing::warn!(%error, "the run log could not be read for the Hub");
             Exit::Failed
         })?;
@@ -478,8 +507,12 @@ impl Outbox {
         if let Some(last) = rows.last() {
             self.read_through = last.offset;
         }
+        let reported = rows.into_iter().filter_map(|row| {
+            let run_id = ids.get(&row.run_id)?.clone();
+            Some(RunEvent { run_id, ..row })
+        });
         let mut unseen = false;
-        for event in rows.iter().filter_map(hub_event) {
+        for event in reported.filter_map(|row| hub_event(&row)) {
             if !self.seen.contains(&event.feature_id) {
                 unseen = true;
                 self.seen.insert(event.feature_id.clone());

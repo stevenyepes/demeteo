@@ -325,3 +325,14 @@ pub trait BrowserLauncher: Send + Sync {
 pub trait HubSnapshotSource: Send + Sync {
     fn snapshot(&self) -> Result<Snapshot, String>;
 }
+
+/// The Feature id each run-log key, or snapshot Feature id, is reported to
+/// the Hub under; a key absent from the answer is not reported at all. The
+/// rule is [`crate::domain::hub_socket::reported_feature_id`]: this only
+/// reads what it needs. Synchronous for [`HubSnapshotSource`]'s reason.
+pub trait HubRunKeys: Send + Sync {
+    fn reported_ids(
+        &self,
+        keys: &std::collections::BTreeSet<String>,
+    ) -> Result<std::collections::HashMap<String, String>, String>;
+}

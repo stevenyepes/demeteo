@@ -433,6 +433,7 @@ fn build_core_context_parts(
     let hub_pins: Arc<dyn ports::hub::HubPinRepository> = db_adapter.clone();
     let hub_passkeys: Arc<dyn ports::hub::HubPasskeyTrust> = db_adapter.clone();
     let hub_passkey_reader: Arc<dyn ports::hub::HubPasskeyReader> = db_adapter.clone();
+    let machine_hub_state_repo: Arc<dyn ports::db::MachineHubStateRepository> = db_adapter.clone();
 
     let app_version = AppVersion::default();
     let hub_store = hub_store.or_else(|| match execution_mode {
@@ -451,7 +452,15 @@ fn build_core_context_parts(
             hub_socket(
                 run_events_repo.clone(),
                 run_events_wake,
-                Arc::new(adapters::hub::snapshot_source::RepoSnapshotSource::new(
+                hub_run_keys(
+                    &execution_mode,
+                    &remote_run_mirror_repo,
+                    &machine_hub_state_repo,
+                    &hub_pins,
+                    &runner_runs_repo,
+                    &features_repo,
+                ),
+                adapters::hub::snapshot_source::RepoSnapshotSource::new(
                     db_adapter.clone(),
                     db_adapter.clone(),
                     db_adapter.clone(),
@@ -461,7 +470,7 @@ fn build_core_context_parts(
                         .iter()
                         .map(|runtime| runtime.kind().to_owned())
                         .collect(),
-                )),
+                ),
                 snapshot_wake,
                 runtime.clone(),
             ),
@@ -500,6 +509,7 @@ fn build_core_context_parts(
         runner_runs: runner_runs_repo,
         run_events: run_events_repo,
         remote_run_mirror: remote_run_mirror_repo,
+        machine_hub_state: machine_hub_state_repo,
         sync_sessions: sync_sessions_repo,
         discoveries: discoveries_repo,
         discovery_turns: Arc::new(application::discovery::running::RunningTurns::default()),
@@ -602,15 +612,42 @@ fn keyring_secret_store() -> Option<Arc<dyn ports::hub::HubSecretStore>> {
     None
 }
 
+/// Which Feature id this instance reports each run under, by what it logs
+/// runs under: a desktop its Feature ids, shadows included; a runner its run
+/// ids (see [`adapters::hub::run_keys`]).
+fn hub_run_keys(
+    execution_mode: &ExecutionMode,
+    mirror: &Arc<dyn ports::remote_run_mirror::RemoteRunMirrorPort>,
+    machines: &Arc<dyn ports::db::MachineHubStateRepository>,
+    pins: &Arc<dyn ports::hub::HubPinRepository>,
+    runs: &Arc<dyn ports::runner_run::RunnerRunPort>,
+    features: &Arc<dyn ports::db::FeatureRepository>,
+) -> Arc<dyn ports::hub::HubRunKeys> {
+    match execution_mode {
+        ExecutionMode::Router => Arc::new(adapters::hub::run_keys::DesktopRunKeys::new(
+            mirror.clone(),
+            machines.clone(),
+            pins.clone(),
+        )),
+        ExecutionMode::LocalOnly => Arc::new(adapters::hub::run_keys::RunnerRunKeys::new(
+            runs.clone(),
+            features.clone(),
+        )),
+    }
+}
+
 /// `run_events` and `wake` have to come from one
 /// [`WakingRunEvents`](adapters::hub::socket::wake::WakingRunEvents), and
 /// `snapshot_wake` has to be the one `ctx.projects` and `ctx.workflows` wake
-/// through. With no dialer the desktop still pairs; it just never dials.
+/// through. `run_keys` is given to both the session and `snapshots`, so a
+/// run's rows and its snapshot entry go out under one id. With no dialer the
+/// desktop still pairs; it just never dials.
 #[cfg(feature = "hub-socket")]
 fn hub_socket(
     run_events: Arc<dyn ports::run_events::RunEventsPort>,
     wake: Arc<tokio::sync::Notify>,
-    snapshots: Arc<dyn ports::hub::HubSnapshotSource>,
+    run_keys: Arc<dyn ports::hub::HubRunKeys>,
+    snapshots: adapters::hub::snapshot_source::RepoSnapshotSource,
     snapshot_wake: Arc<tokio::sync::Notify>,
     runtime: tokio::runtime::Handle,
 ) -> Option<adapters::hub::socket::SocketConfig> {
@@ -619,8 +656,9 @@ fn hub_socket(
             dialer: Arc::new(dialer),
             run_events,
             wake,
-            snapshots,
+            snapshots: Arc::new(snapshots.with_run_keys(run_keys.clone())),
             snapshot_wake,
+            run_keys,
             snapshot_debounce: std::time::Duration::from_secs(
                 crate::domain::hub_socket::SNAPSHOT_DEBOUNCE_SECS,
             ),
@@ -639,7 +677,8 @@ fn hub_socket(
 fn hub_socket(
     _run_events: Arc<dyn ports::run_events::RunEventsPort>,
     _wake: Arc<tokio::sync::Notify>,
-    _snapshots: Arc<dyn ports::hub::HubSnapshotSource>,
+    _run_keys: Arc<dyn ports::hub::HubRunKeys>,
+    _snapshots: adapters::hub::snapshot_source::RepoSnapshotSource,
     _snapshot_wake: Arc<tokio::sync::Notify>,
     _runtime: tokio::runtime::Handle,
 ) -> Option<adapters::hub::socket::SocketConfig> {
