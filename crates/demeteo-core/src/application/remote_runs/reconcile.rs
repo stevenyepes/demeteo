@@ -131,7 +131,9 @@ fn mark_unhydrated_shadow(ctx: &AppContext, feature_id: &str, run_status: &str) 
 
 /// Logs a shadow row's new status as the step executor logs a local one.
 /// A detached run's own events stay on its runner, so this row is the only
-/// word of how it ended the desktop's log — and a paired Hub — ever gets.
+/// word of how it ended the desktop's log ever gets. A paired Hub gets it
+/// from the desktop only while the runner does not report itself to that
+/// Hub ([`crate::domain::hub_socket::reported_feature_id`]).
 fn log_shadow_status(ctx: &AppContext, feature_id: &FeatureId, status: &str) {
     let _ = ctx.notif.emit(&DomainEvent::FeatureStatusChanged {
         feature_id: feature_id.clone(),

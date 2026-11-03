@@ -70,6 +70,7 @@ pub mod device_key;
 #[cfg(feature = "keyring")]
 pub mod keyring_store;
 pub mod loopback;
+pub mod run_keys;
 pub mod sealed_store;
 pub mod snapshot_source;
 pub mod socket;
@@ -651,6 +652,7 @@ impl HubPairing {
                 config.snapshot_wake.clone(),
             )
             .with_relaying(relaying)
+            .with_run_keys(config.run_keys.clone())
             .with_requests(self.requests.clone())
             .with_connection(self.connection.clone())
             .with_snapshot_debounce(config.snapshot_debounce),

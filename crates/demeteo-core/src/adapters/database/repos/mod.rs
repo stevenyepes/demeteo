@@ -8,6 +8,7 @@ pub mod hub;
 pub mod hub_requests;
 pub mod hub_sealed;
 pub mod machine;
+pub mod machine_hub_state;
 pub mod memory;
 pub mod memory_signals;
 pub mod merge_audit;

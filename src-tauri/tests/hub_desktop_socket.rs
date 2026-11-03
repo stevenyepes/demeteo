@@ -18,7 +18,8 @@ use demeteo_core::adapters::hub::socket::wake::WakingRunEvents;
 use demeteo_core::adapters::hub::socket::{supervise, Sleeper, SupervisorDeps};
 use demeteo_core::adapters::hub::testing::{
     ConnectionLog, Exchange, MemorySecretStore, ScriptedAttachments, ScriptedConnection,
-    ScriptedRefreshEndpoint, ScriptedSnapshotSource, ScriptedSocketDialer, UnreadableRunEvents,
+    ScriptedRefreshEndpoint, ScriptedRunKeys, ScriptedSnapshotSource, ScriptedSocketDialer,
+    UnreadableRunEvents,
 };
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
@@ -1009,6 +1010,106 @@ async fn a_backlog_longer_than_a_page_and_the_unacked_window_reaches_the_hub() {
     assert_eq!(bridged.dialer.hub.cursor(), last);
     assert_eq!(bridged.heard().len(), events + 1);
     assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// A runner logs a run's rows under its run id; each reaches the Hub under
+/// the Feature id its keys report, and a key reported under none is not
+/// sent at all.
+#[tokio::test]
+async fn each_row_reaches_the_hub_under_the_feature_id_its_key_reports() {
+    let bridged = Bridged::new(&[
+        ("run-1", "feature_status", json!({"status": "running"})),
+        ("run-2", "feature_status", json!({"status": "running"})),
+        (
+            "f-local",
+            "step_progress",
+            json!({"status": "running", "step_id": "s-1"}),
+        ),
+        ("run-1", "feature_status", json!({"status": "completed"})),
+    ])
+    .await;
+    let keys = Arc::new(ScriptedRunKeys::new([
+        ("run-1", Some("f-1")),
+        ("run-2", None),
+        ("f-local", Some("f-local")),
+    ]));
+    let running = bridged
+        .connect_with(bridged.context().with_run_keys(keys.clone()))
+        .await;
+
+    bridged.acked_through(4).await;
+
+    let expected = vec![
+        mirrored(
+            "f-1",
+            1,
+            RunEventKind::FeatureStarted,
+            RunEventPayload::default(),
+        ),
+        mirrored("f-local", 3, RunEventKind::StepStarted, step("s-1")),
+        mirrored(
+            "f-1",
+            4,
+            RunEventKind::FeatureCompleted,
+            RunEventPayload::default(),
+        ),
+    ];
+    assert_eq!(sorted(bridged.dialer.hub.mirror()), sorted(expected));
+    assert_eq!(keys.unscripted(), 0);
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// A page whose every row is reported under no id still moves the read on,
+/// so the row after it is sent rather than the page being read forever.
+#[tokio::test]
+async fn a_page_of_rows_nothing_reports_is_read_past() {
+    let bridged = Bridged::new(&[]).await;
+    for _ in 0..PAGE_SIZE + 3 {
+        bridged.append(&("run-gone", "feature_status", json!({"status": "running"})));
+    }
+    let last = bridged.append(&("run-1", "feature_status", json!({"status": "running"})));
+    let keys = Arc::new(ScriptedRunKeys::new([
+        ("run-gone", None),
+        ("run-1", Some("f-1")),
+    ]));
+    let running = bridged
+        .connect_with(bridged.context().with_run_keys(keys.clone()))
+        .await;
+
+    bridged.acked_through(last).await;
+
+    assert_eq!(
+        bridged.dialer.hub.mirror(),
+        [mirrored(
+            "f-1",
+            last,
+            RunEventKind::FeatureStarted,
+            RunEventPayload::default(),
+        )]
+    );
+    assert_eq!(bridged.dialer.hub.cursor(), last);
+    assert_eq!(keys.unscripted(), 0);
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// Keys that cannot be resolved are the desktop's own failure, as an
+/// unreadable run log is: nothing is sent under a guessed id.
+#[tokio::test]
+async fn run_keys_that_cannot_be_resolved_close_the_session_1011() {
+    let (run_events, _) = progress_log(1);
+    let keys = Arc::new(ScriptedRunKeys::default());
+    let ctx = scripted_context(run_events.clone(), run_events.wake()).with_run_keys(keys.clone());
+    let conn = ScriptedConnection::new([cursor_ack(0)]).then_silent();
+    let log = conn.log();
+
+    let end = scripted_session(conn, &ctx).await;
+
+    assert_eq!(
+        end,
+        (SessionEnd::Ended(SocketEnd::Closed(Some(1011))), true)
+    );
+    assert_eq!(keys.unscripted(), 1);
+    assert!(event_offsets(&log.sent()).is_empty(), "{:?}", log.sent());
 }
 
 /// The offset of every `RunEvent` among `frames`.

@@ -4022,6 +4022,7 @@ fn socket_config(
         run_events,
         snapshots: Arc::new(ScriptedSnapshotSource::default()),
         snapshot_wake: Arc::new(tokio::sync::Notify::new()),
+        run_keys: Arc::new(crate::adapters::hub::run_keys::ReportedAsIs),
         snapshot_debounce: Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS),
         runtime: tokio::runtime::Handle::current(),
         sleeper: sleeper.clone(),

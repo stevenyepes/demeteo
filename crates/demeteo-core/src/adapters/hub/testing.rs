@@ -23,12 +23,16 @@
 //! snapshot a test set, and with an `Err` once it has neither, so no session
 //! sends a snapshot the test did not choose.
 //!
+//! [`ScriptedRunKeys`] answers only for the keys it was scripted with, and
+//! with an `Err` for any page that holds another, so no row is reported
+//! under an id the test did not choose.
+//!
 //! [`ScriptedGatePresenter`] accepts the one gate decision it was scripted
 //! with, once, and refuses everything else with an `Err` — other arguments, a
 //! repeat, and every `gate_pending_for_run` — counting each for a test to
 //! assert is `0`.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -46,8 +50,8 @@ use crate::domain::models::GateDecision;
 use crate::error::AppError;
 use crate::ports::hub::{
     AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository,
-    HubRefreshEndpoint, HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer,
-    SocketGone, SocketReceived, SocketUpgrade,
+    HubRefreshEndpoint, HubRunKeys, HubSecretStore, HubSnapshotSource, HubSocketConnection,
+    HubSocketDialer, SocketGone, SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::ports::step_executor::GatePresenter;
@@ -788,6 +792,50 @@ impl HubSnapshotSource for ScriptedSnapshotSource {
             self.unscripted.fetch_add(1, Ordering::SeqCst);
             Self::UNSCRIPTED.to_owned()
         })
+    }
+}
+
+/// Run-log keys resolved from a script: each key to the id it is reported
+/// under, or to `None` for one that is not reported. A call naming any other
+/// key is an `Err`, counted by [`Self::unscripted`].
+#[derive(Default)]
+pub struct ScriptedRunKeys {
+    script: HashMap<String, Option<String>>,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedRunKeys {
+    pub fn new<'a>(script: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) -> Self {
+        Self {
+            script: script
+                .into_iter()
+                .map(|(key, id)| (key.to_owned(), id.map(str::to_owned)))
+                .collect(),
+            unscripted: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+impl HubRunKeys for ScriptedRunKeys {
+    fn reported_ids(&self, keys: &BTreeSet<String>) -> Result<HashMap<String, String>, String> {
+        let mut out = HashMap::new();
+        for key in keys {
+            match self.script.get(key) {
+                Some(Some(id)) => {
+                    out.insert(key.clone(), id.clone());
+                }
+                Some(None) => {}
+                None => {
+                    self.unscripted.fetch_add(1, Ordering::SeqCst);
+                    return Err(format!("unscripted run key {key}"));
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
