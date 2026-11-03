@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use reqwest::Url;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -26,6 +26,7 @@ pub mod dpop;
 pub mod jwk;
 pub mod keyring_names;
 pub mod pkce;
+pub mod runner_view;
 pub mod sealed;
 
 pub use answer::{
@@ -60,7 +61,7 @@ pub enum HubSecret {
 /// pins and both keyring halves, see [`pairing_state`] — with no call to the
 /// Hub. Not socket liveness: a socket that has stopped, after a refused
 /// refresh for instance, still reads `Paired`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HubPairingState {
     Unpaired,
@@ -206,7 +207,7 @@ pub fn consent_label(raw: &str, max_chars: usize, fallback: &str) -> String {
 /// [`AuthorizeRequest`] that describe the desktop rather than the request.
 /// Recomputed on every call rather than stored at pairing, so a renamed host
 /// reads here under its new name while the Hub still shows the old one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubMachine {
     pub instance_name: String,
     pub os: String,
@@ -260,7 +261,7 @@ impl KeyringStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubStatus {
     pub state: HubPairingState,
     /// The normalized origin from [`hub_origin`].

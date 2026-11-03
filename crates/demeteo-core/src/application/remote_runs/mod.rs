@@ -9,6 +9,8 @@ mod diff_url;
 mod publish;
 mod reconcile;
 mod rpc;
+mod runner_hub;
+mod runner_hub_state;
 mod sequence_mirror;
 mod submit;
 mod transport;
@@ -31,6 +33,8 @@ pub use control::{
 };
 pub use diff_url::resolve_run_diff_url;
 pub use publish::{publish_feature, PublishOutcome};
+pub use runner_hub::RunnerHubRpc;
+pub use runner_hub_state::refresh_runner_hub_state;
 pub use sequence_mirror::read_sequence_state_mirror;
 pub use submit::SubmitOutcome;
 pub(crate) use submit::{submit_remote_run, SubmitInput};

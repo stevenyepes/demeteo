@@ -2,6 +2,7 @@ use super::cache_release::{retry_pending_runner_releases, RunnerCacheRpc};
 use super::credentials::inject_pat_for_run;
 use super::reconcile::{reconcile_one_run, NOTIFY_ON};
 use super::rpc::{json_str, remote_rpc};
+use super::runner_hub_state::refresh_runner_hub_state;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::EffortLevel;
 use crate::domain::shadow_settled::shadow_settled;
@@ -10,6 +11,7 @@ use crate::error::AppError;
 use crate::ports::db::FeatureRepository;
 use crate::ports::remote_run_mirror::RemoteRunMirror;
 use crate::state::AppContext;
+use std::collections::BTreeSet;
 
 pub async fn cancel_remote_run(
     ctx: &AppContext,
@@ -317,6 +319,14 @@ pub async fn reconcile_all_runs(
         eprintln!("[RunnerCache] pending releases not retried: {error}");
     }
     let rows = ctx.remote_run_mirror.list().map_err(AppError::from)?;
+    // Before the rows: a shadow status this reconcile logs is reported to
+    // the Hub, or not, by what its runner says of its pairing now.
+    let machines: BTreeSet<&str> = rows.iter().map(|row| row.machine_id.as_str()).collect();
+    for machine_id in machines {
+        if let Err(error) = refresh_runner_hub_state(ctx, machine_id).await {
+            eprintln!("[RemoteRuns] Hub state of machine {machine_id} not stored: {error}");
+        }
+    }
     let mut notify_bodies = Vec::new();
     for row in &rows {
         let Some((status, error)) = reconcile_one_run(ctx, row).await else {

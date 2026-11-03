@@ -13,9 +13,10 @@ use crate::hub::HubControl;
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::application::hub_settings::save_hub_policy;
 use demeteo_core::domain::hub_pairing::device::{DevicePairing, DeviceTicket};
-use demeteo_core::domain::hub_pairing::{HubMachine, HubPairingError, HubStatus};
-use demeteo_core::domain::hub_request::HubLocalPolicy;
-use demeteo_core::domain::hub_socket::connection::HubConnection;
+use demeteo_core::domain::hub_pairing::runner_view::{HubStatusView, PairStateView};
+use demeteo_core::domain::hub_pairing::{HubPairingError, HubStatus};
+use demeteo_core::domain::hub_request::log::MAX_LOG_PAGE;
+use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -29,27 +30,13 @@ struct PairBeginParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct RequestLogParams {
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
 struct PolicySetParams {
     policy: HubLocalPolicy,
-}
-
-/// `hub_pair_state` on the wire. A success reads `idle`; `hub_status` is what
-/// says paired.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-enum PairStateView {
-    Idle,
-    Pending { ticket: DeviceTicket },
-    Failed { error: String },
-}
-
-#[derive(Debug, Serialize)]
-struct HubStatusView {
-    status: HubStatus,
-    /// Why the sealed store cannot hold the Hub credentials, when it cannot.
-    store_unavailable: Option<String>,
-    connection: HubConnection,
-    machine: HubMachine,
 }
 
 /// The `hub_*` methods, or `None` for any other, so `dispatch` falls through
@@ -70,6 +57,7 @@ pub(super) async fn dispatch_hub(
         "hub_disconnect" => json(disconnect(hub).await),
         "hub_policy_get" => json(hub.policy.load().map_err(|e| e.to_string())),
         "hub_policy_set" => json(policy_set(hub, params).await),
+        "hub_request_log" => json(request_log(hub, params)),
         _ => return None,
     })
 }
@@ -134,6 +122,15 @@ fn status(hub: &HubControl) -> Result<HubStatusView, String> {
 
 async fn disconnect(hub: &HubControl) -> Result<HubStatus, String> {
     pairing(hub)?.disconnect().await.map_err(|e| e.to_string())
+}
+
+/// Newest first, at most [`MAX_LOG_PAGE`] rows whatever was asked.
+fn request_log(hub: &HubControl, params: &Value) -> Result<Vec<HubRequestLogRow>, String> {
+    let params =
+        RequestLogParams::deserialize(params).map_err(|e| format!("invalid params: {}", e))?;
+    hub.requests
+        .list_log(params.limit.min(MAX_LOG_PAGE))
+        .map_err(|e| e.to_string())
 }
 
 /// Answers the policy as stored afterwards, so a caller sees what is in force.

@@ -138,10 +138,18 @@ demeteo-runner hub pair https://hub.example.com
 `hub pair` prints a code, the Hub's `#/device` URL and this runner's
 fingerprint; approve it on the Hub with a passkey after checking the fingerprint
 matches. Ctrl-C cancels. Then `hub status`, `hub policy` (no flags prints it;
-`--spend on`, `--run-ceiling 500`, `--daily-ceiling off`, …) and
-`hub disconnect`. All four are clients of the running `serve` over its control
+`--spend on`, `--run-ceiling 500`, `--daily-ceiling off`, …), `hub log [<count>]`
+(what the Hub asked here and how it was answered, newest first) and
+`hub disconnect`. All five are clients of the running `serve` over its control
 socket, so `serve` must be up; the same `hub_*` methods are what a desktop calls
 over SSH. Only `hub seal` works without `serve`.
+
+From a desktop, the runner's Hub panel on its machine card in `Settings →
+Machines` does the same over SSH: pair (it shows the code, the `#/device` URL
+and the fingerprint), status, policy, activity log and disconnect. A runner
+too old for a method is named as such there. Once paired, `serve` answers the
+Hub's cancels, assignments and gate decisions and refuses its starts
+(`unknown_kind`, nothing fetched); `hub log` shows each.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|

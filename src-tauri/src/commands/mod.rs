@@ -26,6 +26,7 @@ pub mod project;
 pub mod providers;
 pub mod remote_install;
 pub mod remote_runner;
+pub mod remote_runner_hub;
 pub mod ssh;
 pub mod thread;
 pub mod tickets;

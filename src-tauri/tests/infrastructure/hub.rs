@@ -1939,16 +1939,38 @@ async fn a_router_context_can_pair() {
     assert!(pairing(&ctx).is_ok());
 }
 
+/// Refuses every start; anything else reaching it is a test failure.
+struct RefusingStarts;
+
+#[async_trait::async_trait]
+impl crate::ports::hub::HubRunControl for RefusingStarts {
+    fn starts(&self) -> crate::ports::hub::StartSupport {
+        crate::ports::hub::StartSupport::Refused
+    }
+
+    async fn launch(
+        &self,
+        _: crate::ports::step_executor::FeatureLaunch,
+    ) -> Result<FeatureId, crate::error::AppError> {
+        panic!("a refused start was launched")
+    }
+
+    async fn cancel(&self, _: &FeatureId) -> Result<(), crate::error::AppError> {
+        panic!("nothing was asked to cancel")
+    }
+}
+
 /// A runner's composition: a pairing over the store it was handed, with a
-/// socket to start, and no request handler, so a request reaching its socket
+/// socket to start, and no request handler until the runner binds one with
+/// the binding handed back, so until then a request reaching its socket
 /// stays queued on the Hub.
 #[tokio::test]
-async fn a_local_only_context_handed_a_store_pairs_through_it_and_binds_no_requests() {
+async fn a_local_only_context_handed_a_store_pairs_through_it_and_binds_requests_only_when_asked() {
     // Unavailable, so `status` names it without reading accounts this
     // double was not made for.
     let secrets = Arc::new(MemorySecretStore::new("unused"));
     secrets.set_available(false);
-    let (ctx, _writer) = demeteo_core::composition::build_core_context_with_hub_store(
+    let (ctx, _writer, binding) = demeteo_core::composition::build_core_context_with_hub_store(
         CoreConfig {
             app_data_dir: demeteo_core::test_dir::scratch("demeteo-hub-cmd-runner"),
             execution_mode: ExecutionMode::LocalOnly,
@@ -1969,6 +1991,9 @@ async fn a_local_only_context_handed_a_store_pairs_through_it_and_binds_no_reque
     assert_eq!(status.state, HubPairingState::Unpaired);
     assert_eq!(status.keyring_backend, "in-memory test store");
     assert!(!status.keyring_available);
+
+    binding.bind(Arc::new(ctx.clone()), Arc::new(RefusingStarts));
+    assert!(hub.requests_bound());
 }
 
 /// Bound by the time `build_core_context` returns, which is before the
@@ -3997,6 +4022,7 @@ fn socket_config(
         run_events,
         snapshots: Arc::new(ScriptedSnapshotSource::default()),
         snapshot_wake: Arc::new(tokio::sync::Notify::new()),
+        run_keys: Arc::new(crate::adapters::hub::run_keys::ReportedAsIs),
         snapshot_debounce: Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS),
         runtime: tokio::runtime::Handle::current(),
         sleeper: sleeper.clone(),

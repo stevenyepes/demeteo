@@ -3,7 +3,7 @@
 
 use super::client::ControlClient;
 use super::seal::{self, SealRequest, Sealed, UNIT_NAME};
-use demeteo_core::domain::hub_request::HubLocalPolicy;
+use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -15,8 +15,12 @@ demeteo-runner hub status             show the pairing and the Hub connection
 demeteo-runner hub policy [--read on|off] [--spend on|off] [--gates on|off]
                           [--run-ceiling <cents>|off] [--daily-ceiling <cents>|off]
                                       show, or change, what the Hub may do here
+demeteo-runner hub log [<count>]      show what the Hub asked here, newest first
 demeteo-runner hub disconnect         forget the Hub on this runner
 demeteo-runner hub seal [--force]     seal the key the Hub secrets are stored under";
+
+/// What `hub log` shows when not told how many.
+const DEFAULT_LOG_COUNT: usize = 20;
 
 /// How often `hub pair` asks `serve` how the pairing stands. `serve` polls
 /// the Hub on its own interval; this only decides how soon the CLI notices.
@@ -27,6 +31,7 @@ pub enum HubCommand {
     Pair { hub_url: String },
     Status,
     Policy(PolicyPatch),
+    Log { count: usize },
     Disconnect,
     Seal { force: bool },
 }
@@ -72,6 +77,13 @@ pub fn parse(args: &[String]) -> Result<HubCommand, String> {
         ("pair", _) => Err("`hub pair` takes exactly one Hub URL".to_owned()),
         ("status", []) => Ok(HubCommand::Status),
         ("disconnect", []) => Ok(HubCommand::Disconnect),
+        ("log", []) => Ok(HubCommand::Log {
+            count: DEFAULT_LOG_COUNT,
+        }),
+        ("log", [count]) => match count.parse::<usize>() {
+            Ok(count) if count > 0 => Ok(HubCommand::Log { count }),
+            _ => Err(format!("`hub log` takes a positive count, not {count:?}")),
+        },
         ("seal", []) => Ok(HubCommand::Seal { force: false }),
         ("seal", [flag]) if flag == "--force" => Ok(HubCommand::Seal { force: true }),
         ("policy", flags) => parse_policy(flags).map(HubCommand::Policy),
@@ -209,6 +221,40 @@ pub fn describe_status(view: &Value) -> String {
     lines.join("\n")
 }
 
+/// One line per row, newest first as the runner answers them.
+pub fn describe_log(rows: &[HubRequestLogRow], now_ms: i64) -> String {
+    if rows.is_empty() {
+        return "The Hub has asked nothing here.".to_owned();
+    }
+    rows.iter()
+        .map(|row| {
+            let entry = &row.entry;
+            let mut line = format!(
+                "{:>4} ago  {:<20} {:<9} {}",
+                age(now_ms.saturating_sub(entry.received_at_ms)),
+                entry.kind.as_str(),
+                entry.outcome.as_str(),
+                entry.feature_id.as_deref().unwrap_or("—"),
+            );
+            if let Some(reason) = &entry.reason {
+                line.push_str(&format!("  ({reason})"));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn age(ms: i64) -> String {
+    let secs = ms.max(0) / 1_000;
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3_600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3_600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -225,6 +271,16 @@ pub async fn run(command: HubCommand, data_dir: &Path) -> i32 {
             with_client(&socket, |mut c| async move {
                 let view = c.call("hub_status", json!({})).await?;
                 Ok(describe_status(&view))
+            })
+            .await
+        }
+        HubCommand::Log { count } => {
+            with_client(&socket, |mut c| async move {
+                let rows: Vec<HubRequestLogRow> = serde_json::from_value(
+                    c.call("hub_request_log", json!({ "limit": count })).await?,
+                )
+                .map_err(|e| format!("the runner sent an unreadable log: {e}"))?;
+                Ok(describe_log(&rows, demeteo_core::paths::now_ms()))
             })
             .await
         }

@@ -1,7 +1,12 @@
 // Tests extracted from `crates/demeteo-runner/src/hub/cli.rs` (mirrored-tests convention). `super` = that module.
 
-use super::{describe_policy, describe_ticket, parse, HubCommand, PolicyPatch, Ticket};
-use demeteo_core::domain::hub_request::HubLocalPolicy;
+use super::{
+    describe_log, describe_policy, describe_ticket, parse, HubCommand, PolicyPatch, Ticket,
+    DEFAULT_LOG_COUNT,
+};
+use demeteo_core::domain::hub_request::{
+    HubLocalPolicy, HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome,
+};
 
 fn args(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
@@ -17,6 +22,13 @@ fn each_command_parses_with_exactly_its_arguments() {
     );
     assert_eq!(parse(&args("status")), Ok(HubCommand::Status));
     assert_eq!(parse(&args("disconnect")), Ok(HubCommand::Disconnect));
+    assert_eq!(
+        parse(&args("log")),
+        Ok(HubCommand::Log {
+            count: DEFAULT_LOG_COUNT
+        })
+    );
+    assert_eq!(parse(&args("log 5")), Ok(HubCommand::Log { count: 5 }));
     assert_eq!(parse(&args("seal")), Ok(HubCommand::Seal { force: false }));
     assert_eq!(
         parse(&args("seal --force")),
@@ -28,6 +40,9 @@ fn each_command_parses_with_exactly_its_arguments() {
         "pair a b",
         "status now",
         "seal --forced",
+        "log 0",
+        "log -1",
+        "log 5 6",
         "unpair",
     ] {
         assert!(parse(&args(bad)).is_err(), "{bad:?}");
@@ -123,4 +138,55 @@ fn the_ticket_shows_the_code_both_uris_and_the_fingerprint() {
     ] {
         assert!(text.contains(part), "{part:?} in {text}");
     }
+}
+
+#[test]
+fn the_log_shows_each_row_in_the_order_given_with_its_age_and_reason() {
+    let row = |id: i64, kind, outcome, reason: Option<&str>, at_ms| HubRequestLogRow {
+        id,
+        entry: HubRequestLogEntry {
+            request_id: format!("req-{id}"),
+            kind,
+            scope: None,
+            outcome,
+            reason: reason.map(str::to_owned),
+            feature_id: Some(format!("f-{id}")),
+            received_at_ms: at_ms,
+        },
+    };
+    let now = 10 * 3_600_000;
+    let text = describe_log(
+        &[
+            row(
+                2,
+                LogKind::CancelFeature,
+                LogOutcome::Accepted,
+                None,
+                now - 90_000,
+            ),
+            row(
+                1,
+                LogKind::StartFeature,
+                LogOutcome::Refused,
+                Some("unknown_kind"),
+                now - 2 * 3_600_000,
+            ),
+        ],
+        now,
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    for part in ["1m ago", "cancel_feature", "accepted", "f-2"] {
+        assert!(lines[0].contains(part), "{part:?} in {:?}", lines[0]);
+    }
+    for part in [
+        "2h ago",
+        "start_feature",
+        "refused",
+        "f-1",
+        "(unknown_kind)",
+    ] {
+        assert!(lines[1].contains(part), "{part:?} in {:?}", lines[1]);
+    }
+    assert_eq!(describe_log(&[], now), "The Hub has asked nothing here.");
 }

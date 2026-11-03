@@ -2,11 +2,11 @@
 //! session write [`ConnectionFacts`]; [`view`] is the only reading of them
 //! that crosses IPC.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::StopReason;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionState {
     /// Unpaired, or no socket started since the last unpair or app start.
@@ -20,7 +20,7 @@ pub enum ConnectionState {
     Stopped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncState {
     InSync,
@@ -51,7 +51,7 @@ pub struct ConnectionFacts {
 }
 
 /// The IPC payload of `hub_connection`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubConnection {
     pub state: ConnectionState,
     pub stop_reason: Option<StopReason>,

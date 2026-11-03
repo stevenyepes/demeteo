@@ -26,6 +26,7 @@
 
 use std::collections::HashSet;
 
+use crate::domain::hub_socket::run_has_ended;
 use crate::domain::ids::StepId;
 use crate::domain::models::{GateDecision, StepExecution};
 
@@ -137,6 +138,24 @@ pub fn out_of_band_refusal(action: RunAction, step_id: &str) -> Option<String> {
          so there is nothing to {}. {}",
         step_id, verb, remedy
     ))
+}
+
+/// Whether a cancel that finds no live driver for a feature at `status` must
+/// end the feature itself.
+///
+/// A live driver records its own `cancelled` when signalled, so this is asked
+/// only when there is none to signal: its driver panicked, a restart could not
+/// re-arm it, or the run is parked with nothing waiting on the gate. Nothing
+/// else will ever move that row, and a runner's `runner_runs` row reads
+/// `cancelled` regardless — so a `running` feature beside it is the lie the
+/// Hub and the desktop both read, since they learn an end only from the
+/// feature's status.
+///
+/// `bootstrapping` is left alone: the bootstrap tail owns it, flips it to
+/// `running` and arms a driver after this answers, so a `cancelled` written
+/// here would be overwritten by a run that goes ahead regardless.
+pub fn driverless_cancel_ends(status: &str) -> bool {
+    status != "bootstrapping" && !run_has_ended(status)
 }
 
 /// Whether a step in `status` may be retried. `Some` is the refusal.

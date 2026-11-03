@@ -436,6 +436,14 @@ Each has an answer:
   application functions — start, cancel, assignment, gate decision. A Hub-only
   path is the drift this paragraph exists to prevent.
 
+  **Read per instance (decided 2026-11-03).** "The same functions" means the
+  ones that instance's own control surface uses: on a desktop its launch and
+  stop buttons' calls, on a runner the bodies of its control socket's methods.
+  A runner's Hub cancel therefore ends the run row, logs the `cancelled` event
+  and wipes the run's credential exactly as the control socket's `cancel_run`
+  does, rather than stopping only the Feature as a desktop's call would
+  ([HUB.md §6.1](HUB.md#61-the-envelope)).
+
 **What a paired runner holds at rest:** its device key and refresh token
 (encrypted as above), the request-signing key and passkey public keys it pinned,
 and its own scope toggles and ceilings. Not a git credential —
@@ -452,6 +460,22 @@ deferred.
 **A desktop-submitted detached run is reported by its runner** once the runner
 is paired. The desktop must not also report a run a runner owns, or the Hub
 counts it twice.
+
+**Which runner counts as paired (decided 2026-11-03).** The desktop leaves a
+runner's runs out of what it reports only when that runner last said it is
+paired to the **same Hub origin** as the desktop, whether or not its `read`
+toggle is on. Paired to another Hub, unpaired, or never asked, and the desktop
+keeps reporting; a runner it cannot reach keeps its last known state. No run
+goes unreported, and the cost accepted is a short window after a runner pairs
+in which both report it, until the desktop next asks
+([HUB.md §5](HUB.md#5-the-socket)).
+
+**The Hub acts on any run a runner holds (decided 2026-11-03).** A Hub
+cancel, assignment or gate decision reaches a run whichever desktop
+`client_id` submitted it. The Hub is the control plane of the single tenant
+([decision 63](#1-the-locked-decisions)), not another client of the runner, so
+the per-client ownership a runner enforces on its control socket
+([MULTI_CLIENT_RUNNER.md](MULTI_CLIENT_RUNNER.md)) does not apply to it.
 
 **A runner pairs by device code.** `demeteo-runner hub pair <hub url>` creates
 the runner's device key, asks the Hub for a short code and a verification URL that

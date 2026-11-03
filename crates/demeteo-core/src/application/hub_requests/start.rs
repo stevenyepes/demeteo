@@ -1,6 +1,7 @@
 //! A Hub start, once its id is spent: the lookups, the attachment fetch
 //! and the launch. What is decided is decided in
-//! [`crate::domain::hub_request`].
+//! [`crate::domain::hub_request`], including a start this instance does not
+//! launch, which never reaches here.
 
 use demeteo_hub_protocol::{RefusalReason, StartFeature};
 
@@ -10,7 +11,6 @@ use crate::application::attachments::{
     StagedAttachmentInput, MAX_AGENT_ATTACHMENT_BATCH_BYTES, MAX_ATTACHMENTS_PER_FEATURE,
     MAX_ATTACHMENT_BYTES,
 };
-use crate::application::launch::{launch_run, LaunchRequest};
 use crate::domain::attachment::{sniff_attachment_mime, sniffed_source_filename};
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::hub_request::log::launch_failure_reason;
@@ -19,7 +19,6 @@ use crate::domain::hub_request::{
 };
 use crate::domain::ids::{ProjectId, WorkflowId};
 use crate::domain::models::LaunchedBy;
-use crate::domain::run_placement::{DetachedOptions, RunPlacement};
 use crate::ports::hub::AttachmentFetchError;
 use crate::ports::step_executor::FeatureLaunch;
 use crate::shared::secret_scrub::scrub_secrets;
@@ -140,17 +139,8 @@ impl HubRequests {
         let note = start
             .max_wall_clock_secs
             .map(|_| "max_wall_clock_secs ignored".to_owned());
-        let launched = launch_run(
-            &self.ctx,
-            LaunchRequest {
-                launch: feature_launch(start, typed),
-                placement: RunPlacement::Local,
-                detached: DetachedOptions::default(),
-            },
-        )
-        .await;
-        match launched {
-            Ok(run) => Settled::accepted(Some(run.feature.id.to_string()), note),
+        match self.runs.launch(feature_launch(start, typed)).await {
+            Ok(feature_id) => Settled::accepted(Some(feature_id.to_string()), note),
             Err(e) => {
                 tracing::warn!(error = %e, "Hub start refused: the launch failed");
                 let detail = scrub_secrets(&e.to_string()).into_owned();

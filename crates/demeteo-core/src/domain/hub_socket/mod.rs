@@ -10,17 +10,24 @@
 //! What follows a connection's end is decided here
 //! too: [`after`], [`after_close`], [`resets_backoff`], [`refresh_refusal`],
 //! [`after_refresh`] and [`backoff`]. What the Settings tab is told of the
-//! socket is [`connection::view`].
+//! socket is [`connection::view`]. Which Feature id a run is reported
+//! under, and whether this instance reports it at all, is
+//! [`reported_feature_id`].
 
 use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
 pub mod connection;
 mod projection;
+mod reporting;
 mod run_end;
 mod snapshot;
 mod verdict;
 
 pub use projection::{hub_event, MAX_FEATURE_ID_BYTES};
+pub use reporting::{
+    observed_runner_hub_state, reported_feature_id, runner_reports_itself, EventOwner,
+    RunnerHubState,
+};
 pub use run_end::{removal_logs_cancel, run_has_ended, status_backfill};
 pub use snapshot::{
     snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
