@@ -19,6 +19,17 @@ pub enum PairStateView {
     Failed { error: String },
 }
 
+impl PairStateView {
+    /// Whether the runner's stored pairing may have changed by the time it
+    /// answered this, so a desktop's record of it is worth asking again.
+    /// `Idle` is also what a finished device-code flow reads as, including
+    /// one that completed just before a cancel landed — the cancel awaits
+    /// the poll task rather than undoing what it stored.
+    pub fn may_have_paired(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HubStatusView {
     pub status: HubStatus,

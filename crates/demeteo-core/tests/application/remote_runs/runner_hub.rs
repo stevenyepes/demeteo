@@ -9,7 +9,10 @@ use rusqlite::Connection;
 use crate::adapters::database::SqliteAdapter;
 use crate::domain::hub_pairing::HubPairingState;
 use crate::domain::hub_request::log::{HubRequestLogEntry, LogKind, LogOutcome};
-use crate::domain::models::Platform;
+use crate::domain::hub_socket::RunnerHubState;
+use crate::domain::ids::MachineId;
+use crate::domain::models::{Machine, Platform};
+use crate::ports::db::MachineRepository;
 use crate::ports::execution::{InteractiveHandle, SftpEntry};
 
 const MACHINE: &str = "m-1";
@@ -131,6 +134,65 @@ fn settings() -> SqliteAdapter {
     SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap()
 }
 
+/// [`settings`] holding [`MACHINE`], whose Hub state can therefore be stored.
+fn db_with_machine() -> SqliteAdapter {
+    let db = settings();
+    MachineRepository::add(
+        &db,
+        Machine {
+            id: MachineId::from(MACHINE),
+            name: "runner".to_owned(),
+            host: "runner.invalid".to_owned(),
+            port: 22,
+            username: "run".to_owned(),
+            auth_type: "agent".to_owned(),
+            key_path: None,
+            agents: None,
+            auto_approved_rules: None,
+            use_login_shell: None,
+            setup_commands: None,
+            notify_webhook_url: None,
+        },
+    )
+    .unwrap();
+    db
+}
+
+fn stored_paired(db: &SqliteAdapter) {
+    let state = RunnerHubState {
+        paired: true,
+        hub_url: Some("https://hub.example".into()),
+        instance_id: Some("inst-old".into()),
+        checked_at: 1,
+    };
+    MachineHubStateRepository::put(db, MACHINE, &state).unwrap();
+}
+
+fn status(state: &str, instance_id: Option<&str>) -> Value {
+    json!({
+        "state": state,
+        "hub_url": instance_id.map(|_| "https://hub.example"),
+        "instance_id": instance_id,
+        "fingerprint": null,
+        "rp_id": null,
+        "scopes": [],
+        "paired_at": null,
+        "keyring_backend": "sealed",
+        "keyring_available": true,
+    })
+}
+
+fn hub_status_answer(state: &str, instance_id: Option<&str>) -> Value {
+    json!({ "status": status(state, instance_id), "store_unavailable": null })
+}
+
+fn methods(exec: &ScriptedRpc) -> Vec<String> {
+    exec.calls()
+        .into_iter()
+        .map(|(_, method, _)| method)
+        .collect()
+}
+
 fn ticket() -> DeviceTicket {
     DeviceTicket {
         user_code: "ABCD-EFGH".into(),
@@ -162,6 +224,7 @@ async fn pairing_begins_with_the_hub_url_and_reads_back_the_ticket() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     let got = rpc
@@ -184,6 +247,7 @@ async fn a_pending_pair_state_carries_its_ticket() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(
@@ -205,6 +269,7 @@ async fn the_runners_own_refusal_reaches_the_caller_unchanged() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(
@@ -248,6 +313,7 @@ async fn a_status_answer_parses_into_the_view() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     let view = rpc
@@ -273,6 +339,7 @@ async fn a_runner_from_before_pairing_reads_as_no_status() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(rpc.status(MACHINE).await, Ok(None));
@@ -287,6 +354,7 @@ async fn a_runner_without_an_http_client_says_so_rather_than_reading_as_old() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(rpc.status(MACHINE).await, Err(refusal.to_string()));
@@ -313,6 +381,7 @@ async fn setting_the_policy_sends_all_of_it_and_answers_what_the_runner_stored()
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(rpc.policy_set(MACHINE, &policy()).await, Ok(stored));
@@ -341,6 +410,7 @@ async fn the_request_log_is_capped_and_parsed() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(rpc.request_log(MACHINE, 10_000).await, Ok(Some(vec![row])));
@@ -357,6 +427,7 @@ async fn a_runner_from_before_its_activity_log_reads_as_no_log() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     assert_eq!(rpc.request_log(MACHINE, 50).await, Ok(None));
@@ -373,8 +444,113 @@ async fn an_answer_in_another_shape_is_an_error_naming_the_method() {
     let rpc = RunnerHubRpc {
         exec: &exec,
         settings: &settings,
+        states: &settings,
     };
 
     let error = rpc.disconnect(MACHINE).await.expect_err("not a HubStatus");
     assert!(error.contains("hub_disconnect"), "{error}");
+}
+
+#[tokio::test]
+async fn a_disconnect_stores_the_runner_as_no_longer_paired() {
+    let db = db_with_machine();
+    stored_paired(&db);
+    let exec = ScriptedRpc::default()
+        .answering("hub_disconnect", json!({}), Ok(status("unpaired", None)))
+        .answering(
+            "hub_status",
+            json!({}),
+            Ok(hub_status_answer("unpaired", None)),
+        );
+    let rpc = RunnerHubRpc {
+        exec: &exec,
+        settings: &db,
+        states: &db,
+    };
+
+    let answer = rpc.disconnect(MACHINE).await.expect("disconnected");
+
+    assert_eq!(answer.state, HubPairingState::Unpaired);
+    assert_eq!(methods(&exec), ["hub_disconnect", "hub_status"]);
+    let stored = MachineHubStateRepository::get(&db, MACHINE)
+        .unwrap()
+        .expect("a row");
+    assert!(!stored.paired);
+}
+
+#[tokio::test]
+async fn a_pairing_that_finished_stores_the_runner_as_paired() {
+    let db = db_with_machine();
+    let exec = ScriptedRpc::default()
+        .answering("hub_pair_state", json!({}), Ok(json!({ "state": "idle" })))
+        .answering(
+            "hub_status",
+            json!({}),
+            Ok(hub_status_answer("paired", Some("inst-1"))),
+        );
+    let rpc = RunnerHubRpc {
+        exec: &exec,
+        settings: &db,
+        states: &db,
+    };
+
+    assert_eq!(rpc.pair_state(MACHINE).await, Ok(PairStateView::Idle));
+
+    assert_eq!(methods(&exec), ["hub_pair_state", "hub_status"]);
+    let stored = MachineHubStateRepository::get(&db, MACHINE)
+        .unwrap()
+        .expect("a row");
+    assert!(stored.paired);
+    assert_eq!(stored.instance_id.as_deref(), Some("inst-1"));
+}
+
+#[tokio::test]
+async fn a_pending_pairing_asks_nothing_more_of_the_runner() {
+    let db = db_with_machine();
+    let exec = ScriptedRpc::default().answering(
+        "hub_pair_state",
+        json!({}),
+        Ok(json!({ "state": "pending", "ticket": ticket() })),
+    );
+    let rpc = RunnerHubRpc {
+        exec: &exec,
+        settings: &db,
+        states: &db,
+    };
+
+    rpc.pair_state(MACHINE).await.expect("parsed");
+
+    assert_eq!(methods(&exec), ["hub_pair_state"]);
+    assert_eq!(MachineHubStateRepository::get(&db, MACHINE).unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_state_that_cannot_be_stored_does_not_fail_the_users_call() {
+    // No machine row, so the refresh's write is refused.
+    let db = settings();
+    let exec = ScriptedRpc::default()
+        .answering("hub_disconnect", json!({}), Ok(status("unpaired", None)))
+        .answering("hub_pair_state", json!({}), Ok(json!({ "state": "idle" })))
+        .answering(
+            "hub_status",
+            json!({}),
+            Ok(hub_status_answer("unpaired", None)),
+        );
+    let rpc = RunnerHubRpc {
+        exec: &exec,
+        settings: &db,
+        states: &db,
+    };
+
+    assert!(rpc.disconnect(MACHINE).await.is_ok());
+    assert_eq!(rpc.pair_state(MACHINE).await, Ok(PairStateView::Idle));
+    assert_eq!(
+        methods(&exec),
+        [
+            "hub_disconnect",
+            "hub_status",
+            "hub_pair_state",
+            "hub_status"
+        ]
+    );
 }

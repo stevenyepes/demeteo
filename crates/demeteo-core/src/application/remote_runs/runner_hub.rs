@@ -13,19 +13,26 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use super::rpc::remote_rpc_via;
+use super::runner_hub_state::refresh_runner_hub_state_via;
 use crate::domain::hub_pairing::device::DeviceTicket;
 use crate::domain::hub_pairing::runner_view::{runner_lacks_method, HubStatusView, PairStateView};
 use crate::domain::hub_pairing::HubStatus;
 use crate::domain::hub_request::log::MAX_LOG_PAGE;
 use crate::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
-use crate::ports::db::AppSettingsRepository;
+use crate::ports::db::{AppSettingsRepository, MachineHubStateRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::state::AppContext;
 
-/// The two ports a call reads, so a test drives it without an [`AppContext`].
+/// The ports a call reads, so a test drives it without an [`AppContext`].
+///
+/// `states` is kept in step with a pairing change made through here, since
+/// it decides whether the desktop still reports that runner's runs; a
+/// failure to refresh it is logged rather than returned, because the
+/// runner's answer is already true and the next reconcile asks again.
 pub struct RunnerHubRpc<'a> {
     pub exec: &'a dyn ExecutionPort,
     pub settings: &'a dyn AppSettingsRepository,
+    pub states: &'a dyn MachineHubStateRepository,
 }
 
 impl<'a> RunnerHubRpc<'a> {
@@ -33,7 +40,24 @@ impl<'a> RunnerHubRpc<'a> {
         Self {
             exec: &*ctx.exec,
             settings: &*ctx.app_settings,
+            states: &*ctx.machine_hub_state,
         }
+    }
+
+    async fn refresh_state(&self, machine_id: &str) {
+        if let Err(error) =
+            refresh_runner_hub_state_via(self.exec, self.settings, self.states, machine_id).await
+        {
+            eprintln!("[RemoteRuns] Hub state of machine {machine_id} not stored: {error}");
+        }
+    }
+
+    async fn settled(&self, machine_id: &str, method: &str) -> Result<PairStateView, String> {
+        let view: PairStateView = self.call(machine_id, method, json!({})).await?;
+        if view.may_have_paired() {
+            self.refresh_state(machine_id).await;
+        }
+        Ok(view)
     }
 
     async fn answer(&self, machine_id: &str, method: &str, params: Value) -> Result<Value, String> {
@@ -73,11 +97,11 @@ impl<'a> RunnerHubRpc<'a> {
     }
 
     pub async fn pair_state(&self, machine_id: &str) -> Result<PairStateView, String> {
-        self.call(machine_id, "hub_pair_state", json!({})).await
+        self.settled(machine_id, "hub_pair_state").await
     }
 
     pub async fn pair_cancel(&self, machine_id: &str) -> Result<PairStateView, String> {
-        self.call(machine_id, "hub_pair_cancel", json!({})).await
+        self.settled(machine_id, "hub_pair_cancel").await
     }
 
     /// `Ok(None)` for a runner from before Hub pairing.
@@ -87,7 +111,9 @@ impl<'a> RunnerHubRpc<'a> {
     }
 
     pub async fn disconnect(&self, machine_id: &str) -> Result<HubStatus, String> {
-        self.call(machine_id, "hub_disconnect", json!({})).await
+        let status = self.call(machine_id, "hub_disconnect", json!({})).await?;
+        self.refresh_state(machine_id).await;
+        Ok(status)
     }
 
     pub async fn policy_get(&self, machine_id: &str) -> Result<HubLocalPolicy, String> {
