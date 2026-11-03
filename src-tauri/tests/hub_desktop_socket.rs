@@ -9,6 +9,7 @@
 
 use demeteo_core::adapters::database::SqliteAdapter;
 use demeteo_core::adapters::hub::device_key::DeviceKey;
+use demeteo_core::adapters::hub::run_keys::DesktopRunKeys;
 use demeteo_core::adapters::hub::snapshot_source::RepoSnapshotSource;
 use demeteo_core::adapters::hub::socket::session::{
     run_session, RequestHandlerSlot, SessionContext, SessionEnd,
@@ -32,17 +33,22 @@ use demeteo_core::domain::hub_pairing::{
 };
 use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome};
 use demeteo_core::domain::hub_socket::{
-    sends_events, SocketEnd, StopReason, LIVENESS_DEADLINE_SECS, MAX_SNAPSHOT_BYTES,
-    MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
-    STOP_CLOSE_DEADLINE_SECS,
+    sends_events, RunnerHubState, SocketEnd, StopReason, LIVENESS_DEADLINE_SECS,
+    MAX_SNAPSHOT_BYTES, MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS,
+    SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
-use demeteo_core::domain::models::{Workflow, WorkflowVersion};
+use demeteo_core::domain::ids::MachineId;
+use demeteo_core::domain::models::{Feature, Machine, Project, Workflow, WorkflowVersion};
 use demeteo_core::error::AppError;
-use demeteo_core::ports::db::WorkflowRepository;
+use demeteo_core::ports::db::{
+    FeatureRepository, MachineHubStateRepository, MachineRepository, ProjectRepository,
+    WorkflowRepository,
+};
 use demeteo_core::ports::hub::{
     DialFailure, HubPinRepository, HubRequestHandler, HubSecretStore, HubSocketConnection,
     HubSocketDialer, HubTokenEndpoint, SocketGone, SocketReceived, SocketUpgrade,
 };
+use demeteo_core::ports::remote_run_mirror::RemoteRunMirrorPort;
 use demeteo_core::ports::run_events::RunEventsPort;
 use demeteo_core::shared::time::now_secs;
 use demeteo_core::state::AppContext;
@@ -1090,6 +1096,122 @@ async fn a_page_of_rows_nothing_reports_is_read_past() {
     assert_eq!(bridged.dialer.hub.cursor(), last);
     assert_eq!(keys.unscripted(), 0);
     assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// The desktop's own [`DesktopRunKeys`] over its own database: a shadow is
+/// left out only once its runner last said it is paired to this desktop's
+/// Hub origin, however that runner spells it; a runner that unpaired is
+/// still reported for, though it names the same Hub. A dropped row still
+/// moves the read on, so the row logged after it reaches the Hub.
+#[tokio::test]
+async fn a_desktop_sends_no_row_of_a_shadow_whose_runner_reports_to_its_own_hub() {
+    let bridged = Bridged::new(&[
+        ("f-local", "feature_status", json!({"status": "running"})),
+        ("f-a", "feature_status", json!({"status": "running"})),
+        ("f-b", "feature_status", json!({"status": "running"})),
+        ("f-a", "feature_status", json!({"status": "completed"})),
+    ])
+    .await;
+    let db = &bridged.db;
+    ProjectRepository::add(&**db, shadow_project()).expect("project saved");
+    FeatureRepository::add(&**db, shadow_feature("f-local")).expect("feature saved");
+    for (machine_id, feature_id, paired) in [("m-a", "f-a", true), ("m-b", "f-b", false)] {
+        MachineRepository::add(&**db, runner_machine(machine_id)).expect("machine saved");
+        let state = RunnerHubState {
+            paired,
+            hub_url: Some("https://HUB.example:443/".to_owned()),
+            instance_id: Some(format!("inst-{machine_id}")),
+            checked_at: NOW as i64,
+        };
+        MachineHubStateRepository::put(&**db, machine_id, &state).expect("state saved");
+        FeatureRepository::add(&**db, shadow_feature(feature_id)).expect("shadow saved");
+        db.upsert_submitted(
+            machine_id,
+            &format!("run-{machine_id}"),
+            Some("p1"),
+            Some(feature_id),
+            "Shadow",
+            NOW as i64,
+        )
+        .expect("mirror saved");
+    }
+    let keys = Arc::new(DesktopRunKeys::new(db.clone(), db.clone(), db.clone()));
+    let running = bridged
+        .connect_with(bridged.context().with_run_keys(keys))
+        .await;
+
+    bridged.acked_through(3).await;
+    let live = bridged.append(&(
+        "f-local",
+        "step_progress",
+        json!({"status": "running", "step_id": "s-1"}),
+    ));
+    bridged.acked_through(live).await;
+
+    let started = || RunEventPayload::default();
+    let expected = vec![
+        mirrored("f-local", 1, RunEventKind::FeatureStarted, started()),
+        mirrored("f-b", 3, RunEventKind::FeatureStarted, started()),
+        mirrored("f-local", live, RunEventKind::StepStarted, step("s-1")),
+    ];
+    assert_eq!(sorted(bridged.dialer.hub.mirror()), sorted(expected));
+    assert_eq!(bridged.dialer.hub.cursor(), live);
+    let sent: Vec<RunEvent> = bridged
+        .heard()
+        .iter()
+        .filter_map(|text| serde_json::from_str(text).ok())
+        .collect();
+    assert!(
+        sent.iter().all(|event| event.feature_id != "f-a"),
+        "{sent:?}"
+    );
+    assert_eq!(running.stopped().await, (SessionEnd::Stopped, true));
+}
+
+fn shadow_project() -> Project {
+    Project {
+        id: "p1".into(),
+        name: "App".to_owned(),
+        compute_type: "local".to_owned(),
+        remote_host: None,
+        status: "active".to_owned(),
+        nodes: 0,
+        spend: 0.0,
+        tokens: 0,
+        created_at: 0,
+    }
+}
+
+fn shadow_feature(id: &str) -> Feature {
+    serde_json::from_value(json!({
+        "id": id,
+        "project_id": "p1",
+        "workflow_id": null,
+        "title": "Shadow",
+        "status": "running",
+        "total_cost": 0.0,
+        "duration": "",
+        "created_at": 1,
+        "mr_state": "none",
+    }))
+    .expect("feature fixture parses")
+}
+
+fn runner_machine(id: &str) -> Machine {
+    Machine {
+        id: MachineId::from(id),
+        name: id.to_owned(),
+        host: format!("{id}.invalid"),
+        port: 22,
+        username: "run".to_owned(),
+        auth_type: "agent".to_owned(),
+        key_path: None,
+        agents: None,
+        auto_approved_rules: None,
+        use_login_shell: None,
+        setup_commands: None,
+        notify_webhook_url: None,
+    }
 }
 
 /// Keys that cannot be resolved are the desktop's own failure, as an
