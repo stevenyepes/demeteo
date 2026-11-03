@@ -13,14 +13,15 @@ use demeteo_hub::auth::policy::Status;
 use demeteo_hub::auth::session::SessionSecret;
 use demeteo_hub::auth::testing::SoftAuthenticator;
 use demeteo_hub::protocol::{
-    gate_challenge, Decision, GateDecision, RequestPayload, RunEvent, RunEventKind,
-    RunEventPayload, WebAuthnAssertion,
+    gate_challenge, Decision, GateDecision, ProjectSnapshot, RequestPayload, RunEvent,
+    RunEventKind, RunEventPayload, Snapshot, WebAuthnAssertion, WorkflowVersionSnapshot,
 };
 use demeteo_hub::routes::AppState;
 use demeteo_hub::store::instances::{insert_instance, InstanceKind, NewInstance};
 use demeteo_hub::store::pool::create_user;
 use demeteo_hub::store::requests::{list_queued_requests, QueuedEnvelope};
 use demeteo_hub::store::run_mirror::{mirror_event, NewEvent};
+use demeteo_hub::store::snapshots::replace_snapshot;
 use demeteo_hub::store::{Db, InstanceId, UserId};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -82,6 +83,52 @@ impl Tenant {
 }
 
 const ALL_SCOPES: [&str; 3] = ["read", "spend", "gates"];
+
+/// Another instance of `user`'s, of `kind`, granted `scopes`.
+async fn instance_of(db: &Db, user: UserId, kind: InstanceKind, scopes: &[&str]) -> InstanceId {
+    let new = NewInstance {
+        kind,
+        id: InstanceId::generate(),
+        name: "runner".to_owned(),
+        os: "linux".to_owned(),
+        arch: "x86_64".to_owned(),
+        version: "1.2.0".to_owned(),
+        granted_scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    insert_instance(user, db, &new).await.unwrap();
+    new.id
+}
+
+/// A snapshot naming project `p` on GitHub and workflow `w` at version 2.
+async fn reported(db: &Db, user: UserId, instance: InstanceId) {
+    let snapshot = Snapshot {
+        v: 1,
+        projects: vec![ProjectSnapshot {
+            id: "p".to_owned(),
+            name: "Widgets".to_owned(),
+            remote_url: Some("https://github.com/acme/widgets".to_owned()),
+            provider_kind: Some("github".to_owned()),
+        }],
+        workflows: vec![WorkflowVersionSnapshot {
+            id: "w@2".to_owned(),
+            workflow_id: "w".to_owned(),
+            version: 2,
+            steps_json: "[]".to_owned(),
+            definition_json: None,
+            note: None,
+            created_at: 1_700_000_000,
+        }],
+        run_shape: Vec::new(),
+        features: Vec::new(),
+        harnesses: None,
+    };
+    let body = serde_json::to_string(&snapshot).unwrap();
+    assert!(
+        replace_snapshot(user, db, instance, "full", &body, 1_700_000_000)
+            .await
+            .unwrap()
+    );
+}
 
 fn minimal_dispatch() -> Value {
     json!({"project_id": "p", "workflow_id": "w", "title": "t", "description": ""})
@@ -327,6 +374,47 @@ async fn a_gate_decision_naming_feedback_is_refused_without_spending_its_challen
         assert_eq!(status, 202, "{queued}");
         assert_eq!(queued["request_id"], challenge["request_id"]);
         assert_eq!(request_rows(&db).await, 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_runner_dispatch_reads_only_its_own_tenants_desktop_and_signs_what_it_reported() {
+    in_fresh_schema(|db| async move {
+        let a = Tenant::new(&db, &["read"]).await;
+        let b = Tenant::new(&db, &ALL_SCOPES).await;
+        reported(&db, a.user, a.instance).await;
+        reported(&db, b.user, b.instance).await;
+        let runner = instance_of(&db, a.user, InstanceKind::Runner, &["spend"]).await;
+        let base = serve_state(state_over(db.clone())).await;
+        let path = format!("/v1/instances/{}/runs", runner.0);
+        let from = |source: InstanceId| {
+            let mut body = minimal_dispatch();
+            body["source_instance_id"] = json!(source.0.to_string());
+            body
+        };
+
+        let refused = post_as(&base, &path, &a.session, &minimal_dispatch()).await;
+        assert_eq!(refused, (400, json!({"error": "invalid_request"})));
+        let refused = post_as(&base, &path, &a.session, &from(b.instance)).await;
+        assert_eq!(refused, (404, json!({"error": "not_found"})));
+        assert_eq!(request_rows(&db).await, 0);
+
+        let (status, queued) = post_as(&base, &path, &a.session, &from(a.instance)).await;
+        assert_eq!(status, 202, "{queued}");
+        let rows = list_queued_requests(a.user, &db, runner).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let QueuedEnvelope::Readable(envelope) = &rows[0].envelope else {
+            panic!("{:?}", rows[0].envelope);
+        };
+        let RequestPayload::StartFeature(start) = &envelope.payload else {
+            panic!("{:?}", envelope.payload);
+        };
+        let runner_start = start.runner.as_deref().expect("a runner start");
+        assert_eq!(runner_start.source_instance_id, a.instance.0.to_string());
+        assert_eq!(runner_start.repository.full_name, "acme/widgets");
+        assert_eq!(runner_start.workflow.version, 2);
     })
     .await;
 }

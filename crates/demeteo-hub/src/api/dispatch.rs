@@ -15,10 +15,17 @@
 //! digest, so the instance can check what it fetches against what was asked
 //! (`docs/HUB.md` §6.3), and is bound to the request in the store call that
 //! queues it: of two dispatches naming one attachment, one is queued.
+//!
+//! A `start_feature` for a runner carries the repository and Workflow version
+//! to run as well, resolved from the snapshot of the desktop the body names
+//! as `source_instance_id` ([`runner_start`](super::runner_start)) before
+//! anything is fetched, signed or bound.
 
 use super::attachments::lowercase_hex;
-use super::fleet::granted;
+use super::fleet::{granted, parsed_instance, snapshot_of};
+use super::runner_start::runner_start;
 use super::runs::owned;
+use super::scope::read_verdict;
 use super::{ApiContext, PostgresApi};
 use crate::attachments::envelope::{self, dispatch_verdict, requested_ids, EnvelopeError};
 use crate::attachments::postgres::PostgresAttachments;
@@ -29,21 +36,21 @@ use crate::socket::requests::{
     enqueue_verdict, enqueued_as, enqueued_binding, fresh_minted, EnqueueError, Enqueued, Minted,
 };
 use crate::socket::MAX_FEATURE_ID_BYTES;
-use crate::store::instances::Instance;
-use crate::store::UserId;
+use crate::store::instances::{Instance, InstanceKind};
+use crate::store::{InstanceId, UserId};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use demeteo_hub_protocol::{
-    AttachmentRef, CancelFeature, Effort, RequestPayload, SetStepAssignment, StartFeature,
-    StepOverride,
+    AttachmentRef, CancelFeature, Effort, RequestPayload, RunnerStart, SetStepAssignment,
+    StartFeature, StepOverride,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A `start_feature` as a browser asks for it. Every field but
-/// `attachment_ids` is the signed payload's own, of its own type, so what is
-/// queued is what was asked.
+/// `attachment_ids` and `source_instance_id` is the signed payload's own, of
+/// its own type, so what is queued is what was asked.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DispatchBody {
@@ -68,6 +75,11 @@ pub struct DispatchBody {
     /// the payload lists them.
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+    /// The tenant's desktop whose snapshot says what a runner is to run:
+    /// required when the instance dispatched to is a runner, and refused when
+    /// it is a desktop, which reads its own Projects.
+    #[serde(default)]
+    pub source_instance_id: Option<String>,
 }
 
 /// A `set_step_assignment` as a browser asks for it; the feature and the
@@ -93,8 +105,9 @@ pub struct EnqueuedView {
 
 /// Queues the Feature `body` describes for the tenant's instance. An instance
 /// that does not report `spend` is refused by name before the body is judged:
-/// no edit to the body changes that answer. The attachments are resolved
-/// after the body, and one that cannot be named refuses the dispatch whole.
+/// no edit to the body changes that answer. A runner's start is resolved
+/// after the body and the attachments after that; either refusing refuses the
+/// dispatch whole.
 pub async fn dispatch(
     api: &ApiContext<'_>,
     user: UserId,
@@ -104,17 +117,70 @@ pub async fn dispatch(
 ) -> Result<EnqueuedView, ApiError> {
     let row = owned(api, user, instance_id).await?;
     let malformed = body_verdict(&body);
-    let mut payload = RequestPayload::StartFeature(start_feature(body));
-    enqueue_verdict(&granted(&row), &payload).map_err(EnqueueError::from)?;
+    let source = body.source_instance_id.clone();
+    let mut start = start_feature(body);
+    let unsigned = RequestPayload::StartFeature(start.clone());
+    enqueue_verdict(&granted(&row), &unsigned).map_err(EnqueueError::from)?;
     let ids = malformed?;
+    if let Some(source) = source_verdict(&row, source.as_deref())? {
+        let resolved = resolved_start(api, user, source, &start).await?;
+        start.runner = Some(Box::new(resolved));
+    }
     if ids.is_empty() {
-        return queue(api, user, &row, payload, now).await;
+        return queue(api, user, &row, RequestPayload::StartFeature(start), now).await;
     }
-    let refs = attachment_refs(api, user, &row, &ids, now).await?;
-    if let RequestPayload::StartFeature(start) = &mut payload {
-        start.attachments = refs;
-    }
+    start.attachments = attachment_refs(api, user, &row, &ids, now).await?;
+    let payload = RequestPayload::StartFeature(start);
     queue_binding(api, user, &row, payload, &ids, now).await
+}
+
+/// Which desktop's snapshot a dispatch to `target` is resolved from: `None`
+/// for a desktop, which needs none and is refused one, and the parsed id for
+/// a runner, which is refused without one. An id that does not parse is
+/// `404`, as any instance id is.
+pub fn source_verdict(
+    target: &Instance,
+    source: Option<&str>,
+) -> Result<Option<InstanceId>, ApiError> {
+    let runner = InstanceKind::parse(&target.kind) == Some(InstanceKind::Runner);
+    match (runner, source) {
+        (false, None) => Ok(None),
+        (false, Some(_)) | (true, None) => Err(ApiError::INVALID_REQUEST),
+        (true, Some(text)) => parsed_instance(text).map(Some).ok_or(ApiError::NOT_FOUND),
+    }
+}
+
+/// Whether `source` may say what a runner runs: a desktop, since only a
+/// desktop reports Projects of its own, and one reporting `read`, since its
+/// snapshot is what the dispatch reads.
+pub fn source_row_verdict(source: &Instance) -> Result<(), ApiError> {
+    if InstanceKind::parse(&source.kind) != Some(InstanceKind::Desktop) {
+        return Err(ApiError::INVALID_REQUEST);
+    }
+    read_verdict(&granted(source))
+}
+
+async fn resolved_start(
+    api: &ApiContext<'_>,
+    user: UserId,
+    source: InstanceId,
+    start: &StartFeature,
+) -> Result<RunnerStart, ApiError> {
+    let row = api
+        .store
+        .instance(user, source)
+        .await
+        .map_err(store_failed)?
+        .ok_or(ApiError::NOT_FOUND)?;
+    source_row_verdict(&row)?;
+    let snapshot = snapshot_of(api, user, source).await?;
+    let source_text = source.0.to_string();
+    Ok(runner_start(
+        &source_text,
+        snapshot.as_ref(),
+        &start.project_id,
+        &start.workflow_id,
+    )?)
 }
 
 /// The refs to sign for the rows `ids` name, in request order. Transit
@@ -337,6 +403,7 @@ pub async fn post_assignment(
 pub fn body_verdict(body: &DispatchBody) -> Result<Vec<Uuid>, ApiError> {
     let ids = [body.project_id.as_str(), body.workflow_id.as_str()]
         .into_iter()
+        .chain(body.source_instance_id.as_deref())
         .chain(body.step_overrides.iter().map(|o| o.step_id.as_str()));
     let text = [body.title.as_str(), body.description.as_str()]
         .into_iter()
@@ -406,13 +473,15 @@ mod tests {
             max_budget_cents: None,
             max_wall_clock_secs: None,
             attachment_ids: Vec::new(),
+            source_instance_id: None,
         }
     }
 
     type Edit = fn(&mut DispatchBody, String);
 
-    fn every_string() -> [(&'static str, Edit); 9] {
+    fn every_string() -> [(&'static str, Edit); 10] {
         [
+            ("source_instance_id", |b, s| b.source_instance_id = Some(s)),
             ("project_id", |b, s| b.project_id = s),
             ("workflow_id", |b, s| b.workflow_id = s),
             ("title", |b, s| b.title = s),
@@ -447,7 +516,8 @@ mod tests {
 
     #[test]
     fn an_id_over_the_bound_is_an_invalid_request_and_one_at_it_is_not() {
-        let ids: [(&str, Edit); 3] = [
+        let ids: [(&str, Edit); 4] = [
+            ("source_instance_id", |b, s| b.source_instance_id = Some(s)),
             ("project_id", |b, s| b.project_id = s),
             ("workflow_id", |b, s| b.workflow_id = s),
             ("step_id", |b, s| b.step_overrides[0].step_id = s),
@@ -484,5 +554,65 @@ mod tests {
 
         not_a_uuid.title = "a\0b".to_owned();
         assert_eq!(body_verdict(&not_a_uuid), Err(ApiError::INVALID_REQUEST));
+    }
+
+    fn instance(kind: InstanceKind, scopes: &[&str]) -> Instance {
+        Instance {
+            id: InstanceId::generate(),
+            user_id: UserId::generate(),
+            kind: kind.as_str().to_owned(),
+            name: "name".to_owned(),
+            os: "linux".to_owned(),
+            arch: "x86_64".to_owned(),
+            version: "1.0.0".to_owned(),
+            last_seen: None,
+            granted_scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            install_id: None,
+            connection_id: None,
+            connected_at: None,
+            event_cursor: 0,
+        }
+    }
+
+    #[test]
+    fn a_desktop_takes_no_source_and_a_runner_needs_one_that_parses() {
+        let desktop = instance(InstanceKind::Desktop, &["spend"]);
+        let runner = instance(InstanceKind::Runner, &["spend"]);
+        let source = InstanceId::generate();
+        let text = source.0.to_string();
+
+        assert_eq!(source_verdict(&desktop, None), Ok(None));
+        assert_eq!(
+            source_verdict(&desktop, Some(&text)),
+            Err(ApiError::INVALID_REQUEST)
+        );
+        assert_eq!(
+            source_verdict(&runner, None),
+            Err(ApiError::INVALID_REQUEST)
+        );
+        assert_eq!(source_verdict(&runner, Some(&text)), Ok(Some(source)));
+        assert_eq!(
+            source_verdict(&runner, Some("not-a-uuid")),
+            Err(ApiError::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn a_source_is_a_desktop_reporting_read() {
+        assert_eq!(
+            source_row_verdict(&instance(InstanceKind::Desktop, &["read"])),
+            Ok(())
+        );
+        assert_eq!(
+            source_row_verdict(&instance(InstanceKind::Desktop, &["spend", "gates"])),
+            Err(ApiError::scope_not_granted(
+                demeteo_hub_protocol::Scope::Read
+            ))
+        );
+        assert_eq!(
+            source_row_verdict(&instance(InstanceKind::Runner, &["read"])),
+            Err(ApiError::INVALID_REQUEST)
+        );
     }
 }

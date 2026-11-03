@@ -1273,7 +1273,7 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
 | `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, title, project, the pinned `workflow` graph, steps, ticket progress, pending gates and events in offset order |
 | `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
-| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name |
+| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name; to a runner, carrying the start its `source_instance_id` resolves (below) |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/cancel` | `spend` | `202`, a `cancel_feature` queued |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment` | `spend` | `202`, a `set_step_assignment` queued |
 | `POST /v1/instances/{instance_id}/gates/challenge` | `gates` | `200`, a held challenge and the `navigator.credentials.get` options over it |
@@ -1295,6 +1295,34 @@ cents; `default_loop_iterations` is left out, since a dispatch has no field for
 it. Both follow the read-scope rule of `projects`: `null` without `read`, `[]`
 until a readable snapshot arrives. The projection is
 [`api/snapshot_view.rs`](../crates/demeteo-hub/src/api/snapshot_view.rs).
+
+**A dispatch to a runner names the desktop it runs from.** The body is the
+signed `start_feature`'s fields, `attachment_ids`, and `source_instance_id`. A
+runner keeps no copy of a desktop's Projects or Workflows, so a dispatch to an
+instance of kind `runner` must name one: another instance of the tenant's, of
+kind `desktop`, reporting `read`. A dispatch to a desktop reads its own and is
+refused one (`400 invalid_request`). From that desktop's last snapshot the Hub
+resolves the `runner` field of §6.1 and signs it into the payload:
+
+- the Project of `project_id`: its `provider_kind`, required and never inferred
+  from the host, and its `remote_url` split into `host` and `full_name`. The
+  desktop builds that URL as `https://{host}/{repo_path}` (§5), so that is the
+  only shape read; a URL of any other shape, or one with an `@`, whitespace or
+  an empty path segment, is not guessed at;
+- the Workflow of `workflow_id` at its **highest `version`** in the snapshot,
+  the one the browser was offered above, with that version's number, its name
+  by the rule above, and its `steps_json` as the desktop sent it. A
+  `steps_json` holding `***`, the mask the desktop's secret scrubber writes in
+  place of a token, is not the Workflow the desktop runs, and is refused — a
+  prompt holding the three characters as its own text is refused too, since
+  the Hub cannot tell the two apart.
+
+Nothing is guessed and nothing is half-sent: each miss is a `409` below, and a
+dispatch refused on any of them is not signed, queues nothing and binds no
+attachment. The start is resolved after the rest of the body and before the
+attachments. `project_settings` are not carried: a runner applies its detected
+defaults. The resolution is
+[`api/runner_start.rs`](../crates/demeteo-hub/src/api/runner_start.rs).
 
 **The attachment fetch is not a session route.** `GET /attachments/{attachment_id}`
 is outside `/v1`, beside `/socket` and `/token`, because its caller is an
@@ -1320,7 +1348,8 @@ not `read` beside it: the set is flat (§7). None of this is enforcement (§7).
 **Order of checks.** Once a body parses as JSON of its shape: ownership, then
 scope, then what the body says, then the work. An upload's size is what its body
 says, judged before any call to the key service; a dispatch's attachments are
-resolved after the rest of its body and before it is signed. An instance, run or request that
+resolved after the rest of its body and before it is signed, and a runner's
+start after the body and before the attachments. An instance, run or request that
 is another tenant's answers `404 not_found` exactly as one that does not exist,
 and so does an id that does not parse. A missing scope is refused before the
 body is judged, so it queues nothing and holds no challenge.
@@ -1331,9 +1360,12 @@ body is judged, so it queues nothing and holds no challenge.
 
 | Status | `error` | When |
 |---|---|---|
-| 404 | `not_found` | the instance, run, request or attachment is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too |
-| 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it |
-| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter, an `attachment_ids` that repeats an id or names more than `MAX_ATTACHMENTS_PER_DISPATCH` |
+| 404 | `not_found` | the instance, run, request or attachment is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too; so is a `source_instance_id` that is not the tenant's |
+| 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it. For a dispatch's source, `read` |
+| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter, an `attachment_ids` that repeats an id or names more than `MAX_ATTACHMENTS_PER_DISPATCH`; a dispatch to a runner with no `source_instance_id` or one naming a runner, and a dispatch to a desktop naming one |
+| 409 | `unknown_project` | a runner dispatch whose source has no readable snapshot, or one naming no Project of `project_id`; nothing is signed, queued or bound |
+| 409 | `unknown_workflow` | a runner dispatch whose source's snapshot names no version of `workflow_id`; nothing is signed, queued or bound |
+| 409 | `project_not_dispatchable` | a runner dispatch whose Project has no `provider_kind` or a `remote_url` not of the desktop's `https://host/owner/repo` shape, or whose Workflow's latest `steps_json` holds the scrub mask `***`; nothing is signed, queued or bound |
 | 413 | `attachment_too_large` | an upload over `DEMETEO_HUB_ATTACHMENT_MAX_BYTES` (§6.3); nothing is stored |
 | 409 | `attachment_unavailable` | a dispatch naming an attachment of the tenant's instance that is already bound to a request or has expired; nothing is queued and no attachment is bound |
 | 409 | `challenge_mismatch` | a decision whose `request_id` is not the one its challenge minted |
@@ -1958,15 +1990,20 @@ by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
 [64](DECISIONS.md#64--hub-instances-detail) and
 [71](DECISIONS.md#71--runner-git-credentials-detail) settle its shape: a
 `demeteo-runner` host pairs and holds its own outbound socket, verifying,
-enforcing and reporting as a desktop does; the Hub builds the `RunSpec` from the
-last snapshot a paired desktop reported (§5); and the Hub mints each run's git
+enforcing and reporting as a desktop does; the Hub signs what the run needs
+from the last snapshot a paired desktop reported (§5), and the runner builds
+its `RunSpec` from that; and the Hub mints each run's git
 token from a GitHub App key in OpenBao, delivered in the signed request and
 refreshed over the socket. The first part is built: a paired runner reports
 its runs under their Feature ids (§5) and answers `cancel_feature`,
 `set_step_assignment` and `gate_decision` through its own control socket's
-calls, on any run it holds (§6.1 *On a runner*). The rest is not. Building a
-`RunSpec` from a snapshot is what a runner's `start_feature` waits on, and
-until then the runner refuses every one `unknown_kind` with nothing fetched;
+calls, on any run it holds (§6.1 *On a runner*). So is the Hub's half of a
+start: a dispatch to a runner names a source desktop, and the Hub resolves the
+repository and pinned Workflow version from that desktop's snapshot and signs
+them into the `start_feature` (§6.4), refusing a Project or Workflow it cannot
+resolve as a `409` rather than queueing a guess. The rest is not. Mapping that
+start to a `RunSpec` is what a runner's `start_feature` waits on, and until
+then the runner refuses every one `unknown_kind` with nothing fetched;
 minting and delivering a git token comes after it.
 
 Two things about it are easy to get wrong:
