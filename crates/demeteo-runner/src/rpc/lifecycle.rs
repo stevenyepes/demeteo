@@ -92,12 +92,6 @@ struct SetStepAssignmentParams {
     effort: Option<EffortLevel>,
 }
 
-/// Idempotent by `run_id` (R9/M3.2): re-submitting the same `run_id`
-/// returns the existing row instead of starting a second feature. A
-/// freshly-created row is handed to its run driver
-/// ([`crate::run::spawn_run_driver`]) and this returns immediately — `submit_run` reports
-/// "accepted", not "finished"; the caller polls `get_status`/`list_runs`
-/// (or, from M3.3 on, tails the event log).
 pub(super) async fn submit_run(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
@@ -105,14 +99,33 @@ pub(super) async fn submit_run(
 ) -> Result<RunnerRun, String> {
     let params: SubmitRunParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let spec_json = serde_json::to_string(&params.spec).map_err(|e| e.to_string())?;
+    submit(svc, &params.run_id, params.spec, client_id).await
+}
+
+/// The one way a run starts on this runner, for a desktop's `submit_run` and
+/// a Hub start alike (decision 64, read per instance).
+///
+/// Idempotent by `run_id` (R9/M3.2): re-submitting the same `run_id`
+/// returns the existing row instead of starting a second feature. A
+/// freshly-created row is handed to its run driver
+/// ([`crate::run::spawn_run_driver`]) and this returns immediately — it reports
+/// "accepted", not "finished"; the caller polls `get_status`/`list_runs`
+/// (or, from M3.3 on, tails the event log). A run whose agent is missing
+/// comes back `failed` rather than as an `Err`.
+pub(crate) async fn submit(
+    svc: &Arc<RunnerServices>,
+    run_id: &str,
+    spec: RunSpec,
+    owner: &str,
+) -> Result<RunnerRun, String> {
+    let spec_json = serde_json::to_string(&spec).map_err(|e| e.to_string())?;
     let now = paths::now_ms();
     // MC-D2: stamp the owning client at creation. `get_or_create` sets it
     // only on the insert, so a re-submit never re-homes an existing run.
     let run = svc
         .ctx
         .runner_runs
-        .get_or_create(&params.run_id, &spec_json, client_id, now)?;
+        .get_or_create(run_id, &spec_json, owner, now)?;
 
     if run.status != "pending" {
         // Already submitted (possibly already finished) — no-op.
@@ -122,7 +135,7 @@ pub(super) async fn submit_run(
     // M4.1: agent-readiness precondition. Fail loud at launch rather than
     // mid-run — a machine missing the selected agent binary is ineligible
     // for this run entirely.
-    if let Some(kind) = params.spec.agent_kind.as_deref() {
+    if let Some(kind) = spec.agent_kind.as_deref() {
         if !svc
             .ctx
             .registry
@@ -134,7 +147,7 @@ pub(super) async fn submit_run(
                 kind
             );
             svc.ctx.runner_runs.update_status(
-                &params.run_id,
+                run_id,
                 "failed",
                 None,
                 None,
@@ -145,16 +158,16 @@ pub(super) async fn submit_run(
             return svc
                 .ctx
                 .runner_runs
-                .get(&params.run_id)?
+                .get(run_id)?
                 .ok_or_else(|| "run vanished immediately after creation".to_string());
         }
     }
 
-    crate::run::reopen_run_driver(svc, &params.run_id, params.spec)?;
+    crate::run::reopen_run_driver(svc, run_id, spec)?;
 
     svc.ctx
         .runner_runs
-        .get(&params.run_id)?
+        .get(run_id)?
         .ok_or_else(|| "run vanished immediately after creation".to_string())
 }
 

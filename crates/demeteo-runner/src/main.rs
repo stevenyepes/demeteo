@@ -322,7 +322,12 @@ fn runner_services(
 /// Before the socket starts: a request it delivers with no handler bound is
 /// left queued on the Hub.
 fn answer_hub_requests(svc: &Arc<RunnerServices>, binding: HubRequestBinding) {
-    binding.bind(svc.ctx.clone(), Arc::new(RunnerHubRuns::new(svc.clone())));
+    // No credential seam until the Hub mints git tokens (decision 64,
+    // *Hub-started runner runs*), so every start is refused `unknown_kind`.
+    binding.bind(
+        svc.ctx.clone(),
+        Arc::new(RunnerHubRuns::new(svc.clone(), None)),
+    );
 }
 
 async fn serve(

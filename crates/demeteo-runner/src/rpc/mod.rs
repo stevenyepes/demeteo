@@ -21,7 +21,9 @@ mod ownership;
 mod publish;
 mod reads;
 
-use crate::hub::HubControl;
+pub(crate) use lifecycle::submit;
+
+use crate::hub::{HubControl, HUB_CLIENT_ID};
 use crate::services::RunnerServices;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -143,12 +145,10 @@ async fn dispatch(svc: &Arc<RunnerServices>, hub: &HubControl, req: Request) -> 
     // `client_id` (an old laptop) reads back as `""`, the single
     // legacy/unknown tenant, which is exactly how pre-V26 rows are stamped
     // — so old-client↔new-runner keeps working unchanged (MC-D6 / P0.6).
-    let client_id = req
-        .params
-        .get("client_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let client_id = match caller(&req.params) {
+        Ok(client_id) => client_id,
+        Err(e) => return respond(req.id, Err(e)),
+    };
     let cid = client_id.as_str();
     if let Some(result) = hub::dispatch_hub(hub, &req.method, &req.params).await {
         return respond(req.id, result);
@@ -210,6 +210,22 @@ async fn dispatch(svc: &Arc<RunnerServices>, hub: &HubControl, req: Request) -> 
     respond(req.id, result)
 }
 
+/// The `client_id` a request names. [`HUB_CLIENT_ID`] is refused whatever
+/// the method: it owns every run the Hub started, so a caller claiming it
+/// would reach all of them.
+fn caller(params: &serde_json::Value) -> Result<String, String> {
+    let client_id = params
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if client_id == HUB_CLIENT_ID {
+        return Err(format!(
+            "client_id {HUB_CLIENT_ID:?} is reserved for the Hub"
+        ));
+    }
+    Ok(client_id.to_owned())
+}
+
 fn respond(id: u64, result: Result<serde_json::Value, String>) -> Response {
     match result {
         Ok(v) => Response {
@@ -228,3 +244,7 @@ fn respond(id: u64, result: Result<serde_json::Value, String>) -> Response {
 #[cfg(test)]
 #[path = "health_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "caller_tests.rs"]
+mod caller_tests;

@@ -621,7 +621,7 @@ mod cancel_parity {
         super::super::cancel_run(&rig.svc, json!({ "run_id": "run-rpc" }), "laptop-1")
             .await
             .expect("the owner cancels");
-        RunnerHubRuns::new(rig.svc.clone())
+        RunnerHubRuns::new(rig.svc.clone(), None)
             .cancel(&FeatureId::from("f-hub"))
             .await
             .expect("the Hub cancels");

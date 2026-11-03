@@ -11,7 +11,7 @@ mod client;
 mod runs;
 pub mod seal;
 
-pub use runs::RunnerHubRuns;
+pub use runs::{RunnerHubRuns, HUB_CLIENT_ID};
 
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::ports::hub::{

@@ -10,8 +10,10 @@
 //! the `demeteo-runner` binary crate:
 //!
 //! - [`RunnerControl`] is `RunnerHubRuns` over `control::cancel_run`, spelled
-//!   against the same ports: starts refused, a cancel finds the run by its
-//!   Feature id, stops the feature, ends the row and logs `cancelled`.
+//!   against the same ports: starts refused, as production composes it with
+//!   no credential seam (`crates/demeteo-runner/src/hub/runs.rs`), and a
+//!   cancel finds the run by its Feature id, stops the feature, ends the row
+//!   and logs `cancelled`.
 //! - The socket is configured here rather than by `hub_socket()` in
 //!   composition, so it can dial a [`ScriptedSocketDialer`]. It is given
 //!   [`RunnerRunKeys`], which is what composition gives a `LocalOnly`
