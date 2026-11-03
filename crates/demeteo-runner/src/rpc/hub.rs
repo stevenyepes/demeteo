@@ -15,7 +15,8 @@ use demeteo_core::application::hub_settings::save_hub_policy;
 use demeteo_core::domain::hub_pairing::device::{DevicePairing, DeviceTicket};
 use demeteo_core::domain::hub_pairing::runner_view::{HubStatusView, PairStateView};
 use demeteo_core::domain::hub_pairing::{HubPairingError, HubStatus};
-use demeteo_core::domain::hub_request::HubLocalPolicy;
+use demeteo_core::domain::hub_request::log::MAX_LOG_PAGE;
+use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -26,6 +27,11 @@ const SEAL_HINT: &str = "run `demeteo-runner hub seal`, then restart the runner 
 #[derive(Debug, Deserialize)]
 struct PairBeginParams {
     hub_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestLogParams {
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +57,7 @@ pub(super) async fn dispatch_hub(
         "hub_disconnect" => json(disconnect(hub).await),
         "hub_policy_get" => json(hub.policy.load().map_err(|e| e.to_string())),
         "hub_policy_set" => json(policy_set(hub, params).await),
+        "hub_request_log" => json(request_log(hub, params)),
         _ => return None,
     })
 }
@@ -115,6 +122,15 @@ fn status(hub: &HubControl) -> Result<HubStatusView, String> {
 
 async fn disconnect(hub: &HubControl) -> Result<HubStatus, String> {
     pairing(hub)?.disconnect().await.map_err(|e| e.to_string())
+}
+
+/// Newest first, at most [`MAX_LOG_PAGE`] rows whatever was asked.
+fn request_log(hub: &HubControl, params: &Value) -> Result<Vec<HubRequestLogRow>, String> {
+    let params =
+        RequestLogParams::deserialize(params).map_err(|e| format!("invalid params: {}", e))?;
+    hub.requests
+        .list_log(params.limit.min(MAX_LOG_PAGE))
+        .map_err(|e| e.to_string())
 }
 
 /// Answers the policy as stored afterwards, so a caller sees what is in force.

@@ -1,8 +1,9 @@
 use crate::services::RunnerServices;
 use demeteo_core::adapters::mr_monitor::record_mr_state;
 use demeteo_core::application::lifecycle::FeatureCacheRelease;
+use demeteo_core::application::step_control;
 use demeteo_core::domain::cache_release::cache_releasable;
-use demeteo_core::domain::ids::FeatureId;
+use demeteo_core::domain::ids::{FeatureId, StepExecutionId};
 use demeteo_core::domain::models::EffortLevel;
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::domain::runner_cache_release::{runner_settle, CacheReleaseReason, RunnerSettle};
@@ -269,11 +270,13 @@ pub(super) async fn set_step_assignment(
         client_id,
     )?;
 
-    svc.ctx
-        .executor
-        .step_set_assignment(&params.step_execution_id, assignment_of(&params))
-        .await
-        .map_err(|e| e.to_string())
+    step_control::set_step_assignment(
+        &svc.ctx,
+        &StepExecutionId::from(params.step_execution_id.clone()),
+        assignment_of(&params),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// The change [`set_step_assignment`] hands the executor: the wire's trio,
@@ -311,10 +314,8 @@ fn assignment_target(
     Ok(())
 }
 
-/// R8: cancellation is explicit and RPC-only — closing the laptop or
-/// dropping the SSH tunnel must never cancel a run. Delegates to the
-/// same `StepExecutor::feature_cancel` the desktop app's `feature_cancel`
-/// Tauri command already uses; no separate cancellation logic to drift.
+/// The owner check, then [`crate::control::cancel_run`], which a Hub cancel
+/// reaches without one.
 pub(super) async fn cancel_run(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
@@ -325,34 +326,7 @@ pub(super) async fn cancel_run(
     // MC-D2: only the owning client may cancel; a non-owner gets the
     // uniform "no such run" and the run keeps executing untouched.
     let run = require_owner(svc, &params.run_id, client_id)?;
-
-    if let Some(feature_id) = &run.feature_id {
-        svc.ctx
-            .executor
-            .feature_cancel(feature_id)
-            .await
-            .map_err(|e| format!("failed to cancel feature: {}", e))?;
-    }
-
-    // Atomic conditional update (not read-then-write): if the run
-    // finished for real between our `get` above and this call — e.g. the
-    // background execute_run task raced us to a genuine `awaiting_mr` —
-    // this leaves that real outcome alone instead of stomping it to
-    // `cancelled`. Returns whatever the row's true status ends up being.
-    let now = paths::now_ms();
-    let run = svc
-        .ctx
-        .runner_runs
-        .cancel_if_active(&params.run_id, now)?
-        .ok_or_else(|| "run vanished during cancel".to_string())?;
-    if run.status == "cancelled" {
-        svc.ctx
-            .run_events
-            .append(&params.run_id, "cancelled", None, now)?;
-        // §6.2: wiped at run end — success, failure, or cancel.
-        svc.creds.remove(&params.run_id);
-    }
-    Ok(run)
+    crate::control::cancel_run(&svc.ctx, &svc.creds, run).await
 }
 
 /// `release_feature_cache(run_id, reason)`. `reason` is why the laptop holds

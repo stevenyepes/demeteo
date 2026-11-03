@@ -21,6 +21,7 @@ mod ownership;
 mod publish;
 mod reads;
 
+use crate::hub::HubControl;
 use crate::services::RunnerServices;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -74,7 +75,14 @@ fn health_info() -> HealthInfo {
 /// Removes a stale socket file from a previous (crashed) run before
 /// binding — `UnixListener::bind` fails with `AddrInUse` on an existing
 /// path even if nothing is listening on it anymore.
-pub async fn serve(svc: Arc<RunnerServices>, path: PathBuf) -> std::io::Result<()> {
+///
+/// `hub` is a parameter beside `svc`, not part of it, for the reason
+/// [`HubControl`] gives.
+pub async fn serve(
+    svc: Arc<RunnerServices>,
+    hub: Arc<HubControl>,
+    path: PathBuf,
+) -> std::io::Result<()> {
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
@@ -87,15 +95,20 @@ pub async fn serve(svc: Arc<RunnerServices>, path: PathBuf) -> std::io::Result<(
     loop {
         let (stream, _addr) = listener.accept().await?;
         let svc = svc.clone();
+        let hub = hub.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(svc, stream).await {
+            if let Err(e) = handle_connection(svc, hub, stream).await {
                 eprintln!("[demeteo-runner] connection error: {}", e);
             }
         });
     }
 }
 
-async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std::io::Result<()> {
+async fn handle_connection(
+    svc: Arc<RunnerServices>,
+    hub: Arc<HubControl>,
+    stream: UnixStream,
+) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
     while let Some(line) = lines.next_line().await? {
@@ -103,7 +116,7 @@ async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std:
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => dispatch(&svc, req).await,
+            Ok(req) => dispatch(&svc, &hub, req).await,
             Err(e) => Response {
                 id: 0,
                 result: None,
@@ -122,7 +135,7 @@ async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std:
     Ok(())
 }
 
-async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
+async fn dispatch(svc: &Arc<RunnerServices>, hub: &HubControl, req: Request) -> Response {
     // MC-D3: the owning client's `install_id` rides *inside* `params`
     // (not the `control_rpc` port signature), so it is extracted here,
     // generically, once, before method routing — every run-scoped handler
@@ -137,7 +150,7 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
         .unwrap_or("")
         .to_string();
     let cid = client_id.as_str();
-    if let Some(result) = hub::dispatch_hub(&svc.hub, &req.method, &req.params).await {
+    if let Some(result) = hub::dispatch_hub(hub, &req.method, &req.params).await {
         return respond(req.id, result);
     }
     let result = match req.method.as_str() {

@@ -21,6 +21,7 @@
 //! gate/driver resume) running indefinitely.
 
 mod away_notify;
+mod control;
 mod credentials;
 mod driver;
 mod git_askpass;
@@ -30,17 +31,21 @@ mod reconcile;
 mod rpc;
 mod run;
 mod services;
+#[cfg(test)]
+mod test_services;
 
 use away_notify::{AwayNotifier, NoopAwayNotifier, WebhookAwayNotifier};
 use credentials::{CredentialStore, RunnerCredentialSource};
 use demeteo_core::adapters::database::SqliteAdapter;
 use demeteo_core::adapters::hub::sealed_store::{load_store_key, SealedSecretStore};
-use demeteo_core::composition::{build_core_context_with_hub_store, CoreConfig, ExecutionMode};
+use demeteo_core::composition::{
+    build_core_context_with_hub_store, CoreConfig, ExecutionMode, HubRequestBinding,
+};
 use demeteo_core::domain::hub_pairing::sealed::{SEALED_BACKEND, STORE_KEY_LEN};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::hub::HubSecretStore;
-use hub::HubControl;
+use hub::{HubControl, RunnerHubRuns};
 use notify_bridge::RunEventBridge;
 use services::RunnerServices;
 use std::path::{Path, PathBuf};
@@ -240,14 +245,23 @@ fn main() {
     }
 }
 
+/// What [`runner_services`] builds: the services, and beside them, out of
+/// the request handler's reach, what controls the Hub pairing.
+struct Runner {
+    svc: Arc<RunnerServices>,
+    hub: Arc<HubControl>,
+    requests: HubRequestBinding,
+}
+
 /// The context both entry points run on, and the runner-only state around
 /// it. The Hub pairing is built over the sealed store either way; only
-/// `serve` starts its socket or answers the `hub_*` methods.
+/// `serve` binds its request handler, starts its socket or answers the
+/// `hub_*` methods.
 fn runner_services(
     app_data_dir: &Path,
     runtime: tokio::runtime::Handle,
     store_key: Result<[u8; STORE_KEY_LEN], &'static str>,
-) -> Result<Arc<RunnerServices>, String> {
+) -> Result<Runner, String> {
     let sealed_repo = demeteo_core::db::init_db(app_data_dir.to_path_buf())
         .map_err(|e| e.to_string())
         .and_then(SqliteAdapter::new)
@@ -265,7 +279,7 @@ fn runner_services(
     let notify_bridge = Arc::new(RunEventBridge::new());
     let creds = Arc::new(CredentialStore::new());
     let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), app_data_dir));
-    let (ctx, policy_writer, _hub_requests) = build_core_context_with_hub_store(
+    let (ctx, policy_writer, requests) = build_core_context_with_hub_store(
         CoreConfig {
             app_data_dir: app_data_dir.to_path_buf(),
             execution_mode: ExecutionMode::LocalOnly,
@@ -285,19 +299,30 @@ fn runner_services(
         Some(n) => Arc::new(n),
         None => Arc::new(NoopAwayNotifier),
     };
-    Ok(Arc::new(RunnerServices {
-        hub: HubControl {
-            pairing: ctx.hub.clone(),
-            secrets,
-            policy: ctx.hub_policy.clone(),
-            policy_writer,
-        },
-        ctx,
-        creds,
-        askpass_path,
-        away_notifier,
-        drivers: Arc::default(),
-    }))
+    let hub = Arc::new(HubControl {
+        pairing: ctx.hub.clone(),
+        secrets,
+        policy: ctx.hub_policy.clone(),
+        policy_writer,
+        requests: ctx.hub_requests.clone(),
+    });
+    Ok(Runner {
+        svc: Arc::new(RunnerServices {
+            ctx,
+            creds,
+            askpass_path,
+            away_notifier,
+            drivers: Arc::default(),
+        }),
+        hub,
+        requests,
+    })
+}
+
+/// Before the socket starts: a request it delivers with no handler bound is
+/// left queued on the Hub.
+fn answer_hub_requests(svc: &Arc<RunnerServices>, binding: HubRequestBinding) {
+    binding.bind(svc.ctx.clone(), Arc::new(RunnerHubRuns::new(svc.clone())));
 }
 
 async fn serve(
@@ -327,8 +352,8 @@ async fn serve(
     // below is the M2.3 layer on top: it re-attaches runner_runs rows
     // (this daemon's own submit/status mirror) to whatever the engine
     // just resumed, under a bounded reboot-retry budget.
-    let svc = match runner_services(&app_data_dir, runtime, store_key) {
-        Ok(svc) => svc,
+    let Runner { svc, hub, requests } = match runner_services(&app_data_dir, runtime, store_key) {
+        Ok(runner) => runner,
         Err(e) => {
             eprintln!("[demeteo-runner] {e}");
             return 1;
@@ -336,15 +361,16 @@ async fn serve(
     };
     let ctx = svc.ctx.clone();
     reconcile::reconcile_on_startup(svc.clone(), process_started_at).await;
+    answer_hub_requests(&svc, requests);
     // After the version, which the socket's `Hello` announces. Unpaired, it
     // starts nothing.
-    if let Some(hub) = &ctx.hub {
-        hub.start_socket();
+    if let Some(pairing) = &ctx.hub {
+        pairing.start_socket();
     }
 
     let socket_path = rpc::socket_path(&app_data_dir);
     let rpc_svc = svc.clone();
-    let rpc_task = tokio::spawn(async move { rpc::serve(rpc_svc, socket_path).await });
+    let rpc_task = tokio::spawn(async move { rpc::serve(rpc_svc, hub, socket_path).await });
 
     // M2.2: on SIGTERM (`systemctl --user stop`) or SIGINT (Ctrl-C),
     // mark every in-flight runner_runs row `interrupted` before exiting
@@ -412,7 +438,7 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
         runtime,
         Err("a one-shot submit does not hold the Hub pairing"),
     ) {
-        Ok(svc) => svc,
+        Ok(runner) => runner.svc,
         Err(e) => {
             eprintln!("[demeteo-runner] {e}");
             return 1;
