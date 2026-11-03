@@ -7,10 +7,10 @@
 //! trusted set ([`trust_change_note`]).
 
 use demeteo_hub_protocol::{RequestPayload, Scope};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The request's `kind`, or `Unknown` for a body that did not parse as one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogKind {
     StartFeature,
@@ -60,7 +60,7 @@ impl LogKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogOutcome {
     Accepted,
@@ -180,7 +180,7 @@ pub fn trust_change_note(change: TrustChange<'_>) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubRequestLogEntry {
     pub request_id: String,
     pub kind: LogKind,
@@ -199,7 +199,7 @@ pub struct HubRequestLogEntry {
 /// A logged [`HubRequestLogEntry`] as read back, with the row's own key.
 /// `request_id` is not one: a redelivery and a deferred request handled later
 /// are each logged again under the same id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubRequestLogRow {
     pub id: i64,
     #[serde(flatten)]

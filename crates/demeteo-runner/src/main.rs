@@ -265,7 +265,7 @@ fn runner_services(
     let notify_bridge = Arc::new(RunEventBridge::new());
     let creds = Arc::new(CredentialStore::new());
     let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), app_data_dir));
-    let (ctx, policy_writer) = build_core_context_with_hub_store(
+    let (ctx, policy_writer, _hub_requests) = build_core_context_with_hub_store(
         CoreConfig {
             app_data_dir: app_data_dir.to_path_buf(),
             execution_mode: ExecutionMode::LocalOnly,

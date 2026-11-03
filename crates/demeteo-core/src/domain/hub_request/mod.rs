@@ -200,22 +200,44 @@ pub fn precheck(
     Precheck::Consume
 }
 
+/// Whether this instance launches the runs a Hub start asks for. A desktop
+/// does. A `demeteo-runner` does not: a run there is submitted by the
+/// desktop that owns it, and a Hub start has no desktop to own it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartSupport {
+    Launches,
+    Refused,
+}
+
+/// Whether judging `payload` reads the 24-hour committed total. Only a start
+/// does, and not one this instance refuses outright: [`decide`] refuses that
+/// one before any ceiling, so a total that fails to load must not defer it.
+pub fn needs_committed_total(payload: &RequestPayload, starts: StartSupport) -> bool {
+    matches!(payload, RequestPayload::StartFeature(_)) && starts == StartSupport::Launches
+}
+
 /// Replay, then the kind-specific spend check, for a request [`precheck`]
 /// said to consume.
 ///
 /// `committed_cents` is the 24-hour committed total of Hub launches and is
 /// read only for a start. `None` for a start refuses: a total the caller did
-/// not load is not zero.
+/// not load is not zero. A start reaching an instance whose `starts` is
+/// [`StartSupport::Refused`] is `UnknownKind`, before any ceiling: the id is
+/// spent, so its redelivery reads `Replayed`, and nothing it names is read.
 pub fn decide<'a>(
     payload: &'a RequestPayload,
     consumption: Consumption,
     committed_cents: Option<u64>,
     policy: &HubLocalPolicy,
+    starts: StartSupport,
 ) -> Verdict<'a> {
     if consumption == Consumption::AlreadyConsumed {
         return Verdict::Refuse(RefusalReason::Replayed);
     }
     match payload {
+        RequestPayload::StartFeature(_) if starts == StartSupport::Refused => {
+            Verdict::Refuse(RefusalReason::UnknownKind)
+        }
         RequestPayload::StartFeature(start) => {
             let Some(committed) = committed_cents else {
                 return Verdict::Refuse(RefusalReason::OverRollingCeiling);
@@ -396,5 +418,65 @@ pub fn attachment_refusal(
     match total {
         Some(total) if total <= limits.max_total_bytes => None,
         _ => Some(RefusalReason::AttachmentMismatch),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn start() -> RequestPayload {
+        RequestPayload::StartFeature(StartFeature {
+            project_id: "p-1".into(),
+            workflow_id: "w-1".into(),
+            title: "t".into(),
+            description: "d".into(),
+            agent_kind: None,
+            model: None,
+            effort: None,
+            step_overrides: Vec::new(),
+            max_budget_cents: Some(1),
+            max_wall_clock_secs: None,
+            attachments: Vec::new(),
+        })
+    }
+
+    /// The total is loaded only for a start this instance would launch, so a
+    /// runner never defers a start it is going to refuse because a total it
+    /// does not need failed to load.
+    #[test]
+    fn only_a_launched_start_needs_the_committed_total() {
+        let cancel = RequestPayload::CancelFeature(CancelFeature {
+            feature_id: "f-1".into(),
+        });
+        let rows = [
+            (start(), StartSupport::Launches, true),
+            (start(), StartSupport::Refused, false),
+            (cancel.clone(), StartSupport::Launches, false),
+            (cancel, StartSupport::Refused, false),
+        ];
+        for (payload, starts, expected) in rows {
+            assert_eq!(
+                needs_committed_total(&payload, starts),
+                expected,
+                "{payload:?} with {starts:?}"
+            );
+        }
+    }
+
+    /// Refused without the total: `None` would otherwise read as an
+    /// unloaded total and refuse `OverRollingCeiling`.
+    #[test]
+    fn a_refused_start_is_unknown_kind_without_a_total() {
+        assert_eq!(
+            decide(
+                &start(),
+                Consumption::Fresh,
+                None,
+                &HubLocalPolicy::default(),
+                StartSupport::Refused
+            ),
+            Verdict::Refuse(RefusalReason::UnknownKind)
+        );
     }
 }

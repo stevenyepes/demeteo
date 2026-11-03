@@ -57,7 +57,7 @@ pub struct DeviceAuthorization {
 
 /// What the runner shows the human: the code to type, where, and the
 /// fingerprint to compare with the one the Hub shows beside it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceTicket {
     pub user_code: String,
     pub verification_uri: String,

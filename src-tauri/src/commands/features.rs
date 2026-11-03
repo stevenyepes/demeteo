@@ -124,10 +124,7 @@ pub async fn feature_cancel(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<(), AppError> {
-    ctx.executor
-        .feature_cancel(&feature_id)
-        .await
-        .map_err(AppError::from)
+    crate::application::step_control::cancel_feature(&ctx, &FeatureId::from(feature_id)).await
 }
 
 #[tauri::command]

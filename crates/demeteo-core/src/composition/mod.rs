@@ -81,13 +81,14 @@ pub fn build_core_context_with_policy_writer(
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
 ) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
-    build_core_context_parts(
+    let (ctx, writer, _) = build_core_context_parts(
         cfg,
         notif,
         runtime,
         Arc::new(adapters::git_credentials::KeyringCredentialSource),
         None,
-    )
+    );
+    (ctx, writer)
 }
 
 /// [`build_core_context`] with the source every origin-authenticating git
@@ -110,16 +111,22 @@ pub fn build_core_context_with_credentials(
 /// `ctx.app_version` and calls `start_socket`. The policy writer is returned
 /// for the same reason [`build_core_context_with_policy_writer`] returns it.
 ///
-/// Hub requests are not bound in `LocalOnly`: a request reaching a runner's
-/// socket goes unanswered and is delivered again on a later connection,
-/// until the runner judges requests itself.
+/// In `LocalOnly` nothing is bound to answer Hub requests: the caller binds
+/// them with the returned [`HubRequestBinding`] once it has built the
+/// [`ports::hub::HubRunControl`] its own control surface stands behind, and
+/// before it calls `start_socket`. Until then a request reaching the socket
+/// goes unanswered and is delivered again on a later connection.
 pub fn build_core_context_with_hub_store(
     cfg: CoreConfig,
     notif: Arc<dyn NotificationPort>,
     runtime: tokio::runtime::Handle,
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
     hub_secrets: Arc<dyn ports::hub::HubSecretStore>,
-) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
+) -> (
+    AppContext,
+    Arc<dyn ports::hub::HubPolicyWriter>,
+    HubRequestBinding,
+) {
     build_core_context_parts(
         cfg,
         notif,
@@ -130,6 +137,38 @@ pub fn build_core_context_with_hub_store(
             instance_fallback: crate::domain::hub_pairing::RUNNER_INSTANCE_FALLBACK,
         }),
     )
+}
+
+/// What binding the Hub request handler takes besides the context: the two
+/// repositories composition holds and [`AppContext`] does not carry. There is
+/// no policy writer among them, and never may be (docs/HUB.md §7).
+#[derive(Clone)]
+pub struct HubRequestBinding {
+    pins: Arc<dyn ports::hub::HubPinRepository>,
+    passkeys: Arc<dyn ports::hub::HubPasskeyTrust>,
+}
+
+impl HubRequestBinding {
+    /// Bind the handler over `ctx` and `runs` to `ctx.hub`'s socket. A
+    /// context that cannot pair has no socket to bind to, and nothing is
+    /// done; a second binding is ignored, as
+    /// [`adapters::hub::HubPairing::bind_requests`] ignores it.
+    pub fn bind(self, ctx: Arc<AppContext>, runs: Arc<dyn ports::hub::HubRunControl>) {
+        let Some(hub) = ctx.hub.clone() else {
+            return;
+        };
+        let ports = application::hub_requests::HubRequestPorts {
+            requests: ctx.hub_requests.clone(),
+            policy: ctx.hub_policy.clone(),
+            pins: self.pins,
+            passkeys: self.passkeys,
+            attachments: hub.attachments(),
+            now_ms: Arc::new(crate::shared::time::now_ms),
+        };
+        hub.bind_requests(Arc::new(
+            application::hub_requests::HubRequests::new(ctx, ports).with_runs(runs),
+        ));
+    }
 }
 
 /// The store a caller of [`build_core_context_with_hub_store`] pairs
@@ -145,7 +184,11 @@ fn build_core_context_parts(
     runtime: tokio::runtime::Handle,
     git_credentials: Arc<dyn ports::git_credentials::GitCredentialSource>,
     hub_store: Option<HubStore>,
-) -> (AppContext, Arc<dyn ports::hub::HubPolicyWriter>) {
+) -> (
+    AppContext,
+    Arc<dyn ports::hub::HubPolicyWriter>,
+    HubRequestBinding,
+) {
     let CoreConfig {
         app_data_dir,
         execution_mode,
@@ -538,23 +581,21 @@ fn build_core_context_parts(
     application::cache_sweep::start_cache_sweep(ctx.clone(), &runtime);
 
     // Before `start_socket`, which `src-tauri/src/lib.rs` calls once this
-    // returns, so the first connection already answers what it is sent.
-    // Desktop only: see `build_core_context_with_hub_store`.
-    if let (ExecutionMode::Router, Some(hub)) = (&execution_mode, &ctx.hub) {
-        hub.bind_requests(Arc::new(application::hub_requests::HubRequests::new(
-            Arc::new(ctx.clone()),
-            application::hub_requests::HubRequestPorts {
-                requests: ctx.hub_requests.clone(),
-                policy: ctx.hub_policy.clone(),
-                pins: hub_pins,
-                passkeys: hub_passkeys,
-                attachments: hub.attachments(),
-                now_ms: Arc::new(crate::shared::time::now_ms),
-            },
-        )));
+    // returns, so the first connection already answers what it is sent. A
+    // desktop's requests land in its own launch and stop buttons; a runner's
+    // land in its control socket's, which only the runner can build, so it
+    // binds them itself (see `build_core_context_with_hub_store`).
+    let binding = HubRequestBinding {
+        pins: hub_pins,
+        passkeys: hub_passkeys,
+    };
+    if matches!(execution_mode, ExecutionMode::Router) {
+        let ctx = Arc::new(ctx.clone());
+        let runs = Arc::new(application::hub_requests::DesktopRuns::new(ctx.clone()));
+        binding.clone().bind(ctx, runs);
     }
 
-    (ctx, hub_policy_writer)
+    (ctx, hub_policy_writer, binding)
 }
 
 /// Shares `app_version` with the context, so the version the desktop sets

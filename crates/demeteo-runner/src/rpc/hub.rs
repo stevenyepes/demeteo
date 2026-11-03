@@ -13,9 +13,9 @@ use crate::hub::HubControl;
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::application::hub_settings::save_hub_policy;
 use demeteo_core::domain::hub_pairing::device::{DevicePairing, DeviceTicket};
-use demeteo_core::domain::hub_pairing::{HubMachine, HubPairingError, HubStatus};
+use demeteo_core::domain::hub_pairing::runner_view::{HubStatusView, PairStateView};
+use demeteo_core::domain::hub_pairing::{HubPairingError, HubStatus};
 use demeteo_core::domain::hub_request::HubLocalPolicy;
-use demeteo_core::domain::hub_socket::connection::HubConnection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -31,25 +31,6 @@ struct PairBeginParams {
 #[derive(Debug, Deserialize)]
 struct PolicySetParams {
     policy: HubLocalPolicy,
-}
-
-/// `hub_pair_state` on the wire. A success reads `idle`; `hub_status` is what
-/// says paired.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-enum PairStateView {
-    Idle,
-    Pending { ticket: DeviceTicket },
-    Failed { error: String },
-}
-
-#[derive(Debug, Serialize)]
-struct HubStatusView {
-    status: HubStatus,
-    /// Why the sealed store cannot hold the Hub credentials, when it cannot.
-    store_unavailable: Option<String>,
-    connection: HubConnection,
-    machine: HubMachine,
 }
 
 /// The `hub_*` methods, or `None` for any other, so `dispatch` falls through

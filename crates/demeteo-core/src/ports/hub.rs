@@ -315,6 +315,33 @@ pub trait HubRequestHandler: Send + Sync {
     async fn handle(&self, text: &str) -> Option<RequestResult>;
 }
 
+pub use crate::domain::hub_request::StartSupport;
+
+/// What a Hub start and a Hub cancel land in on this instance: the calls its
+/// own control surface makes (decision 64, read per instance). A desktop's
+/// is its launch and stop buttons; a runner's is its control socket's
+/// cancel, which also ends the run's row and drops its credential.
+///
+/// Assignment and gate decisions are not here: they already reach the same
+/// call on every instance, [`crate::application::step_control`] and the
+/// presenter's `gate_decide`.
+#[async_trait]
+pub trait HubRunControl: Send + Sync {
+    /// Read before the committed total is loaded or any attachment fetched:
+    /// a fetch deletes the Hub's copy, so a start this instance will refuse
+    /// must be refused first.
+    fn starts(&self) -> StartSupport;
+
+    /// Never called when [`Self::starts`] is [`StartSupport::Refused`].
+    async fn launch(
+        &self,
+        launch: crate::ports::step_executor::FeatureLaunch,
+    ) -> Result<crate::domain::ids::FeatureId, AppError>;
+
+    /// Stop the run of `feature_id`, wherever it executes.
+    async fn cancel(&self, feature_id: &crate::domain::ids::FeatureId) -> Result<(), AppError>;
+}
+
 pub trait BrowserLauncher: Send + Sync {
     fn open(&self, url: &str) -> Result<(), String>;
 }

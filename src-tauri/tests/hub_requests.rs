@@ -165,7 +165,7 @@ mod decision {
     };
     use demeteo_core::domain::hub_request::{
         attachment_refusal, decide, effective_scopes, precheck, AttachmentLimits, Consumption,
-        DropReason, ExecuteKind, HubLocalPolicy, Precheck, SignatureCheck, Verdict,
+        DropReason, ExecuteKind, HubLocalPolicy, Precheck, SignatureCheck, StartSupport, Verdict,
     };
     use demeteo_hub::protocol::{
         AttachmentRef, CancelFeature, Decision, GateDecision, PasskeyEndorsement,
@@ -239,6 +239,7 @@ mod decision {
         now: u64,
         consumption: Consumption,
         committed: u64,
+        starts: StartSupport,
         expected: Kind,
     }
 
@@ -253,6 +254,7 @@ mod decision {
             now: LIVE,
             consumption: Consumption::Fresh,
             committed: 0,
+            starts: StartSupport::Launches,
             expected,
         }
     }
@@ -303,6 +305,7 @@ mod decision {
                     row.consumption,
                     Some(row.committed),
                     &row.policy,
+                    row.starts,
                 ),
             },
         )
@@ -356,6 +359,53 @@ mod decision {
                     "d: total one cent over daily",
                     start(Some(500)),
                     refuse(OverRollingCeiling),
+                )
+            },
+            // An instance that launches no Hub start (a runner): refused
+            // before any ceiling, and only after the replay check.
+            Row {
+                starts: StartSupport::Refused,
+                ..row(
+                    "refused starts: within both ceilings",
+                    start(Some(100)),
+                    refuse(UnknownKind),
+                )
+            },
+            Row {
+                starts: StartSupport::Refused,
+                committed: 1_501,
+                ..row(
+                    "refused starts: over both ceilings",
+                    start(None),
+                    refuse(UnknownKind),
+                )
+            },
+            Row {
+                starts: StartSupport::Refused,
+                consumption: Consumption::AlreadyConsumed,
+                ..row(
+                    "refused starts: replayed",
+                    start(Some(100)),
+                    refuse(Replayed),
+                )
+            },
+            Row {
+                starts: StartSupport::Refused,
+                policy: policy(false, true, Some(500), Some(2_000)),
+                ..row(
+                    "refused starts: spend off is still scope_off",
+                    start(Some(100)),
+                    refuse(ScopeOff),
+                )
+            },
+            Row {
+                starts: StartSupport::Refused,
+                ..row(
+                    "refused starts: a cancel still executes",
+                    RequestPayload::CancelFeature(CancelFeature {
+                        feature_id: "f-1".into(),
+                    }),
+                    Kind::Cancel,
                 )
             },
             // (e)
@@ -538,7 +588,13 @@ mod decision {
     #[test]
     fn a_start_without_a_committed_total_is_refused() {
         assert_eq!(
-            decide(&start(Some(1)), Consumption::Fresh, None, &open()),
+            decide(
+                &start(Some(1)),
+                Consumption::Fresh,
+                None,
+                &open(),
+                StartSupport::Launches
+            ),
             Verdict::Refuse(RefusalReason::OverRollingCeiling)
         );
     }
@@ -1363,7 +1419,7 @@ mod handler {
     use demeteo_core::error::AppError;
     use demeteo_core::ports::hub::{
         AttachmentFetchError, HubAttachmentFetcher, HubPasskeyTrust, HubPinRepository,
-        HubRequestHandler,
+        HubRequestHandler, HubRunControl, StartSupport,
     };
     use demeteo_core::ports::step_executor::{
         FeatureLaunch, StepExecutor, SyncOutcomeView, SyncResolverView,
@@ -1727,6 +1783,13 @@ mod handler {
         fn with_fetch_deadline(self, deadline: std::time::Duration) -> Self {
             Self {
                 handler: self.handler.with_fetch_deadline(deadline),
+                ..self
+            }
+        }
+
+        fn with_runs(self, runs: Arc<dyn HubRunControl>) -> Self {
+            Self {
+                handler: self.handler.with_runs(runs),
                 ..self
             }
         }
@@ -2604,6 +2667,118 @@ mod handler {
         assert_eq!(desktop.spy.effects(), 1);
         assert_eq!(
             desktop.last_log(),
+            (LogKind::CancelFeature, LogOutcome::Accepted, None)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A runner's run control, as far as the handler sees it: starts
+    /// refused, and each cancel recorded. A launch is a test failure.
+    #[derive(Default)]
+    struct RefusingStarts {
+        cancels: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl HubRunControl for RefusingStarts {
+        fn starts(&self) -> StartSupport {
+            StartSupport::Refused
+        }
+
+        async fn launch(&self, _: FeatureLaunch) -> Result<FeatureId, AppError> {
+            panic!("a start this instance refuses was launched")
+        }
+
+        async fn cancel(&self, feature_id: &FeatureId) -> Result<(), AppError> {
+            self.cancels
+                .lock()
+                .expect("lock")
+                .push(feature_id.as_ref().to_string());
+            Ok(())
+        }
+    }
+
+    /// Fails every fetch, counting them: a fetch deletes the Hub's copy, so
+    /// any call at all is the failure under test.
+    #[derive(Default)]
+    struct NoFetches {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl HubAttachmentFetcher for NoFetches {
+        async fn fetch(&self, _: &AttachmentRef) -> Result<Vec<u8>, AttachmentFetchError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(AttachmentFetchError::Unavailable(
+                "no fetch was expected".into(),
+            ))
+        }
+    }
+
+    /// D1: a runner spends the id and refuses `unknown_kind` before it reads
+    /// the committed total or fetches anything, so the Hub keeps both
+    /// attachments and a redelivery reads `replayed`.
+    #[tokio::test]
+    async fn a_start_to_an_instance_that_refuses_starts_is_unknown_kind_before_any_fetch() {
+        let hub = Hub::new();
+        let dir = paired("refused-start", &hub).await;
+        let fetches = Arc::new(NoFetches::default());
+        let fetcher = fetches.clone();
+        let runner = Desktop::open_with(&dir, move |_| fetcher)
+            .with_runs(Arc::new(RefusingStarts::default()));
+        let bytes = b"attached from the phone".to_vec();
+        let attachment = AttachmentRef {
+            id: ATTACHMENT_ID.into(),
+            size: bytes.len() as u64,
+            sha256: sha256_hex(&bytes),
+        };
+        let text = hub
+            .signed(start(
+                "r-refused-start",
+                vec![attachment.clone(), attachment],
+            ))
+            .await;
+
+        let first = runner.handle(&text).await.expect("an answer");
+
+        assert_eq!(first.outcome, refused(RefusalReason::UnknownKind));
+        assert_eq!(fetches.calls.load(Ordering::SeqCst), 0);
+        assert!(runner.spy.launches().is_empty());
+        assert_eq!(
+            runner.last_log(),
+            (
+                LogKind::StartFeature,
+                LogOutcome::Refused,
+                Some("unknown_kind".into())
+            )
+        );
+
+        let second = runner.handle(&text).await.expect("an answer");
+
+        assert_eq!(second.outcome, refused(RefusalReason::Replayed));
+        assert_eq!(fetches.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(runner.log_len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A cancel lands in the run control the handler was built with, not in
+    /// the executor behind it.
+    #[tokio::test]
+    async fn an_accepted_cancel_reaches_the_instance_run_control() {
+        let hub = Hub::new();
+        let dir = paired("cancel-runs", &hub).await;
+        let runs = Arc::new(RefusingStarts::default());
+        let runner = Desktop::open(&dir).with_runs(runs.clone());
+        runner.seed_run();
+        let text = hub.signed(cancel("r-cancel-runs", "f-1")).await;
+
+        let result = runner.handle(&text).await.expect("an answer");
+
+        assert_eq!(result.outcome, RequestOutcome::Accepted);
+        assert_eq!(*runs.cancels.lock().expect("lock"), vec!["f-1".to_string()]);
+        assert_eq!(runner.spy.effects(), 0);
+        assert_eq!(
+            runner.last_log(),
             (LogKind::CancelFeature, LogOutcome::Accepted, None)
         );
         let _ = std::fs::remove_dir_all(dir);
