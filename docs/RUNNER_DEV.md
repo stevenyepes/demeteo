@@ -144,6 +144,13 @@ matches. Ctrl-C cancels. Then `hub status`, `hub policy` (no flags prints it;
 socket, so `serve` must be up; the same `hub_*` methods are what a desktop calls
 over SSH. Only `hub seal` works without `serve`.
 
+From a desktop, the runner's Hub panel on its machine card in `Settings →
+Machines` does the same over SSH: pair (it shows the code, the `#/device` URL
+and the fingerprint), status, policy, activity log and disconnect. A runner
+too old for a method is named as such there. Once paired, `serve` answers the
+Hub's cancels, assignments and gate decisions and refuses its starts
+(`unknown_kind`, nothing fetched); `hub log` shows each.
+
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `cannot pair: … CREDENTIALS_DIRECTORY is not set` | The unit loads no key: never sealed, or not restarted since | `hub seal`, then restart the unit |

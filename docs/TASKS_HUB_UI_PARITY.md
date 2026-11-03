@@ -177,6 +177,11 @@ burst of edits sends one. Test the trigger decision without a live socket. npm r
 
 **Title:** Relay runner-owned runs to the Hub
 
+> **Overtaken.** The premise below no longer holds: a runner pairs itself and
+> reports its own runs, and the desktop reports a shadow only while its runner
+> is not paired to the same Hub (docs/HUB.md §5 *Events and the cursor*). Read
+> that before picking this up.
+
 ```text
 docs/HUB.md §10 and §5 "Events and the cursor": the desktop relays local runs only, so a run
 detached to a demeteo-runner never appears on the Hub. The desktop already mirrors those runs

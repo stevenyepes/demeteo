@@ -70,7 +70,11 @@ worked example:
   desktop-side write to a detached run's feature row is clobbered by the next
   `hydrate_shadow_feature` and lost without a trace, so the executor's shadow
   guard makes it an error and the UI routes to the remote twin. The guard lives
-  in the executor, not only in the UI — the UI is not the only caller.
+  in the executor, not only in the UI — the UI is not the only caller. Callers
+  that name a Feature or a step and nothing else — the stop button's
+  `feature_cancel`, retry, assignment, a Hub request — go through
+  `application/step_control.rs`, which resolves the owner once and sends a
+  runner-owned run to its twin.
 - **An older runner answers `unknown method: set_step_assignment`, and that
   must surface as a failure.** The desktop cannot tell "the runner applied it"
   from "the runner had never heard of it" except by that message, so it is
