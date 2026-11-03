@@ -28,6 +28,14 @@ pub struct HubStatusView {
     pub machine: HubMachine,
 }
 
+/// Whether a control-socket `error` says the runner predates the method it
+/// was asked: a desktop manages runners older than itself, and one from
+/// before Hub pairing, or before its activity log, is a version to name, not
+/// a failure to report.
+pub fn runner_lacks_method(error: &str) -> bool {
+    error.starts_with("unknown method")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +73,15 @@ mod tests {
         let value =
             serde_json::to_value(PairStateView::Failed { error: "x".into() }).expect("serializes");
         assert_eq!(value, serde_json::json!({"state": "failed", "error": "x"}));
+    }
+
+    #[test]
+    fn only_the_dispatchers_own_refusal_reads_as_an_older_runner() {
+        assert!(runner_lacks_method("unknown method: hub_request_log"));
+        assert!(!runner_lacks_method(
+            "Hub pairing is not available on this runner: it has no HTTP client for the Hub"
+        ));
+        assert!(!runner_lacks_method("invalid params: unknown method field"));
     }
 
     #[test]
