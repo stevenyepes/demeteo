@@ -79,7 +79,7 @@
 | 68 | Hub storage and custody | **Postgres, plus OpenBao (MPL-2.0, the Linux Foundation fork of Vault) with its Transit engine for envelope encryption, shipped as Docker Compose: `hub`, `postgres`, `openbao`, `caddy`.** Hub server secrets live in OpenBao or are encrypted under Transit, never plaintext in Postgres. **Rejected:** HashiCorp Vault — BSL, not open source; Cosmian/Eviden KMS — source-available licensing. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
 | 69 | Hub code layout | **`crates/demeteo-hub` (axum server), `crates/demeteo-hub-protocol` (serde-only wire types shared by the desktop client and the Hub), and `hub-web/` (a second Vite entry in this repo reusing `src/components/canvas` and the `src/App.css` tokens).** **Rejected:** the Hub linking `demeteo-core` in v1 — it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
 | 70 | Feature labels on the Hub | **A paired desktop's snapshot names its newest Features — id, Project, the Workflow version pinned, and the title the user gave it, scrubbed and cut to 200 characters — and its registered harness kinds, behind `read` like the rest of the snapshot.** The title is the second piece of user-authored content on the Hub after attachments, and unlike them it is kept until the next snapshot replaces it. The launch description, the PR title and body, prompts, transcripts and diffs still never leave an instance. **Rejected:** a per-Feature frame on the event stream — a second cursor-less channel the Hub would have to merge, where the snapshot is already replaced wholesale and already gated on `read`; ids alone — the fleet and runs views were unreadable as `f-1793…` and `s-gate-review`; carrying the description — it is the run's prompt body, not a label. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-10-29 |
-| 71 | Git credentials for Hub-started runner runs | **The Hub mints one per run, short-lived, and stores none.** GitHub first: a Demeteo GitHub App whose private key is held and used inside OpenBao Transit. For each run the Hub requests an installation token limited to the run's one repository and to `contents: write` and `pull_requests: write`, which GitHub expires after an hour. The runner fetches it over its own socket once it has accepted the start, never inside the signed request, whose stored envelope would keep it (amended 2026-11-03; [decision 64](#1-the-locked-decisions)); the runner asks for a fresh one whenever it needs the remote again, and holds it only in its per-run memory store. The App's bot account pushes and opens the pull request. **GitLab:** a dedicated bot user, a member of only the chosen projects, authorizes an OAuth application with `write_repository` alone; the Hub keeps its rotating refresh token under Transit and mints a two-hour access token per run, and the merge request is opened by git push options. **Rejected:** a runner storing its own git credential (a standing secret on an idle runner, rotated host by host); the Hub storing PATs; per-tenant SSH certificate authorities. **Accepted:** a compromised Hub can mint write tokens for every repository the App is installed on and every project the GitLab bot belongs to, bounded by single tenancy ([decision 63](#1-the-locked-decisions)) and by installing the App on selected repositories only. Detail: [71](#71--runner-git-credentials-detail). | 2026-10-29 |
+| 71 | Git credentials for Hub-started runner runs | **The Hub mints one per run, short-lived, and stores none.** GitHub first: a Demeteo GitHub App whose private key is held and used inside OpenBao Transit. For each run the Hub requests an installation token limited to the run's one repository and to `contents: write` and `pull_requests: write`, which GitHub expires after an hour. The runner fetches it from the Hub's `POST /git-token` once it has accepted the start, never inside the signed request, whose stored envelope would keep it (amended 2026-11-03; [decision 64](#1-the-locked-decisions)), and not over the socket, which the Hub closes every 15 minutes (amended 2026-11-04); the runner fetches a fresh one before the one it holds expires, and holds it only in its per-run memory store. The App's bot account pushes and opens the pull request. **GitLab:** a dedicated bot user, a member of only the chosen projects, authorizes an OAuth application with `write_repository` alone; the Hub keeps its rotating refresh token under Transit and mints a two-hour access token per run, and the merge request is opened by git push options. **Rejected:** a runner storing its own git credential (a standing secret on an idle runner, rotated host by host); the Hub storing PATs; per-tenant SSH certificate authorities. **Accepted:** a compromised Hub can mint write tokens for every repository the App is installed on and every project the GitLab bot belongs to, bounded by single tenancy ([decision 63](#1-the-locked-decisions)) and by installing the App on selected repositories only. Detail: [71](#71--runner-git-credentials-detail). | 2026-10-29 |
 
 ### 44 — Harness baseline (detail)
 
@@ -488,9 +488,9 @@ becomes a run on a runner that has no Project or Workflow of its own:
   would be unsigned and need a new route.
 - **No start until the run can reach its repository.** A runner's `starts`
   answers that it launches only when a seam for the run's git credential is
-  composed. Until the Hub mints tokens none is, and every start is refused
-  `unknown_kind` with nothing fetched, so no attachment is spent on a run that
-  could not clone. The seam fetches the first token over the socket after the
+  composed. Without one every start is refused `unknown_kind` with nothing
+  fetched, so no attachment is spent on a run that could not clone. A paired
+  runner composes it: the seam fetches the first token from the Hub after the
   start is accepted, which amends
   [decision 71](#71--runner-git-credentials-detail)'s delivery.
 - **The ceiling counts from acceptance, on the run row.** A runner records a
@@ -553,16 +553,22 @@ only while that run is live, only for that run's repository, and only with
 Postgres, never logged, and never reused across runs. The App is installed on
 selected repositories, never on all of an account's.
 
-**Delivery and refresh.** The runner fetches the first token over its socket
-once it has accepted the `start_feature`, never inside the signed request: a
-request's envelope is stored for as long as its row lives
+**Delivery and refresh.** The runner fetches the first token once it has
+accepted the `start_feature`, never inside the signed request: a request's
+envelope is stored for as long as its row lives
 ([HUB.md §9](HUB.md#9-storage-custody-and-layout)), so a token signed into it
 would sit in `instance_requests.envelope` past its use, against the rule that a
 minted token is never stored (amended 2026-11-03,
-[*Hub-started runner runs*](#64--hub-instances-detail)). GitHub expires a token
-after an hour and a pipeline can run for longer, so the runner asks the Hub for
-a fresh one over its socket whenever it needs the remote and the one it holds is
-near expiry or refused. The Hub must
+[*Hub-started runner runs*](#64--hub-instances-detail)). It fetches over an
+HTTPS route, `POST /git-token`, admitted like the socket, and not over the
+socket itself (amended 2026-11-04): the Hub closes the socket every 15 minutes
+by design ([HUB.md §11 item 6](HUB.md#11-what-is-not-decided)), so a fetch at
+push time could fall in a reconnect gap, and the protocol crate is built to
+carry no field shaped to hold a secret. The first fetch binds the start to the
+Feature it names, and the Hub mints only while that Feature's newest event is
+not terminal. GitHub expires a token after an hour and a pipeline can run for
+longer, so the runner fetches a fresh one 10 minutes before the one it holds
+expires ([HUB.md §6.5](HUB.md#65-git-tokens-for-hub-started-runs)). The Hub must
 therefore be up when a run pushes; the desktop need not be. On the runner, the
 token lives in the per-run memory store of `crates/demeteo-runner/src/credentials.rs`
 and is wiped when the run ends, as an injected PAT is today.

@@ -148,14 +148,18 @@ From a desktop, the runner's Hub panel on its machine card in `Settings →
 Machines` does the same over SSH: pair (it shows the code, the `#/device` URL
 and the fingerprint), status, policy, activity log and disconnect. A runner
 too old for a method is named as such there. Once paired, `serve` answers the
-Hub's cancels, assignments and gate decisions and refuses its starts
-(`unknown_kind`, nothing fetched); `hub log` shows each.
+Hub's cancels, assignments, gate decisions and starts; `hub log` shows each. A
+Hub-started run (`hub-<id>`) gets its GitHub token from the Hub's
+`POST /git-token`, not from a desktop ([`HUB.md`](HUB.md) §6.5), so the Hub
+must be up whenever the run pushes.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `cannot pair: … CREDENTIALS_DIRECTORY is not set` | The unit loads no key: never sealed, or not restarted since | `hub seal`, then restart the unit |
 | `hub seal` fails in `systemd-creds encrypt --user` | systemd older than 256 has no user-scoped credentials | That host cannot pair (decision 64); it still runs work |
 | `hub seal` says a key is sealed already | Re-running it keeps the key, so an upgrade keeps the pairing | `hub seal --force` replaces it and forgets the pairing; pair again |
+| A `hub-…` run stays `needs-credentials` | The token keeper stopped: the journal says `run <id>: no more git tokens from the Hub: <reason>`. A `422` is a GitLab or unknown-host repository; a `503` that never clears is the Hub's App config, its Transit policy, or the App not installed on that repository | Fix the Hub side, then retry the run |
+| After a restart, `no accepted Hub start is logged for it` | The run's accepted start never reached `hub_request_log`, so its keeper cannot be restarted | Cancel and start the run again from the Hub |
 | `cannot reach demeteo-runner serve` | The service is stopped, or `XDG_DATA_HOME` differs from the unit's | `systemctl --user status demeteo-runner` |
 
 The sealed key is `hub-store-key.cred` in the runner's data dir and the drop-in
