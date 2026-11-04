@@ -52,14 +52,15 @@ use crate::domain::hub_socket::connection::{
 use crate::domain::hub_socket::{sends_events, RefreshEnd};
 use crate::error::AppError;
 use crate::ports::hub::{
-    BrowserLauncher, HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository, HubPolicyReader,
-    HubRefreshEndpoint, HubRequestHandler, HubSecretStore, HubTokenEndpoint,
+    BrowserLauncher, HubAttachmentFetcher, HubDeviceEndpoint, HubGitTokenFetcher, HubPinRepository,
+    HubPolicyReader, HubRefreshEndpoint, HubRequestHandler, HubSecretStore, HubTokenEndpoint,
 };
 use crate::shared::time::now_secs;
 use crate::state::AppVersion;
 
 use self::attachments::{HubAttachments, PairedAttachments};
 use self::device_key::DeviceKey;
+use self::git_tokens::{HubGitTokens, PairedGitTokens};
 use self::loopback::CallbackListener;
 use self::socket::session::{RequestHandlerSlot, SessionContext};
 use self::socket::status::ConnectionCell;
@@ -67,6 +68,7 @@ use self::socket::{Sleeper, SocketConfig, SocketTask, SupervisorDeps, TokioSleep
 
 pub mod attachments;
 pub mod device_key;
+pub mod git_tokens;
 #[cfg(feature = "keyring")]
 pub mod keyring_store;
 pub mod loopback;
@@ -677,6 +679,12 @@ impl HubPairing {
         Arc::new(PairedAttachments::new(self.refresher.clone()))
     }
 
+    /// [`Self::attachments`] for the `/git-token` route a paired runner
+    /// asks for a Hub-started run's credential (decision 71).
+    pub fn git_tokens(&self) -> Arc<dyn HubGitTokenFetcher> {
+        Arc::new(PairedGitTokens::new(self.refresher.clone()))
+    }
+
     /// Takes the running socket, if any, and raises its stop signal.
     fn stop_socket(&self) -> Option<SocketTask> {
         let task = self
@@ -810,6 +818,18 @@ impl Refresher {
             return Ok(None);
         };
         HubAttachments::new(paired.hub_origin, key, Arc::new(self.clone())).map(Some)
+    }
+
+    /// Made per call, as [`Self::attachment_fetcher`] is.
+    fn git_token_fetcher(&self) -> Result<Option<HubGitTokens>, HubPairingError> {
+        let Some(paired) = self.pins.load().map_err(storage)? else {
+            return Ok(None);
+        };
+        let install_id = self.pins.install_id().map_err(storage)?;
+        let Some(key) = self.stored_device_key(&install_id)? else {
+            return Ok(None);
+        };
+        HubGitTokens::new(paired.hub_origin, key, Arc::new(self.clone())).map(Some)
     }
 
     async fn refresh_access(&self) -> Result<SecretString, RefreshEnd> {

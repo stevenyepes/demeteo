@@ -107,6 +107,7 @@ fn hub_start(agent_kind: Option<&str>) -> StartFeature {
 
 fn hub_launch(start: StartFeature) -> HubLaunch {
     HubLaunch {
+        request_id: "req-7f3a".into(),
         start,
         launch: FeatureLaunch {
             staged_attachments: vec![StagedAttachmentInput {

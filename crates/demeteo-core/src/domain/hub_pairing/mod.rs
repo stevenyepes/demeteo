@@ -30,7 +30,8 @@ pub mod runner_view;
 pub mod sealed;
 
 pub use answer::{
-    HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, RefreshAnswer, SecretString,
+    GitTokenAnswer, HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, RefreshAnswer,
+    SecretString,
 };
 
 /// The scopes a desktop requests: every [`demeteo_hub_protocol::Scope`], in its

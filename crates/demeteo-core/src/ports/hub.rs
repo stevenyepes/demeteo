@@ -1,7 +1,7 @@
 //! What pairing with the Demeteo Hub, and the requests it relays, need from
 //! the outside world: the OS keyring (or a runner's sealed store), SQLite,
-//! the Hub's `/token`, `/device_authorization`, `/socket` and
-//! `/attachments`, and a browser.
+//! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`
+//! and `/git-token`, and a browser.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
@@ -139,6 +139,9 @@ pub trait HubRequestRepository: Send + Sync {
     fn append_log(&self, entry: &HubRequestLogEntry) -> Result<(), AppError>;
     /// Newest first.
     fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogRow>, AppError>;
+    /// The id of the start this instance accepted as `feature_id`, newest
+    /// first if it was logged more than once.
+    fn accepted_start_of(&self, feature_id: &str) -> Result<Option<String>, AppError>;
 }
 
 /// The `hub_local_policy` row (V65), read side only. This is what the request
@@ -297,6 +300,41 @@ pub trait HubAttachmentFetcher: Send + Sync {
     async fn fetch(&self, attachment: &AttachmentRef) -> Result<Vec<u8>, AttachmentFetchError>;
 }
 
+/// A Hub-started run's GitHub App installation token, as `/git-token`
+/// minted it (decision 71). `Debug` prints the token `<redacted>`.
+#[derive(Debug, Clone)]
+pub struct HubGitToken {
+    pub token: SecretString,
+    /// Unix seconds, by the Hub's clock.
+    pub expires_at: u64,
+}
+
+/// Why [`HubGitTokenFetcher::fetch`] returned no token. No variant carries
+/// the token, a URL or a response body.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum GitTokenFetchError {
+    /// The Hub answered with a non-2xx status, after the one access-token
+    /// refresh a `401` earns.
+    #[error("the Hub refused the git token with HTTP {status}")]
+    Refused { status: u16 },
+    /// No answer, an unreadable one, or no access token or device key to
+    /// ask with.
+    #[error("the git token could not be fetched: {0}")]
+    Unavailable(String),
+}
+
+/// The Hub's `POST /git-token`: a fresh token for the run a runner accepted
+/// `request_id` as, under `feature_id`. Each call mints anew, so a caller
+/// asks only when it needs one.
+#[async_trait]
+pub trait HubGitTokenFetcher: Send + Sync {
+    async fn fetch(
+        &self,
+        request_id: &str,
+        feature_id: &str,
+    ) -> Result<HubGitToken, GitTokenFetchError>;
+}
+
 /// What the instance socket hands each request frame to. A port rather than
 /// [`crate::application::hub_requests::HubRequests`] itself so the socket
 /// adapter does not depend on `application/`.
@@ -323,6 +361,9 @@ pub use demeteo_hub_protocol::{RefusalReason, RunnerStart, StartFeature};
 /// A start that passed every check, its attachments fetched.
 #[derive(Debug, Clone)]
 pub struct HubLaunch {
+    /// The signed request's id, which a runner presents to `/git-token`
+    /// for the run's credential.
+    pub request_id: String,
     /// The request as signed. A runner builds its run from this and its
     /// [`RunnerStart`], through
     /// [`crate::domain::hub_request::runner_run_spec`]; the wall clock and

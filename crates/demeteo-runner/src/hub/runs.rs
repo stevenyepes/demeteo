@@ -60,7 +60,7 @@ impl RunnerHubRuns {
     /// refused start committed nothing.
     async fn submit_start(
         &self,
-        HubLaunch { start, launch }: HubLaunch,
+        HubLaunch { start, launch, .. }: HubLaunch,
         run_id: &str,
         spool: &Path,
     ) -> Result<FeatureId, AppError> {

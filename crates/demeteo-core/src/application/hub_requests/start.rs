@@ -79,7 +79,7 @@ impl HubRequests {
     /// that would read as `Replayed`. `RefusalReason` has no generic failure,
     /// so one that is not a lookup or an attachment is `MalformedBody`, with
     /// the detail kept to this instance's own log.
-    pub(super) async fn start(&self, start: &StartFeature) -> Settled {
+    pub(super) async fn start(&self, request_id: &str, start: &StartFeature) -> Settled {
         if let Err(reason) = self.runs.resolve(start) {
             return Settled::refused(reason);
         }
@@ -113,6 +113,7 @@ impl HubRequests {
             }
         }
         let launch = HubLaunch {
+            request_id: request_id.to_owned(),
             launch: feature_launch(start, typed),
             start: start.clone(),
         };
