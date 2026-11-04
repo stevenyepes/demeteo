@@ -10,7 +10,7 @@ use super::port::GitTokenStore;
 use super::postgres::PostgresGitTokens;
 use super::verdict::{
     body_verdict, bound_verdict, liveness_verdict, mint_verdict, repository_verdict, start_verdict,
-    TokenRefusal,
+    window_verdict, TokenRefusal,
 };
 use crate::auth::handlers::{header_text, store_failed, unix_now, ApiError};
 use crate::pairing::access::{self, refusal, Admission};
@@ -33,7 +33,8 @@ pub const GIT_TOKEN_PATH: &str = "/git-token";
 const GIT_TOKEN_METHOD: &str = "POST";
 
 /// The token for the run `body` names, minted now for the instance
-/// `admission` admitted. `now` is Unix seconds.
+/// `admission` admitted. `now` is Unix seconds, and `default_window_secs`
+/// the window of a start that names no wall clock of its own.
 ///
 /// The Feature is bound before the token is minted, so that a mint that
 /// fails leaves the binding the runner will ask again under. The binding is
@@ -46,6 +47,7 @@ pub async fn issue(
     admission: &Admission,
     body: &[u8],
     now: u64,
+    default_window_secs: u64,
 ) -> Result<InstallationToken, ApiError> {
     let body = body_verdict(body)?;
     let id = named_request(&body.request_id).ok_or(TokenRefusal::NoStart)?;
@@ -60,6 +62,9 @@ pub async fn issue(
         .await
         .map_err(store_failed)?;
     let repository = start_verdict(kind, record.as_ref(), &body.feature_id)?;
+    if let Some(record) = &record {
+        window_verdict(record, default_window_secs, now)?;
+    }
     let events = store
         .events(user, instance, &body.feature_id)
         .await
@@ -104,7 +109,15 @@ async fn issued(
     )
     .await?;
     let store = PostgresGitTokens::new(db.clone());
-    issue(&store, state.git_tokens(), &admission, body, now).await
+    issue(
+        &store,
+        state.git_tokens(),
+        &admission,
+        body,
+        now,
+        state.git_token_window_secs(),
+    )
+    .await
 }
 
 /// `POST` [`GIT_TOKEN_PATH`]: `{"token", "expires_at"}`, never cached.
@@ -129,6 +142,7 @@ pub async fn post_git_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git_token::verdict::WINDOW_GRACE_SECS;
     use crate::ports::{GithubRepository, MintError};
     use crate::store::instances::InstanceKind;
     use crate::store::requests::{QueuedEnvelope, RequestId, StartRecord};
@@ -303,8 +317,11 @@ mod tests {
                 signature: "s".to_owned(),
             })),
             git_token_feature_id: None,
+            answered_at: Some(NOW),
         }
     }
+
+    const WINDOW: u64 = 86_400;
 
     fn fleet() -> Fleet {
         Fleet {
@@ -335,10 +352,17 @@ mod tests {
         minter: Option<&dyn GitTokenMinter>,
         feature_id: &str,
     ) -> Result<String, StatusCode> {
-        issue(fleet, minter, &admission(fleet), &body(feature_id), NOW)
-            .await
-            .map(|token| token.secret().to_owned())
-            .map_err(|refused| refused.into_response().status())
+        issue(
+            fleet,
+            minter,
+            &admission(fleet),
+            &body(feature_id),
+            NOW,
+            WINDOW,
+        )
+        .await
+        .map(|token| token.secret().to_owned())
+        .map_err(|refused| refused.into_response().status())
     }
 
     #[tokio::test]
@@ -427,10 +451,10 @@ mod tests {
         }
         let fleet = fleet();
         let other_id = br#"{"request_id":"AAAAAAAAAAAAAAAAAAAAAA","feature_id":"f-1"}"#;
-        let refused = issue(&fleet, None, &admission(&fleet), other_id, NOW).await;
+        let refused = issue(&fleet, None, &admission(&fleet), other_id, NOW, WINDOW).await;
         assert_eq!(refused.unwrap_err(), ApiError::NOT_FOUND);
         let not_an_id = br#"{"request_id":"not base64url!","feature_id":"f-1"}"#;
-        let refused = issue(&fleet, None, &admission(&fleet), not_an_id, NOW).await;
+        let refused = issue(&fleet, None, &admission(&fleet), not_an_id, NOW, WINDOW).await;
         assert_eq!(refused.unwrap_err(), ApiError::NOT_FOUND);
     }
 
@@ -443,6 +467,25 @@ mod tests {
             occurred_at: NOW,
             payload: RunEventPayload::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_start_past_its_window_is_410_and_mints_nothing() {
+        let fleet = Fleet {
+            start: Some(StartRecord {
+                answered_at: Some(NOW - WINDOW - WINDOW_GRACE_SECS - 1),
+                ..accepted_start("github")
+            }),
+            ..fleet()
+        };
+        let minter = Minter::answering(Vec::new());
+
+        assert_eq!(
+            status_of(&fleet, Some(&minter), "f-1").await,
+            Err(StatusCode::GONE)
+        );
+        assert!(minter.asked().is_empty());
+        assert!(fleet.bound.lock().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -503,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn a_body_that_is_no_request_is_400() {
         let fleet = fleet();
-        let refused = issue(&fleet, None, &admission(&fleet), b"{}", NOW).await;
+        let refused = issue(&fleet, None, &admission(&fleet), b"{}", NOW, WINDOW).await;
         assert_eq!(refused.unwrap_err(), ApiError::INVALID_REQUEST);
     }
 }

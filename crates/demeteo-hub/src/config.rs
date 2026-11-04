@@ -38,6 +38,10 @@ const ATTACHMENT_SWEEP_SECS: &str = "DEMETEO_HUB_ATTACHMENT_SWEEP_SECS";
 const GITHUB_APP_ID: &str = "DEMETEO_HUB_GITHUB_APP_ID";
 const GITHUB_APP_KEY: &str = "DEMETEO_HUB_GITHUB_APP_KEY";
 const GITHUB_ENTERPRISE_API_URL: &str = "DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL";
+const GIT_TOKEN_WINDOW_SECS: &str = "DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS";
+/// A day: how long a Hub-started run that names no wall clock may still get
+/// git tokens after its start was accepted.
+pub const DEFAULT_GIT_TOKEN_WINDOW_SECS: u64 = 86_400;
 
 const REDACTED: &str = "<redacted>";
 
@@ -74,6 +78,9 @@ pub struct Config {
     /// no git token, and `POST /git-token` answers `503`. The App key is a
     /// Transit name, as the signing key is, so nothing here is a secret.
     pub github_app: Option<GithubAppSettings>,
+    /// The git-token window of a start that names no wall clock of its own;
+    /// a start that does is held to that instead.
+    pub git_token_window_secs: u64,
 }
 
 impl Config {
@@ -156,6 +163,8 @@ impl Config {
         };
 
         let github_app = github_app(&lookup)?;
+        let git_token_window_secs =
+            positive_or_default(GIT_TOKEN_WINDOW_SECS, DEFAULT_GIT_TOKEN_WINDOW_SECS)?;
 
         Ok(Self {
             bind,
@@ -171,6 +180,7 @@ impl Config {
             web_dir: PathBuf::from(or_default(WEB_DIR, DEFAULT_WEB_DIR)),
             attachments,
             github_app,
+            git_token_window_secs,
         })
     }
 }

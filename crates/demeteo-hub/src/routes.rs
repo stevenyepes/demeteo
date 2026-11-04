@@ -49,6 +49,7 @@ pub struct AppState {
     /// `None` when no GitHub App is configured, and `POST /git-token`
     /// answers `503`. Outside `shared` so that it can be set after `new`.
     git_tokens: Option<Arc<dyn GitTokenMinter>>,
+    git_token_window_secs: u64,
 }
 
 impl AppState {
@@ -78,6 +79,7 @@ impl AppState {
                 attachments,
             }),
             git_tokens: None,
+            git_token_window_secs: crate::config::DEFAULT_GIT_TOKEN_WINDOW_SECS,
         })
     }
 
@@ -89,6 +91,17 @@ impl AppState {
 
     pub fn git_tokens(&self) -> Option<&dyn GitTokenMinter> {
         self.git_tokens.as_deref()
+    }
+
+    /// The state with `secs` as the token window of a start that names no
+    /// wall clock (`git_token::verdict::window_verdict`).
+    pub fn with_git_token_window(mut self, secs: u64) -> Self {
+        self.git_token_window_secs = secs;
+        self
+    }
+
+    pub fn git_token_window_secs(&self) -> u64 {
+        self.git_token_window_secs
     }
 
     pub fn db(&self) -> &Db {

@@ -142,6 +142,8 @@ Optional. Without it the Hub mints no git token, and a run it starts on a runner
    `DEMETEO_HUB_GITHUB_APP_KEY` names another Transit key, and
    `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL` (`https://<host>/api/v3`) points at a GitHub
    Enterprise Server. The Hub refuses to start if either is set without the App id.
+   `DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` (default `86400`) is how long after acceptance a
+   start with no wall clock of its own may still get tokens.
 
 Rotate the App key by generating a new one on GitHub, importing it under a new Transit
 name, changing `DEMETEO_HUB_GITHUB_APP_KEY` and the policy line, and deleting the old key on

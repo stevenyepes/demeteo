@@ -566,7 +566,10 @@ by design ([HUB.md §11 item 6](HUB.md#11-what-is-not-decided)), so a fetch at
 push time could fall in a reconnect gap, and the protocol crate is built to
 carry no field shaped to hold a secret. The first fetch binds the start to the
 Feature it names, and the Hub mints only while that Feature's newest event is
-not terminal. GitHub expires a token after an hour and a pipeline can run for
+not terminal and the start is inside its window: from acceptance, for the
+start's own wall-clock budget or a day without one, plus an hour's grace. The
+window is the bound the binding cannot give, since the Hub cannot tell that
+the bound Feature is the one the start created (2026-11-04). GitHub expires a token after an hour and a pipeline can run for
 longer, so the runner fetches a fresh one 10 minutes before the one it holds
 expires ([HUB.md §6.5](HUB.md#65-git-tokens-for-hub-started-runs)). The Hub must
 therefore be up when a run pushes; the desktop need not be. On the runner, the

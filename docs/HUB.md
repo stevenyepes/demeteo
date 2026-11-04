@@ -1509,7 +1509,7 @@ seconds) with `Cache-Control: no-store`. Every other answer is
 | `400` | `invalid_request` | the body does not parse, or the Feature id is empty, holds a control character or passes 128 characters | stops |
 | `404` | `not_found` | no `start_feature` with that id for this instance carries a runner part and is `accepted` — unanswered included | retries, for 30 minutes |
 | `409` | `feature_mismatch` | the request is bound to another Feature | stops |
-| `410` | `run_ended` | the newest Feature-level event the Hub mirrors for that Feature is terminal | stops |
+| `410` | `run_ended` | the newest Feature-level event the Hub mirrors for that Feature is terminal, or the start's window has closed | stops |
 | `422` | `repository_not_github` | the start's repository is not GitHub, is not `owner/repo`, or is on a host that is neither github.com nor the configured GitHub Enterprise Server | stops |
 | `503` | `git_token_unavailable` | no App is configured, Transit is sealed or unreachable, GitHub refused or is unreachable, or the App is not installed on the repository | retries with backoff, at most once a minute |
 
@@ -1519,7 +1519,18 @@ id to the request row (`instance_requests.git_token_feature_id`, written by a
 conditional update so the first bind wins atomically) before anything is
 minted, and every later fetch must name the same one. `410` reads the newest
 Feature-level event rather than any terminal event, so a run retried after it
-ended is live again. The Hub caches nothing: each fetch signs a fresh App JWT
+ended is live again.
+
+**Every start's window closes.** The Hub cannot tell that the Feature a
+runner binds is the one the start created, so a runner could bind one that
+never reports an end and, by events alone, mint for as long as the start's
+row lives, which is for good. So a start is also answered `410` once it is
+past its window: from its acceptance, for its own `max_wall_clock_secs` or,
+without one, `DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` (a day by default), plus an
+hour's grace for the push and pull request after a run stops at its wall
+clock. The run is held to that same budget, so an honest run never outlives
+its window (`window_verdict` in
+[`git_token/verdict.rs`](../crates/demeteo-hub/src/git_token/verdict.rs)). The Hub caches nothing: each fetch signs a fresh App JWT
 through Transit, looks the installation up and mints a new token. The token is
 never written to Postgres, a log or a trace.
 
@@ -1538,7 +1549,9 @@ never be pruned of a live run's row.
 **Configuration** is `DEMETEO_HUB_GITHUB_APP_ID`, which turns minting on,
 `DEMETEO_HUB_GITHUB_APP_KEY`, the Transit key name (default
 `demeteo-hub-github-app`), and `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL` for a
-GitHub Enterprise Server. Unset, the Hub starts and the route answers `503`.
+GitHub Enterprise Server. `DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` is the
+window of a start with no wall clock, a positive integer. Unset, the Hub
+starts and the route answers `503`.
 Either of the other two set without the App id refuses startup. Importing the
 key is in [`deploy/hub/README.md`](../deploy/hub/README.md).
 

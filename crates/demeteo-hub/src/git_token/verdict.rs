@@ -132,6 +132,42 @@ pub fn liveness_verdict(events: &[RunEvent]) -> Result<(), TokenRefusal> {
     Ok(())
 }
 
+/// How long past its budget a run may still get tokens: a run that stops at
+/// its wall clock still pushes what it has, and opens its pull request.
+pub const WINDOW_GRACE_SECS: u64 = 3_600;
+
+/// [`TokenRefusal::RunEnded`] once `now` is past the start's window: from
+/// its acceptance, for its own wall-clock budget or, without one,
+/// `default_secs`, plus [`WINDOW_GRACE_SECS`].
+///
+/// This is the bound the Feature-id binding cannot give. The Hub cannot tell
+/// that the Feature a runner binds is the one the start created, so a
+/// runner could bind one that never reports an end; its window ends anyway.
+/// The run itself is held to the same budget, so an honest run never
+/// outlives it. A `record` that is not an accepted start answers
+/// [`TokenRefusal::NoStart`], as [`start_verdict`] does.
+pub fn window_verdict(
+    record: &StartRecord,
+    default_secs: u64,
+    now: u64,
+) -> Result<(), TokenRefusal> {
+    let QueuedEnvelope::Readable(envelope) = &record.envelope else {
+        return Err(TokenRefusal::NoStart);
+    };
+    let RequestPayload::StartFeature(start) = &envelope.payload else {
+        return Err(TokenRefusal::NoStart);
+    };
+    let accepted_at = record.answered_at.ok_or(TokenRefusal::NoStart)?;
+    let budget = start.max_wall_clock_secs.unwrap_or(default_secs);
+    let closes_at = accepted_at
+        .saturating_add(budget)
+        .saturating_add(WINDOW_GRACE_SECS);
+    if now > closes_at {
+        return Err(TokenRefusal::RunEnded);
+    }
+    Ok(())
+}
+
 /// The GitHub repository `repository` names. `owner` and `name` become path
 /// segments of a GitHub API URL, so each is held to GitHub's own alphabet
 /// for them, which has no `/`, `?`, `#` or `%`.
@@ -238,7 +274,62 @@ mod tests {
                 signature: "s".to_owned(),
             })),
             git_token_feature_id: None,
+            answered_at: Some(ACCEPTED_AT),
         }
+    }
+
+    const ACCEPTED_AT: u64 = 1_700_000_000;
+    const DEFAULT_WINDOW: u64 = 86_400;
+
+    fn with_wall_clock(secs: Option<u64>) -> StartRecord {
+        let mut payload = start(true);
+        if let RequestPayload::StartFeature(start) = &mut payload {
+            start.max_wall_clock_secs = secs;
+        }
+        record(payload)
+    }
+
+    #[test]
+    fn a_start_with_a_wall_clock_gets_tokens_for_it_and_the_grace_and_no_longer() {
+        let start = with_wall_clock(Some(7_200));
+        let closes_at = ACCEPTED_AT + 7_200 + WINDOW_GRACE_SECS;
+
+        assert_eq!(window_verdict(&start, DEFAULT_WINDOW, ACCEPTED_AT), Ok(()));
+        assert_eq!(window_verdict(&start, DEFAULT_WINDOW, closes_at), Ok(()));
+        assert_eq!(
+            window_verdict(&start, DEFAULT_WINDOW, closes_at + 1),
+            Err(TokenRefusal::RunEnded)
+        );
+    }
+
+    #[test]
+    fn a_start_without_a_wall_clock_gets_the_default_window() {
+        let start = with_wall_clock(None);
+        let closes_at = ACCEPTED_AT + DEFAULT_WINDOW + WINDOW_GRACE_SECS;
+
+        assert_eq!(window_verdict(&start, DEFAULT_WINDOW, closes_at), Ok(()));
+        assert_eq!(
+            window_verdict(&start, DEFAULT_WINDOW, closes_at + 1),
+            Err(TokenRefusal::RunEnded)
+        );
+    }
+
+    #[test]
+    fn a_window_that_would_overflow_saturates_instead_of_closing() {
+        let start = with_wall_clock(Some(u64::MAX));
+        assert_eq!(window_verdict(&start, DEFAULT_WINDOW, u64::MAX), Ok(()));
+    }
+
+    #[test]
+    fn a_start_never_answered_has_no_window() {
+        let unanswered = StartRecord {
+            answered_at: None,
+            ..record(start(true))
+        };
+        assert_eq!(
+            window_verdict(&unanswered, DEFAULT_WINDOW, ACCEPTED_AT),
+            Err(TokenRefusal::NoStart)
+        );
     }
 
     const RUNNER: Option<InstanceKind> = Some(InstanceKind::Runner);

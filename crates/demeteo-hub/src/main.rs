@@ -89,7 +89,9 @@ async fn run() -> Result<(), String> {
                 app_id = settings.app_id,
                 "minting git tokens as a GitHub App"
             );
-            state = state.with_git_tokens(Arc::new(GithubApp::new(http, signer, settings)));
+            state = state
+                .with_git_tokens(Arc::new(GithubApp::new(http, signer, settings)))
+                .with_git_token_window(config.git_token_window_secs);
         }
         None => tracing::info!("no GitHub App is configured; no git token will be minted"),
     }

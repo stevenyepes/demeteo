@@ -552,6 +552,8 @@ pub struct StartRecord {
     pub envelope: QueuedEnvelope,
     /// Set by the first [`bind_git_token_feature`] for the request.
     pub git_token_feature_id: Option<String>,
+    /// Unix seconds; when its outcome was recorded.
+    pub answered_at: Option<u64>,
 }
 
 #[derive(FromRow)]
@@ -561,6 +563,7 @@ struct StartRow {
     state: StateRow,
     envelope: String,
     git_token_feature_id: Option<String>,
+    answered_at: Option<OffsetDateTime>,
 }
 
 /// The request with this id under this instance of this tenant, with its
@@ -573,7 +576,7 @@ pub async fn find_start(
 ) -> Result<Option<StartRecord>, StoreError> {
     let Some(row) = sqlx::query_as::<_, StartRow>(
         "SELECT kind, status, deliveries, outcome, refusal_reason, envelope::text AS envelope, \
-         git_token_feature_id FROM instance_requests \
+         git_token_feature_id, answered_at FROM instance_requests \
          WHERE user_id = $1 AND instance_id = $2 AND id = $3",
     )
     .bind(user)
@@ -589,6 +592,7 @@ pub async fn find_start(
         outcome: RequestState::try_from(row.state)?.outcome,
         envelope: stored_envelope(&row.envelope),
         git_token_feature_id: row.git_token_feature_id,
+        answered_at: row.answered_at.map(stored_time).transpose()?,
     }))
 }
 
