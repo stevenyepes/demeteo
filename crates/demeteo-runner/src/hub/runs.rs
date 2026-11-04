@@ -34,15 +34,24 @@ pub const HUB_CLIENT_ID: &str = "hub";
 /// runs*): without it a start would spend the Hub's only copy of its
 /// attachments on a run that cannot clone.
 ///
-/// Production composes none until the Hub mints tokens, and that token is
-/// fetched over the socket after acceptance, never signed into the start
-/// (decision 71). The run waits for its credential as any submitted run does,
-/// and parks `needs-credentials` without one.
+/// The token is fetched from the Hub's `/git-token` after acceptance, never
+/// signed into the start (decision 71); production composes
+/// [`super::HubGitCredentials`] on a runner with a Hub pairing. The run waits
+/// for its credential as any submitted run does, and parks
+/// `needs-credentials` without one.
 #[async_trait]
 pub trait HubRunCredentials: Send + Sync {
-    /// Called once `run_id` is submitted. An `Err` does not unwind the run;
+    /// Called once `run_id` is submitted as `feature_id`, for the start
+    /// signed as `request_id`, and before the Hub has the accepted result:
+    /// it must not wait for a credential. The run's delivery window in the
+    /// credential store is already open. An `Err` does not unwind the run;
     /// it is the accepted start's note.
-    async fn deliver(&self, run_id: &str) -> Result<(), String>;
+    async fn deliver(
+        &self,
+        run_id: &str,
+        request_id: &str,
+        feature_id: &FeatureId,
+    ) -> Result<(), String>;
 }
 
 pub struct RunnerHubRuns {
@@ -60,7 +69,7 @@ impl RunnerHubRuns {
     /// refused start committed nothing.
     async fn submit_start(
         &self,
-        HubLaunch { start, launch }: HubLaunch,
+        HubLaunch { start, launch, .. }: HubLaunch,
         run_id: &str,
         spool: &Path,
     ) -> Result<FeatureId, AppError> {
@@ -130,15 +139,19 @@ impl HubRunControl for RunnerHubRuns {
         };
         let run_id = format!("hub-{}", paths::new_id());
         let spool = spool_dir(&self.svc.ctx.app_data_dir, &run_id);
+        let request_id = launch.request_id.clone();
+        // Before the driver exists, so its wipe always finds the window open.
+        self.svc.creds.open_delivery(&run_id);
         let feature_id = match self.submit_start(launch, &run_id, &spool).await {
             Ok(feature_id) => feature_id,
             Err(e) => {
+                self.svc.creds.remove(&run_id);
                 remove_spool(&spool);
                 return Err(e);
             }
         };
         let note = credentials
-            .deliver(&run_id)
+            .deliver(&run_id, &request_id, &feature_id)
             .await
             .err()
             .map(|e| format!("git credential not delivered: {e}"));

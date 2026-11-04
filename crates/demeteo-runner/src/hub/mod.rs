@@ -8,10 +8,13 @@
 
 pub mod cli;
 mod client;
+mod keeper;
+mod keeper_policy;
 mod runs;
 pub mod seal;
 
-pub use runs::{RunnerHubRuns, HUB_CLIENT_ID};
+pub(crate) use keeper::{hub_runs_to_keep, HubGitCredentials};
+pub use runs::{HubRunCredentials, RunnerHubRuns, HUB_CLIENT_ID};
 
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::ports::hub::{

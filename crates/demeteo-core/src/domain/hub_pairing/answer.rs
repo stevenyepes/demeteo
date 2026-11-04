@@ -143,6 +143,21 @@ impl RefreshAnswer {
     }
 }
 
+/// What `/git-token` answers a runner with (decision 71). Private fields and
+/// no `Debug`, as [`PairingAnswer`].
+#[derive(Deserialize)]
+pub struct GitTokenAnswer {
+    token: String,
+    expires_at: u64,
+}
+
+impl GitTokenAnswer {
+    /// The token, and when it expires in unix seconds by the Hub's clock.
+    pub fn into_parts(self) -> (SecretString, u64) {
+        (SecretString(self.token), self.expires_at)
+    }
+}
+
 /// The `application/x-www-form-urlencoded` body of the code redemption.
 /// Encoded by hand because reqwest's `form` feature is not enabled.
 pub fn token_form_body(code: &str, verifier: &str, redirect_uri: &str) -> String {

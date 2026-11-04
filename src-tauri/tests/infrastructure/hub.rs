@@ -2274,6 +2274,9 @@ impl HubRequestRepository for LimitSpy {
         self.0.lock().expect("lock").push(limit);
         Ok(Vec::new())
     }
+    fn accepted_start_of(&self, _: &str) -> Result<Option<String>, AppError> {
+        Err(AppError::internal("unexpected accepted_start_of"))
+    }
 }
 
 #[test]

@@ -1,6 +1,9 @@
 // Tests extracted from `crates/demeteo-runner/src/main.rs` (mirrored-tests convention). `super` = that module.
 
-use super::{answer_hub_requests, login_path_probe, runner_services, CREDENTIALS_DIRECTORY};
+use super::{
+    answer_hub_requests, hub_git_credentials, login_path_probe, runner_services,
+    CREDENTIALS_DIRECTORY,
+};
 use demeteo_core::test_dir::TestDir;
 
 /// `serve`'s order: the services, then the handler, then the socket. Unbound,
@@ -17,7 +20,12 @@ async fn the_runner_binds_its_hub_request_handler_over_its_own_services() {
     let pairing = runner.svc.ctx.hub.clone().expect("the runner can pair");
     assert!(!pairing.requests_bound());
 
-    answer_hub_requests(&runner.svc, runner.requests);
+    let credentials = hub_git_credentials(&runner.svc);
+    assert!(
+        credentials.is_some(),
+        "a runner that can pair launches Hub starts"
+    );
+    answer_hub_requests(&runner.svc, runner.requests, credentials);
 
     assert!(pairing.requests_bound());
 }

@@ -269,7 +269,9 @@ impl HubRequests {
             tracing::warn!(error = %e, "expired Hub request ids were not pruned");
         }
         match decide(&request.payload, consumption, committed, &policy, starts) {
-            Verdict::Execute(ExecuteKind::StartFeature(start)) => self.start(start).await,
+            Verdict::Execute(ExecuteKind::StartFeature(start)) => {
+                self.start(&request.request_id, start).await
+            }
             Verdict::Execute(ExecuteKind::CancelFeature(cancel)) => {
                 self.cancel(&cancel.feature_id).await
             }
