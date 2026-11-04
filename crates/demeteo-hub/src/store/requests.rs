@@ -542,6 +542,98 @@ pub async fn record_outcome(
     Ok(true)
 }
 
+/// What a git-token fetch reads of the request it names (`docs/HUB.md` §10,
+/// decision 71): enough to tell an accepted runner start from anything else,
+/// and the Feature it is already bound to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartRecord {
+    pub kind: String,
+    pub outcome: Option<RequestOutcome>,
+    pub envelope: QueuedEnvelope,
+    /// Set by the first [`bind_git_token_feature`] for the request.
+    pub git_token_feature_id: Option<String>,
+}
+
+#[derive(FromRow)]
+struct StartRow {
+    kind: String,
+    #[sqlx(flatten)]
+    state: StateRow,
+    envelope: String,
+    git_token_feature_id: Option<String>,
+}
+
+/// The request with this id under this instance of this tenant, with its
+/// envelope, or `None` as for [`find_request`].
+pub async fn find_start(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    id: &RequestId,
+) -> Result<Option<StartRecord>, StoreError> {
+    let Some(row) = sqlx::query_as::<_, StartRow>(
+        "SELECT kind, status, deliveries, outcome, refusal_reason, envelope::text AS envelope, \
+         git_token_feature_id FROM instance_requests \
+         WHERE user_id = $1 AND instance_id = $2 AND id = $3",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(id.as_slice())
+    .fetch_optional(db)
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(StartRecord {
+        kind: row.kind,
+        outcome: RequestState::try_from(row.state)?.outcome,
+        envelope: stored_envelope(&row.envelope),
+        git_token_feature_id: row.git_token_feature_id,
+    }))
+}
+
+/// Binds `feature_id` to the request unless a Feature is bound already, and
+/// answers the Feature bound once it ran: `feature_id` when this call bound
+/// it, an earlier one's otherwise, `None` when the instance has no such
+/// request. The first binding wins because the `UPDATE` is conditional on
+/// the column being empty, and a second one waiting on the first's row lock
+/// re-reads the row it committed and matches nothing.
+///
+/// Two statements and not one `SET … = COALESCE(…)`: every fetch after the
+/// first would otherwise write the row again to change nothing.
+pub async fn bind_git_token_feature(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    id: &RequestId,
+    feature_id: &str,
+) -> Result<Option<String>, StoreError> {
+    let bound = sqlx::query_scalar::<_, String>(
+        "UPDATE instance_requests SET git_token_feature_id = $4 \
+         WHERE user_id = $1 AND instance_id = $2 AND id = $3 \
+         AND git_token_feature_id IS NULL RETURNING git_token_feature_id",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(id.as_slice())
+    .bind(feature_id)
+    .fetch_optional(db)
+    .await?;
+    if bound.is_some() {
+        return Ok(bound);
+    }
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "SELECT git_token_feature_id FROM instance_requests \
+         WHERE user_id = $1 AND instance_id = $2 AND id = $3",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(id.as_slice())
+    .fetch_optional(db)
+    .await?
+    .flatten())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
