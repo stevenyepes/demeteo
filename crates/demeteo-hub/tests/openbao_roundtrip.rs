@@ -13,6 +13,7 @@ const MOUNT_ENV: &str = "DEMETEO_HUB_TRANSIT_MOUNT";
 const KEY_ENV: &str = "DEMETEO_HUB_TRANSIT_KEY";
 const SIGNING_KEY_ENV: &str = "DEMETEO_HUB_SIGNING_KEY";
 const APP_KEY_ENV: &str = "DEMETEO_HUB_GITHUB_APP_KEY";
+const APP_PUBLIC_KEY_ENV: &str = "DEMETEO_HUB_TEST_APP_PUBLIC_KEY";
 const FALLBACK_APP_KEY: &str = "demeteo-hub-github-app";
 const FALLBACK_MOUNT: &str = "transit";
 const FALLBACK_KEY: &str = "demeteo-hub";
@@ -118,26 +119,12 @@ async fn a_signing_key_name_that_does_not_exist_is_refused() {
     assert!(refused(&signature), "{signature:?}");
 }
 
-/// The App key's public half as Transit answers it, a PEM
-/// `SubjectPublicKeyInfo`, as DER. Read with the token directly: the port
-/// has no method for it, because the Hub never needs it.
-async fn app_public_key(key: &str) -> Vec<u8> {
-    let mount = std::env::var(MOUNT_ENV).unwrap_or_else(|_| FALLBACK_MOUNT.to_owned());
-    let url = format!(
-        "{}/v1/{mount}/keys/{key}",
-        required(ADDR_ENV).trim_end_matches('/')
-    );
-    let body: serde_json::Value = reqwest::Client::new()
-        .get(url)
-        .header("X-Vault-Token", required(TOKEN_ENV))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let latest = body["data"]["latest_version"].to_string();
-    let pem = body["data"]["keys"][latest]["public_key"].as_str().unwrap();
+/// The App key's public half, a PEM `SubjectPublicKeyInfo` at the path
+/// [`APP_PUBLIC_KEY_ENV`] names, as DER. Read from the key the operator
+/// imported, not from Transit: the README's policy grants the Hub `sign` on
+/// that key and nothing else, and this suite runs under that policy.
+fn app_public_key() -> Vec<u8> {
+    let pem = std::fs::read_to_string(required(APP_PUBLIC_KEY_ENV)).unwrap();
     let base64: String = pem
         .lines()
         .filter(|line| !line.starts_with("-----"))
@@ -146,11 +133,11 @@ async fn app_public_key(key: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
-#[ignore = "needs a running, unsealed OpenBao with the GitHub App key imported: see deploy/hub/README.md; set OPENBAO_ADDR and OPENBAO_TOKEN"]
+#[ignore = "needs a running, unsealed OpenBao with a GitHub App key imported: see deploy/hub/README.md; set OPENBAO_ADDR, OPENBAO_TOKEN and DEMETEO_HUB_TEST_APP_PUBLIC_KEY"]
 async fn an_rs256_signature_verifies_under_the_imported_app_key() {
     let key = std::env::var(APP_KEY_ENV).unwrap_or_else(|_| FALLBACK_APP_KEY.to_owned());
     let keys = service();
-    let verifier = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, app_public_key(&key).await);
+    let verifier = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, app_public_key());
     let message = b"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOjF9";
 
     let signature = keys.sign_rs256(&key, message).await.unwrap();
