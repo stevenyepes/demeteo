@@ -151,6 +151,36 @@ pub async fn get_as(base: &str, path: &str, session: &SessionSecret) -> (u16, Va
 /// replay. The proof names the configured origin, not the loopback address
 /// the Hub is reached at. The body is answered as bytes, since a fetch's is
 /// the content.
+/// A `POST` of the JSON `body` as an instance sends one: its access token,
+/// and a proof for this method and URL naming that token.
+pub async fn post_with_dpop(
+    base: &str,
+    path: &str,
+    key: &SoftDeviceKey,
+    access_token: &str,
+    body: &Value,
+) -> (u16, Option<String>, Value) {
+    let htu = format!("{}{path}", rp().origin);
+    let mut claims = claims("POST", &htu, unix_now(), &Uuid::new_v4().to_string());
+    claims["ath"] = json!(base64url_encode(&Sha256::digest(access_token.as_bytes())));
+    let response = reqwest::Client::new()
+        .post(format!("{base}{path}"))
+        .header("authorization", format!("DPoP {access_token}"))
+        .header("dpop", key.proof_with(&key.header(), &claims))
+        .json(body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let cache_control = response
+        .headers()
+        .get("cache-control")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let text = response.text().await.unwrap();
+    (status, cache_control, as_json(&text))
+}
+
 pub async fn get_with_dpop(
     base: &str,
     path: &str,
