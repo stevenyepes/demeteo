@@ -139,6 +139,33 @@ EOF
   unset BAO_TOKEN
 }
 
+# Minting runner git tokens (docs/HUB.md §6.5) needs a GitHub App of your own.
+# DEMETEO_HUB_GITHUB_APP_ID turns it on; DEMETEO_HUB_GITHUB_APP_PEM names the
+# App's private key, imported once into Transit by the README's own commands
+# ("A GitHub App for runner runs"). The PEM is never copied into .dev/.
+setup_github_app() {
+  [[ -n "${DEMETEO_HUB_GITHUB_APP_ID:-}" ]] || return 0
+  local BAO_TOKEN
+  BAO_TOKEN="$(jq -r '.root_token' "$INIT_FILE")"
+  export BAO_TOKEN
+  if ! bao read -format=json transit/keys/demeteo-hub-github-app >/dev/null 2>&1; then
+    local pem="${DEMETEO_HUB_GITHUB_APP_PEM:-}"
+    [[ -f "$pem" ]] || die "DEMETEO_HUB_GITHUB_APP_ID is set; DEMETEO_HUB_GITHUB_APP_PEM must name the App's private key"
+    say "importing the GitHub App key into Transit"
+    openssl pkcs8 -topk8 -nocrypt -in "$pem" -outform DER | base64 -w0 \
+      | compose exec -T openbao sh -c 'umask 077; cat >/tmp/app.key.b64'
+    bao transit import transit/keys/demeteo-hub-github-app @/tmp/app.key.b64 type=rsa-2048 >/dev/null
+    compose exec -T openbao rm -f /tmp/app.key.b64
+  fi
+  if ! bao policy read demeteo-hub | grep -q 'transit/sign/demeteo-hub-github-app/sha2-256'; then
+    say "letting the Hub's token sign with the GitHub App key"
+    { bao policy read demeteo-hub
+      echo 'path "transit/sign/demeteo-hub-github-app/sha2-256" { capabilities = ["update"] }'
+    } | bao policy write demeteo-hub - >/dev/null
+  fi
+  unset BAO_TOKEN
+}
+
 # The Hub never renews its own token (README, "Renew the token inside every
 # period"), so renew it on every start and mint a new one once it has lapsed.
 ensure_hub_token() {
@@ -167,6 +194,7 @@ cmd_up() {
   init_openbao
   unseal_openbao
   setup_transit
+  setup_github_app
   ensure_hub_token
 
   cd "$REPO_ROOT"
@@ -182,6 +210,7 @@ cmd_up() {
   DEMETEO_HUB_WEB_DIR=hub-web/dist \
   OPENBAO_ADDR=http://127.0.0.1:8200 \
   OPENBAO_TOKEN="$OPENBAO_TOKEN" \
+  DEMETEO_HUB_GITHUB_APP_ID="${DEMETEO_HUB_GITHUB_APP_ID:-}" \
   RUST_LOG="${RUST_LOG:-info}" \
     exec cargo run -p demeteo-hub
 }
