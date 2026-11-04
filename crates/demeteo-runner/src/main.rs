@@ -45,7 +45,7 @@ use demeteo_core::domain::hub_pairing::sealed::{SEALED_BACKEND, STORE_KEY_LEN};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::hub::HubSecretStore;
-use hub::{HubControl, RunnerHubRuns};
+use hub::{HubControl, HubGitCredentials, HubRunCredentials, RunnerHubRuns};
 use notify_bridge::RunEventBridge;
 use services::RunnerServices;
 use std::path::{Path, PathBuf};
@@ -319,14 +319,27 @@ fn runner_services(
     })
 }
 
+/// The Hub's git tokens, on a runner that has a Hub pairing to ask with. One
+/// without (no HTTP client for the Hub) refuses every start `unknown_kind`
+/// (decision 64, *Hub-started runner runs*). A runner that has not paired yet
+/// still gets the seam: it receives no request until it pairs, and each
+/// fetch reads the pairing afresh.
+fn hub_git_credentials(svc: &Arc<RunnerServices>) -> Option<HubGitCredentials> {
+    let pairing = svc.ctx.hub.as_ref()?;
+    Some(HubGitCredentials::new(svc.clone(), pairing.git_tokens()))
+}
+
 /// Before the socket starts: a request it delivers with no handler bound is
 /// left queued on the Hub.
-fn answer_hub_requests(svc: &Arc<RunnerServices>, binding: HubRequestBinding) {
-    // No credential seam until the Hub mints git tokens (decision 64,
-    // *Hub-started runner runs*), so every start is refused `unknown_kind`.
+fn answer_hub_requests(
+    svc: &Arc<RunnerServices>,
+    binding: HubRequestBinding,
+    credentials: Option<HubGitCredentials>,
+) {
+    let credentials = credentials.map(|c| Arc::new(c) as Arc<dyn HubRunCredentials>);
     binding.bind(
         svc.ctx.clone(),
-        Arc::new(RunnerHubRuns::new(svc.clone(), None)),
+        Arc::new(RunnerHubRuns::new(svc.clone(), credentials)),
     );
 }
 
@@ -365,8 +378,20 @@ async fn serve(
         }
     };
     let ctx = svc.ctx.clone();
+    // The in-memory token did not survive the restart. Each kept run's window
+    // opens before reconciliation starts its driver.
+    let credentials = hub_git_credentials(&svc);
+    let kept = match &credentials {
+        Some(_) => hub::hub_runs_to_keep(&svc),
+        None => Vec::new(),
+    };
     reconcile::reconcile_on_startup(svc.clone(), process_started_at).await;
-    answer_hub_requests(&svc, requests);
+    if let Some(credentials) = &credentials {
+        for run in kept {
+            credentials.spawn(run);
+        }
+    }
+    answer_hub_requests(&svc, requests, credentials);
     // After the version, which the socket's `Hello` announces. Unpaired, it
     // starts nothing.
     if let Some(pairing) = &ctx.hub {

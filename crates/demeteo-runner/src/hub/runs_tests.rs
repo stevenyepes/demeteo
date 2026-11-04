@@ -57,19 +57,31 @@ async fn a_runner_with_no_credential_seam_refuses_hub_starts() {
     ));
 }
 
-/// Records every run it was asked to deliver for, and delivers nothing.
+/// Records every `(run, request, feature)` it was asked to deliver for, and
+/// delivers nothing.
 #[derive(Default)]
 struct RecordingCredentials {
-    delivered: Mutex<Vec<String>>,
+    delivered: Mutex<Vec<(String, String, String)>>,
 }
 
 #[async_trait]
 impl HubRunCredentials for RecordingCredentials {
-    async fn deliver(&self, run_id: &str) -> Result<(), String> {
-        self.delivered.lock().unwrap().push(run_id.to_owned());
+    async fn deliver(
+        &self,
+        run_id: &str,
+        request_id: &str,
+        feature_id: &FeatureId,
+    ) -> Result<(), String> {
+        self.delivered.lock().unwrap().push((
+            run_id.to_owned(),
+            request_id.to_owned(),
+            feature_id.to_string(),
+        ));
         Ok(())
     }
 }
+
+const REQUEST_ID: &str = "req-7f3a";
 
 fn hub_start(agent_kind: Option<&str>) -> StartFeature {
     let steps = serde_json::to_string(&[StepConfig {
@@ -107,7 +119,7 @@ fn hub_start(agent_kind: Option<&str>) -> StartFeature {
 
 fn hub_launch(start: StartFeature) -> HubLaunch {
     HubLaunch {
-        request_id: "req-7f3a".into(),
+        request_id: REQUEST_ID.into(),
         start,
         launch: FeatureLaunch {
             staged_attachments: vec![StagedAttachmentInput {
@@ -150,7 +162,14 @@ async fn a_hub_start_is_submitted_under_the_hub_owner_and_committed_before_any_f
     let run = &all[0];
     assert_eq!(run.owner_client_id, HUB_CLIENT_ID);
     assert_eq!(run.status, "running");
-    assert_eq!(*credentials.delivered.lock().unwrap(), [run.run_id.clone()]);
+    assert_eq!(
+        *credentials.delivered.lock().unwrap(),
+        [(
+            run.run_id.clone(),
+            REQUEST_ID.to_owned(),
+            launched.feature_id.to_string()
+        )]
+    );
 
     let spec: RunSpec = serde_json::from_str(&run.spec_json).unwrap();
     assert_eq!(
@@ -194,6 +213,10 @@ async fn a_submit_that_fails_is_an_error_that_commits_nothing_and_leaves_no_spoo
     assert_eq!(runs.committed_cents_since(0), Ok(0));
     assert!(!spool_of(&rig, &run.run_id).exists());
     assert!(credentials.delivered.lock().unwrap().is_empty());
+    assert!(
+        !rig.svc.creds.deliver(&run.run_id, "late".into()),
+        "a refused start closes the window it opened"
+    );
 }
 
 #[tokio::test]
