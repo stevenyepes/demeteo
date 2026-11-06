@@ -13,6 +13,7 @@ import { ApproveDevice } from './views/ApproveDevice';
 import { ApprovePairing } from './views/ApprovePairing';
 import { Dispatch } from './views/Dispatch';
 import { Fleet } from './views/Fleet';
+import { GitHosts } from './views/GitHosts';
 import { Instance } from './views/Instance';
 import { NotFound } from './views/NotFound';
 import { Passkeys } from './views/Passkeys';
@@ -75,6 +76,8 @@ function viewFor(route: Route, onSession: () => void): ReactElement {
       return <SignIn onSession={onSession} />;
     case 'passkeys':
       return <Passkeys />;
+    case 'git-hosts':
+      return <GitHosts connected={route.connected} failed={route.failed} />;
     case 'not-found':
       return <NotFound path={route.path} />;
     default: {

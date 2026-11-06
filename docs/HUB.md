@@ -1510,8 +1510,41 @@ seconds) with `Cache-Control: no-store`. Every other answer is
 | `404` | `not_found` | no `start_feature` with that id for this instance carries a runner part and is `accepted` — unanswered included | retries, for 30 minutes |
 | `409` | `feature_mismatch` | the request is bound to another Feature | stops |
 | `410` | `run_ended` | the newest Feature-level event the Hub mirrors for that Feature is terminal, or the start's window has closed | stops |
-| `422` | `repository_not_github` | the start's repository is not GitHub, is not `owner/repo`, or is on a host that is neither github.com nor the configured GitHub Enterprise Server | stops |
-| `503` | `git_token_unavailable` | no App is configured, Transit is sealed or unreachable, GitHub refused or is unreachable, or the App is not installed on the repository | retries with backoff, at most once a minute |
+| `422` | `repository_not_github` | the start's repository is not GitHub, or is not `owner/repo` | stops |
+| `503` | `github_app_missing` | no App is connected for the repository's host, neither the environment's nor one of the tenant's | retries with backoff, at most once a minute |
+| `503` | `github_app_not_installed` | no connected App for that host is installed on the repository | as above |
+| `503` | `github_app_ambiguous` | more than one connected App is installed on it | as above |
+| `503` | `git_token_unavailable` | Transit is sealed or unreachable, the tenant's Apps cannot be read, or GitHub refused or is unreachable | as above |
+
+The four `503`s are retried because each can be fixed while the run waits: a
+human connects an App, installs it on the repository, or removes the extra
+one. The newest one's code is kept on the start
+(`instance_requests.git_token_problem`) and cleared by the next token minted,
+and the run's page in the web app says what to do about it.
+
+**Which App mints.** The candidates for a repository are the App set by
+environment, when its host is the repository's, then the tenant's connected
+Apps on that host, each App once. The Hub asks each for its installation on
+the repository: exactly one installed mints, and two or more is
+`github_app_ambiguous` rather than a guess, since the App decides which account
+the push and the pull request belong to (`chosen` in
+[`git_hosts/minter.rs`](../crates/demeteo-hub/src/git_hosts/minter.rs)).
+
+**Connecting an App** is Git hosts › Connect GitHub in the web app, using
+GitHub's App manifest flow. The Hub answers `POST
+/v1/git-hosts/github/manifest` with a manifest (private, `contents` and
+`pull_requests` write, no webhook) and a single-use `state`, and the page
+posts them to GitHub, under the user's account or a named organization. GitHub
+sends the browser back to `GET /github/manifest/callback`, outside `/v1`
+because the session cookie is `SameSite=Strict` and does not ride a cross-site
+redirect: the `state`, bound to the user who started and good for 30 minutes,
+is what admits it. The Hub converts the code, imports the App's key into
+Transit as `demeteo-hub-gh-<app id>` ([decision
+71](DECISIONS.md#71--runner-git-credentials-detail), amended 2026-11-06),
+records the App's public facts in `git_hosts`, and redirects to Git hosts with
+a link for choosing the repositories the App is installed on. Removing an App
+deletes its row; its Transit key stays, since deleting one needs
+`deletion_allowed`, which the Hub's policy does not grant.
 
 **What the Hub trusts.** The repository comes from the start's stored,
 Hub-signed envelope, never from the body. The first fetch binds the Feature
@@ -1546,14 +1579,16 @@ keeper is started again for every live Hub run. The request id is read from
 the runner's `hub_request_log` row of the accepted start, so that log must
 never be pruned of a live run's row.
 
-**Configuration** is `DEMETEO_HUB_GITHUB_APP_ID`, which turns minting on,
-`DEMETEO_HUB_GITHUB_APP_KEY`, the Transit key name (default
-`demeteo-hub-github-app`), and `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL` for a
-GitHub Enterprise Server. `DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` is the
-window of a start with no wall clock, a positive integer. Unset, the Hub
-starts and the route answers `503`.
-Either of the other two set without the App id refuses startup. Importing the
-key is in [`deploy/hub/README.md`](../deploy/hub/README.md).
+**Configuration** is optional. `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL` adds a
+GitHub Enterprise Server as a host Apps can be connected on, beside github.com.
+`DEMETEO_HUB_GITHUB_APP_ID` sets one App for every tenant, with
+`DEMETEO_HUB_GITHUB_APP_KEY` its Transit key name (default
+`demeteo-hub-github-app`); the key name set without the App id refuses startup.
+`DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` is the window of a start with no wall
+clock, a positive integer. With no App set and none connected, the route
+answers `503 github_app_missing`. The OpenBao policy the import needs, and the
+manual import for an App set by environment, are in
+[`deploy/hub/README.md`](../deploy/hub/README.md).
 
 ---
 
@@ -1947,6 +1982,7 @@ adds columns to two of the tables that were there:
 | `instance_requests.refusal_reason` | the reason's wire name — present exactly when the outcome is `refused` |
 | `instance_requests.answered_at` | when that outcome was recorded |
 | `instance_requests.git_token_feature_id` | the Feature a runner's first `POST /git-token` named for this start, from `0010_git_token_binding.sql`; null until then, and every later fetch must match it (§6.5) |
+| `instance_requests.git_token_problem` | the code of the newest `503` that fetch answered, from `0011_git_hosts.sql`; null once a token is minted (§6.5) |
 
 It also closes `instance_requests.status` to `queued`, `expired` and `answered`,
 with `answered` holding exactly when an outcome does, so the status and the
@@ -1980,6 +2016,21 @@ nothing from which the content or its digest could be read without Transit
 > Hub signed, and redacting it from the stored envelope once answered would
 > leave a stored row whose signature no longer verifies. A human may decide
 > otherwise (§11 item 19).
+
+**Connected GitHub Apps** are rows of `git_hosts`, from
+[`0011_git_hosts.sql`](../crates/demeteo-hub/migrations/0011_git_hosts.sql):
+the tenant, host, API and web base URLs, App id and slug, owning account, and
+the name of the App's Transit key. No column holds a secret. The App's private
+key is in Transit only, imported once (§6.5); its client and webhook secrets
+were never read.
+
+**The Hub's own way into OpenBao** is a token an operator minted, or, on
+Kubernetes, a login with the pod's service account (`OPENBAO_K8S_ROLE`). The
+login's token lives only in Hub memory, for the role's TTL, and is replaced at
+two thirds of it or when OpenBao refuses it
+([`adapters/openbao_auth.rs`](../crates/demeteo-hub/src/adapters/openbao_auth.rs)).
+The service-account token is no stronger than the token it replaces: whoever can
+mount the Hub's service account in its namespace can log in as the Hub.
 
 **Hub server secrets live in OpenBao or are encrypted under Transit — never
 plaintext in Postgres.** That includes the request-signing key (§4) and the key

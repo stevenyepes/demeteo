@@ -1,7 +1,9 @@
 use super::port::GitTokenStore;
 use crate::api::port::{mirror_event, MirrorEvent};
 use crate::store::instances::{find_instance, InstanceKind};
-use crate::store::requests::{bind_git_token_feature, find_start, RequestId, StartRecord};
+use crate::store::requests::{
+    bind_git_token_feature, find_start, note_git_token_problem, RequestId, StartRecord,
+};
 use crate::store::run_mirror::mirror_of;
 use crate::store::{Db, InstanceId, StoreError, UserId};
 use async_trait::async_trait;
@@ -46,6 +48,16 @@ impl GitTokenStore for PostgresGitTokens {
         feature_id: &str,
     ) -> Result<Option<String>, StoreError> {
         bind_git_token_feature(user, &self.db, instance, &id, feature_id).await
+    }
+
+    async fn note_problem(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        id: RequestId,
+        problem: Option<&'static str>,
+    ) -> Result<(), StoreError> {
+        note_git_token_problem(user, &self.db, instance, &id, problem).await
     }
 
     async fn events(

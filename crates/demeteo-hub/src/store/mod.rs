@@ -33,6 +33,7 @@
 
 pub mod attachments;
 pub mod device_keys;
+pub mod git_hosts;
 pub mod instances;
 pub mod passkey_records;
 pub mod passkeys;

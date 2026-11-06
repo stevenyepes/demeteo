@@ -119,6 +119,7 @@ const WIRE_DETAIL = {
   tickets: { completed: 2, failed: 1, running: 3 },
   pending_gates: [WIRE_PENDING_GATE],
   events: [WIRE_EVENT],
+  git_token_problem: 'github_app_not_installed',
 };
 
 const DETAIL_PATH = `/v1/instances/${INSTANCE_ID}/runs/f-1`;
@@ -257,6 +258,7 @@ describe('getRunDetail', () => {
           ticketId: null,
         },
       ],
+      gitTokenProblem: 'github_app_not_installed',
     });
     expect(pending).toEqual([]);
   });

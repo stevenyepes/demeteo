@@ -3,6 +3,7 @@ pub mod api;
 pub mod attachments;
 pub mod auth;
 pub mod config;
+pub mod git_hosts;
 pub mod git_token;
 pub mod pairing;
 pub mod ports;

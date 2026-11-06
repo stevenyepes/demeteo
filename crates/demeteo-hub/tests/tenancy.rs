@@ -54,9 +54,10 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 const FOREIGN_KEY_VIOLATION: &str = "23503";
-const EXPECTED_TABLES: [&str; 12] = [
+const EXPECTED_TABLES: [&str; 13] = [
     "attachments",
     "device_keys",
+    "git_hosts",
     "instance_requests",
     "instances",
     "passkey_endorsements",

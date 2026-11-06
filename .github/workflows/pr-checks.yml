@@ -455,8 +455,10 @@ jobs:
           bao write -f transit/keys/demeteo-hub-signing type=ed25519
 
           # A throwaway stands in for GitHub's App key download, imported by
-          # the README's "A GitHub App for runner runs" commands. Only its
+          # the README's commands for "An App set by environment". Only its
           # public half stays, for the RS256 round trip to verify against.
+          # The policy below is the README's, import grant included, which is
+          # what the Hub's own import (Git hosts › Connect GitHub) needs.
           key_dir=$(mktemp -d)
           openssl genrsa -traditional -out "$key_dir/app.private-key.pem" 2048
           openssl rsa -in "$key_dir/app.private-key.pem" -pubout -out "$RUNNER_TEMP/app.public-key.pem"
@@ -473,7 +475,9 @@ jobs:
           path "transit/datakey/plaintext/demeteo-hub" { capabilities = ["update"] }
           path "transit/keys/demeteo-hub-signing"      { capabilities = ["read"] }
           path "transit/sign/demeteo-hub-signing"      { capabilities = ["update"] }
-          path "transit/sign/demeteo-hub-github-app/sha2-256" { capabilities = ["update"] }
+          path "transit/wrapping_key"                  { capabilities = ["read"] }
+          path "transit/keys/+/import"                 { capabilities = ["update"] }
+          path "transit/sign/+/sha2-256"               { capabilities = ["update"] }
           EOF
 
           hub_token=$(bao token create -policy=demeteo-hub -period=720h -format=json | jq -er '.auth.client_token')

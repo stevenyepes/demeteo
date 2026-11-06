@@ -352,3 +352,11 @@ The review comment is the same concern handled the other way: `PostReviewComment
 
 **Status: open.** Only the third needs a user decision (an allow-list setting, and a concurrency limit); the first, second and fifth are scoped work, the fourth is a deliberate choice, and the sixth needs CI and a rebase to settle. Until it is settled, do not describe `path` as confined to any directory.
 
+
+## 25. What should the desktop offer for a Hub-started run that needs credentials?
+
+**The question:** a run the Hub started on a runner gets its git token from a GitHub App the Hub mints for ([HUB.md §6.5](HUB.md#65-git-tokens-for-hub-started-runs)). When no token can be minted, the run waits and the Hub's run page says why: no App connected, the App not installed on the repository, or more than one installed. The desktop shows the same run parked `needs-credentials` and offers **Re-inject credentials** (`src/components/RemoteRunActions.tsx`), which pushes the desktop's own PAT. That is the wrong fix for this run: it bypasses the App, so the push and the pull request belong to whoever owns the PAT, and the run's next token refresh goes back to the Hub anyway.
+
+**Options:** hide the action for a Hub-started run and link to the Hub's Git hosts page; keep it as a deliberate override; or carry the Hub's refusal code to the desktop so it can say the same thing the Hub page does. The desktop has no field today that tells a Hub-started run from one it submitted.
+
+**Status: open.** Nothing depends on it; the Hub's own page already tells the user what to do.

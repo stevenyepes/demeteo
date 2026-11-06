@@ -35,6 +35,16 @@ pub trait GitTokenStore: Send + Sync {
         feature_id: &str,
     ) -> Result<Option<String>, StoreError>;
 
+    /// [`note_git_token_problem`](crate::store::requests::note_git_token_problem):
+    /// why the newest mint for this start failed, or `None` once one minted.
+    async fn note_problem(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        id: RequestId,
+        problem: Option<&'static str>,
+    ) -> Result<(), StoreError>;
+
     /// The Feature's mirrored events in offset order, the unreadable left
     /// out as the run views leave them.
     async fn events(

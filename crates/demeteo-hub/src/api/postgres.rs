@@ -9,7 +9,7 @@ use crate::socket::port::SocketStore;
 use crate::socket::postgres::PostgresStore;
 use crate::store::instances::{find_instance, list_instances, Instance};
 use crate::store::passkeys::list_passkeys;
-use crate::store::requests::{find_request, RequestId, RequestRecord};
+use crate::store::requests::{find_request, git_token_problem_of, RequestId, RequestRecord};
 use crate::store::run_mirror::mirror_of;
 use crate::store::snapshots::read_snapshot;
 use crate::store::{Db, InstanceId, StoreError, UserId};
@@ -61,6 +61,15 @@ impl ApiStore for PostgresApi {
         id: RequestId,
     ) -> Result<Option<RequestRecord>, StoreError> {
         find_request(user, &self.db, instance, &id).await
+    }
+
+    async fn git_token_problem(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        feature_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        git_token_problem_of(user, &self.db, instance, feature_id).await
     }
 
     async fn trusted_credential_ids(&self, user: UserId) -> Result<Vec<String>, StoreError> {

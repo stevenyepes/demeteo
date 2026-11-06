@@ -5,7 +5,9 @@
 
 use crate::adapters::github_app::{GithubAppSettings, GithubHost};
 use crate::adapters::openbao::{is_key_name, KEY_NAME_ALPHABET};
+use crate::adapters::openbao_auth::{KubernetesLogin, OpenBaoAuth};
 use crate::attachments::AttachmentSettings;
+use crate::git_hosts::manifest::ConnectableHost;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,6 +22,7 @@ const DEFAULT_GITHUB_APP_KEY: &str = "demeteo-hub-github-app";
 /// and its public API. A GitHub Enterprise Server is named by its operator.
 const GITHUB_HOST: &str = "github.com";
 const GITHUB_API: &str = "https://api.github.com";
+const GITHUB_WEB: &str = "https://github.com";
 
 const DATABASE_URL: &str = "DATABASE_URL";
 const BIND: &str = "DEMETEO_HUB_BIND";
@@ -29,6 +32,10 @@ const WEB_DIR: &str = "DEMETEO_HUB_WEB_DIR";
 const OPENBAO_ADDR: &str = "OPENBAO_ADDR";
 const OPENBAO_TOKEN: &str = "OPENBAO_TOKEN";
 const OPENBAO_TOKEN_FILE: &str = "OPENBAO_TOKEN_FILE";
+const OPENBAO_K8S_ROLE: &str = "OPENBAO_K8S_ROLE";
+const OPENBAO_K8S_MOUNT: &str = "OPENBAO_K8S_MOUNT";
+const OPENBAO_K8S_JWT_FILE: &str = "OPENBAO_K8S_JWT_FILE";
+const DEFAULT_K8S_MOUNT: &str = "kubernetes";
 const TRANSIT_MOUNT: &str = "DEMETEO_HUB_TRANSIT_MOUNT";
 const TRANSIT_KEY: &str = "DEMETEO_HUB_TRANSIT_KEY";
 const SIGNING_KEY: &str = "DEMETEO_HUB_SIGNING_KEY";
@@ -66,7 +73,8 @@ pub struct Config {
     pub rp_id: String,
     pub database_url: String,
     pub openbao_addr: String,
-    pub openbao_token: String,
+    /// A token, or a Kubernetes login when `OPENBAO_K8S_ROLE` is set.
+    pub openbao_auth: OpenBaoAuth,
     pub transit_mount: String,
     pub transit_key: String,
     /// The Transit name of the Ed25519 request-signing key. The key itself
@@ -78,6 +86,11 @@ pub struct Config {
     /// no git token, and `POST /git-token` answers `503`. The App key is a
     /// Transit name, as the signing key is, so nothing here is a secret.
     pub github_app: Option<GithubAppSettings>,
+    /// Where a GitHub App can be connected from the Hub's pages: github.com
+    /// always, then the GitHub Enterprise Server named by
+    /// `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL`. The configured App reaches
+    /// the same hosts.
+    pub github_hosts: Vec<ConnectableHost>,
     /// The git-token window of a start that names no wall clock of its own;
     /// a start that does is held to that instead.
     pub git_token_window_secs: u64,
@@ -162,7 +175,8 @@ impl Config {
             sweep_secs: positive_or_default(ATTACHMENT_SWEEP_SECS, defaults.sweep_secs)?,
         };
 
-        let github_app = github_app(&lookup)?;
+        let github_hosts = github_hosts(&lookup)?;
+        let github_app = github_app(&lookup, &github_hosts)?;
         let git_token_window_secs =
             positive_or_default(GIT_TOKEN_WINDOW_SECS, DEFAULT_GIT_TOKEN_WINDOW_SECS)?;
 
@@ -173,34 +187,49 @@ impl Config {
             rp_id,
             database_url: required(DATABASE_URL)?,
             openbao_addr: required(OPENBAO_ADDR)?,
-            openbao_token: openbao_token(&lookup)?,
+            openbao_auth: openbao_auth(&lookup)?,
             transit_mount: or_default(TRANSIT_MOUNT, DEFAULT_TRANSIT_MOUNT),
             transit_key: or_default(TRANSIT_KEY, DEFAULT_TRANSIT_KEY),
             signing_key,
             web_dir: PathBuf::from(or_default(WEB_DIR, DEFAULT_WEB_DIR)),
             attachments,
             github_app,
+            github_hosts,
             git_token_window_secs,
         })
     }
 }
 
-/// The App id switches minting on, and the other two variables mean nothing
-/// without it, so either set alone is refused rather than ignored: an
+fn github_hosts(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<ConnectableHost>, ConfigError> {
+    let mut hosts = vec![ConnectableHost {
+        host: GITHUB_HOST.to_owned(),
+        api_base: GITHUB_API.to_owned(),
+        web_base: GITHUB_WEB.to_owned(),
+    }];
+    if let Some(url) = lookup(GITHUB_ENTERPRISE_API_URL).filter(|v| !v.is_empty()) {
+        hosts.push(enterprise_host(&url)?);
+    }
+    Ok(hosts)
+}
+
+/// The App id switches the configured App on, and its key name means
+/// nothing without it, so a key set alone is refused rather than ignored: an
 /// operator who named a key expects tokens, and would otherwise find out
-/// from a runner's `503`s.
+/// from a runner's `503`s. The Enterprise Server stands on its own, since an
+/// App can be connected there from the Hub's pages.
 fn github_app(
     lookup: &impl Fn(&str) -> Option<String>,
+    hosts: &[ConnectableHost],
 ) -> Result<Option<GithubAppSettings>, ConfigError> {
     let set = |var: &str| lookup(var).filter(|v| !v.is_empty());
     let Some(app_id) = set(GITHUB_APP_ID) else {
-        for var in [GITHUB_APP_KEY, GITHUB_ENTERPRISE_API_URL] {
-            if set(var).is_some() {
-                return Err(ConfigError::Invalid {
-                    var,
-                    reason: format!("it means nothing unless `{GITHUB_APP_ID}` is set too"),
-                });
-            }
+        if set(GITHUB_APP_KEY).is_some() {
+            return Err(ConfigError::Invalid {
+                var: GITHUB_APP_KEY,
+                reason: format!("it means nothing unless `{GITHUB_APP_ID}` is set too"),
+            });
         }
         return Ok(None);
     };
@@ -223,20 +252,21 @@ fn github_app(
             ),
         });
     }
-    let mut hosts = vec![GithubHost {
-        host: GITHUB_HOST.to_owned(),
-        api_base: GITHUB_API.to_owned(),
-    }];
-    if let Some(url) = set(GITHUB_ENTERPRISE_API_URL) {
-        hosts.push(enterprise_host(&url)?);
-    }
+    let hosts = hosts
+        .iter()
+        .map(|h| GithubHost {
+            host: h.host.clone(),
+            api_base: h.api_base.clone(),
+        })
+        .collect();
     Ok(Some(GithubAppSettings { app_id, key, hosts }))
 }
 
 /// A GitHub Enterprise Server's API base, `https://<host>[:port]/api/v3`,
-/// and the host its repositories are cloned from, which is the same one.
-/// Only `https`: the App JWT rides on every request to it.
-fn enterprise_host(url: &str) -> Result<GithubHost, ConfigError> {
+/// the host its repositories are cloned from, which is the same one, and
+/// its web root at that host. Only `https`: the App JWT rides on every
+/// request to it.
+fn enterprise_host(url: &str) -> Result<ConnectableHost, ConfigError> {
     let invalid = |reason: &str| ConfigError::Invalid {
         var: GITHUB_ENTERPRISE_API_URL,
         reason: format!("`{url}` {reason}"),
@@ -256,10 +286,40 @@ fn enterprise_host(url: &str) -> Result<GithubHost, ConfigError> {
     if host == GITHUB_HOST {
         return Err(invalid("names github.com, which needs no setting"));
     }
-    Ok(GithubHost {
+    Ok(ConnectableHost {
+        web_base: format!("https://{host}"),
         host,
         api_base: url.trim_end_matches('/').to_owned(),
     })
+}
+
+/// Both set is refused rather than one winning: an operator who moved to the
+/// Kubernetes login and left a token behind would otherwise keep a standing
+/// credential they believe is gone.
+fn openbao_auth(lookup: &impl Fn(&str) -> Option<String>) -> Result<OpenBaoAuth, ConfigError> {
+    let set = |var| lookup(var).filter(|v: &String| !v.is_empty());
+    let Some(role) = set(OPENBAO_K8S_ROLE) else {
+        return openbao_token(lookup).map(OpenBaoAuth::Token);
+    };
+    if set(OPENBAO_TOKEN).is_some() || set(OPENBAO_TOKEN_FILE).is_some() {
+        return Err(ConfigError::Invalid {
+            var: OPENBAO_K8S_ROLE,
+            reason: format!("is set together with `{OPENBAO_TOKEN}` or `{OPENBAO_TOKEN_FILE}`"),
+        });
+    }
+    let mount = set(OPENBAO_K8S_MOUNT).unwrap_or_else(|| DEFAULT_K8S_MOUNT.to_owned());
+    if !mount.split('/').all(is_key_name) {
+        return Err(ConfigError::Invalid {
+            var: OPENBAO_K8S_MOUNT,
+            reason: format!("each segment may hold only {KEY_NAME_ALPHABET}"),
+        });
+    }
+    let jwt_file = set(OPENBAO_K8S_JWT_FILE).ok_or(ConfigError::Missing(OPENBAO_K8S_JWT_FILE))?;
+    Ok(OpenBaoAuth::Kubernetes(KubernetesLogin {
+        role,
+        mount,
+        jwt_file: PathBuf::from(jwt_file),
+    }))
 }
 
 fn openbao_token(lookup: &impl Fn(&str) -> Option<String>) -> Result<String, ConfigError> {
@@ -433,13 +493,14 @@ impl fmt::Debug for Config {
             .field("rp_id", &self.rp_id)
             .field("database_url", &redact_database_url(&self.database_url))
             .field("openbao_addr", &self.openbao_addr)
-            .field("openbao_token", &REDACTED)
+            .field("openbao_auth", &self.openbao_auth)
             .field("transit_mount", &self.transit_mount)
             .field("transit_key", &self.transit_key)
             .field("signing_key", &self.signing_key)
             .field("web_dir", &self.web_dir)
             .field("attachments", &self.attachments)
             .field("github_app", &self.github_app)
+            .field("github_hosts", &self.github_hosts)
             .finish()
     }
 }
@@ -519,6 +580,9 @@ mod tests {
             }
         );
         assert_eq!(app.hosts.len(), 2);
+        let config = load(&env).unwrap();
+        assert_eq!(config.github_hosts[1].web_base, "https://ghe.example:8443");
+        assert_eq!(config.github_hosts[0].web_base, "https://github.com");
     }
 
     fn refused_var(env: &HashMap<&'static str, String>) -> &'static str {
@@ -585,12 +649,27 @@ mod tests {
     }
 
     #[test]
-    fn a_github_key_or_server_without_an_app_id_is_refused_not_ignored() {
-        for var in [GITHUB_APP_KEY, GITHUB_ENTERPRISE_API_URL] {
-            let mut env = full();
-            env.insert(var, "https://ghe.example/api/v3".to_owned());
-            assert_eq!(refused_var(&env), var);
-        }
+    fn a_github_key_without_an_app_id_is_refused_not_ignored() {
+        let mut env = full();
+        env.insert(GITHUB_APP_KEY, "ghe-app".to_owned());
+        assert_eq!(refused_var(&env), GITHUB_APP_KEY);
+    }
+
+    #[test]
+    fn an_enterprise_server_alone_is_a_host_to_connect_apps_on() {
+        let mut env = full();
+        env.insert(
+            GITHUB_ENTERPRISE_API_URL,
+            "https://ghe.example/api/v3".to_owned(),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.github_app, None);
+        let hosts: Vec<&str> = config
+            .github_hosts
+            .iter()
+            .map(|h| h.host.as_str())
+            .collect();
+        assert_eq!(hosts, ["github.com", "ghe.example"]);
     }
 
     #[test]
@@ -648,7 +727,51 @@ mod tests {
         env.insert(OPENBAO_TOKEN_FILE, path.to_string_lossy().into_owned());
         let config = load(&env);
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(config.unwrap().openbao_token, "s.fromfile");
+        assert_eq!(
+            config.unwrap().openbao_auth,
+            OpenBaoAuth::Token("s.fromfile".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_kubernetes_role_logs_in_with_the_named_token_file_and_needs_no_openbao_token() {
+        let mut env = full();
+        env.remove(OPENBAO_TOKEN);
+        env.insert(OPENBAO_K8S_ROLE, "demeteo-hub".to_owned());
+        env.insert(
+            OPENBAO_K8S_JWT_FILE,
+            "/var/run/secrets/openbao-sa/token".to_owned(),
+        );
+        assert_eq!(
+            load(&env).unwrap().openbao_auth,
+            OpenBaoAuth::Kubernetes(KubernetesLogin {
+                role: "demeteo-hub".to_owned(),
+                mount: DEFAULT_K8S_MOUNT.to_owned(),
+                jwt_file: PathBuf::from("/var/run/secrets/openbao-sa/token"),
+            })
+        );
+
+        env.remove(OPENBAO_K8S_JWT_FILE);
+        let err = load(&env).unwrap_err().to_string();
+        assert!(err.contains(OPENBAO_K8S_JWT_FILE), "{err}");
+
+        env.insert(OPENBAO_K8S_JWT_FILE, "/t".to_owned());
+        env.insert(OPENBAO_K8S_MOUNT, "../sys".to_owned());
+        let err = load(&env).unwrap_err().to_string();
+        assert!(err.contains(OPENBAO_K8S_MOUNT), "{err}");
+    }
+
+    #[test]
+    fn a_kubernetes_role_beside_a_token_refuses_startup() {
+        for token_var in [OPENBAO_TOKEN, OPENBAO_TOKEN_FILE] {
+            let mut env = full();
+            env.remove(OPENBAO_TOKEN);
+            env.insert(token_var, "s.leftover".to_owned());
+            env.insert(OPENBAO_K8S_ROLE, "demeteo-hub".to_owned());
+            env.insert(OPENBAO_K8S_JWT_FILE, "/t".to_owned());
+            let err = load(&env).unwrap_err().to_string();
+            assert!(err.contains(OPENBAO_K8S_ROLE), "{token_var}: {err}");
+        }
     }
 
     #[test]

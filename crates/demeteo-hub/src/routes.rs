@@ -5,6 +5,7 @@ use crate::auth::handlers::{self, cookie_text, header_text, ApiError};
 use crate::auth::session::{self, Rejection};
 use crate::auth::webauthn::{RelyingPartyError, Verifier};
 use crate::auth::RelyingParty;
+use crate::git_hosts::{self, manifest::GitHostsSetup};
 use crate::git_token;
 use crate::pairing;
 use crate::pairing::pending::Pairings;
@@ -50,6 +51,9 @@ pub struct AppState {
     /// answers `503`. Outside `shared` so that it can be set after `new`.
     git_tokens: Option<Arc<dyn GitTokenMinter>>,
     git_token_window_secs: u64,
+    /// `None` until the composition root sets it: the git-host routes then
+    /// answer `503`, as a Hub with no Transit import would.
+    git_hosts: Option<Arc<GitHostsSetup>>,
 }
 
 impl AppState {
@@ -80,6 +84,7 @@ impl AppState {
             }),
             git_tokens: None,
             git_token_window_secs: crate::config::DEFAULT_GIT_TOKEN_WINDOW_SECS,
+            git_hosts: None,
         })
     }
 
@@ -102,6 +107,16 @@ impl AppState {
 
     pub fn git_token_window_secs(&self) -> u64 {
         self.git_token_window_secs
+    }
+
+    /// The state with `setup` serving the git-host routes.
+    pub fn with_git_hosts(mut self, setup: Arc<GitHostsSetup>) -> Self {
+        self.git_hosts = Some(setup);
+        self
+    }
+
+    pub fn git_hosts(&self) -> Option<&GitHostsSetup> {
+        self.git_hosts.as_deref()
     }
 
     pub fn db(&self) -> &Db {
@@ -189,6 +204,14 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
             git_token::fetch::GIT_TOKEN_PATH,
             post(git_token::fetch::post_git_token),
         )
+        // Outside `v1`: GitHub's redirect back is a cross-site top-level
+        // `GET`, so it carries no `SameSite=Strict` session cookie, and the
+        // guard would let it through anyway. It is admitted by the
+        // single-use `state` it carries, which names the tenant.
+        .route(
+            git_hosts::manifest::MANIFEST_CALLBACK_PATH,
+            get(git_hosts::handlers::manifest_callback),
+        )
         .with_state(state.clone())
         .merge(v1(state));
     router_with(routes, web_dir)
@@ -246,6 +269,15 @@ fn v1(state: AppState) -> Router {
         .route(
             "/v1/pairing/device/deny",
             post(pairing::handlers::deny_device),
+        )
+        .route("/v1/git-hosts", get(git_hosts::handlers::get_git_hosts))
+        .route(
+            "/v1/git-hosts/github/manifest",
+            post(git_hosts::handlers::post_manifest),
+        )
+        .route(
+            "/v1/git-hosts/{id}/remove",
+            post(git_hosts::handlers::post_remove),
         )
         .route("/v1/fleet", get(api::fleet::get_fleet))
         .route("/v1/instances/{instance_id}", get(api::fleet::get_instance))

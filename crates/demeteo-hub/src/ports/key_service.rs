@@ -75,3 +75,38 @@ pub trait RsaSigner: Send + Sync {
     /// as the key's modulus.
     async fn sign_rs256(&self, key: &str, message: &[u8]) -> Result<Vec<u8>, KeyServiceError>;
 }
+
+/// A 2048-bit RSA private key as PKCS#8 DER, on its way into the key service
+/// and nowhere else. Built only by
+/// [`transit_import::rsa_key_from_pem`](crate::adapters::transit_import::rsa_key_from_pem),
+/// which checks it parses; `Debug` omits it, and it is never cloned so there
+/// is one copy to drop.
+pub struct RsaPrivateKey {
+    pkcs8: Vec<u8>,
+}
+
+impl RsaPrivateKey {
+    pub(crate) fn from_checked_pkcs8(pkcs8: Vec<u8>) -> Self {
+        Self { pkcs8 }
+    }
+
+    pub fn pkcs8_der(&self) -> &[u8] {
+        &self.pkcs8
+    }
+}
+
+impl fmt::Debug for RsaPrivateKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RsaPrivateKey(<redacted>)")
+    }
+}
+
+/// Creating an RSA key in the service from key material the Hub was handed
+/// once: a GitHub App's private key, which GitHub returns from the manifest
+/// conversion and never again (decision 71, amended 2026-11-06). Import only:
+/// nothing here reads a key back, and the service refuses an import over a
+/// name that already exists, so this cannot replace a key the Hub signs with.
+#[async_trait]
+pub trait KeyImporter: Send + Sync {
+    async fn import_rsa(&self, name: &str, key: RsaPrivateKey) -> Result<(), KeyServiceError>;
+}

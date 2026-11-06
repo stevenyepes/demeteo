@@ -59,6 +59,7 @@ struct Fleet {
     /// In pairing order.
     held: Vec<Held>,
     trusted: HashMap<UserId, Vec<String>>,
+    git_token_problems: HashMap<(UserId, InstanceId, String), String>,
 }
 
 #[derive(Default)]
@@ -218,6 +219,20 @@ impl MemoryFleet {
             .map(|held| held.hub.clone())
     }
 
+    /// What the git-token route would have recorded for the start that
+    /// created `feature_id` on `instance`.
+    pub fn note_git_token_problem(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        feature_id: &str,
+        problem: &str,
+    ) {
+        self.fleet()
+            .git_token_problems
+            .insert((user, instance, feature_id.to_owned()), problem.to_owned());
+    }
+
     fn fleet(&self) -> MutexGuard<'_, Fleet> {
         match self.fleet.lock() {
             Ok(fleet) => fleet,
@@ -306,6 +321,19 @@ impl ApiStore for MemoryFleet {
             created_at,
             answered_at: request.answered_at,
         }))
+    }
+
+    async fn git_token_problem(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        feature_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .fleet()
+            .git_token_problems
+            .get(&(user, instance, feature_id.to_owned()))
+            .cloned())
     }
 
     async fn trusted_credential_ids(&self, user: UserId) -> Result<Vec<String>, StoreError> {

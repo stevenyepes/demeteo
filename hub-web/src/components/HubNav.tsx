@@ -1,16 +1,17 @@
-import { KeyRound, LogOut, type LucideIcon, Play, Plus, Server, Zap } from 'lucide-react';
+import { GitBranch, KeyRound, LogOut, type LucideIcon, Play, Plus, Server, Zap } from 'lucide-react';
 import { useId } from 'react';
 
 import RailBadge from '../../../src/components/ui/RailBadge';
 import { type Route, routeHref } from '../lib/router';
 
-type Section = 'fleet' | 'runs' | 'dispatch' | 'add-instance' | 'passkeys';
+type Section = 'fleet' | 'runs' | 'dispatch' | 'add-instance' | 'git-hosts' | 'passkeys';
 
 const SECTIONS: readonly { name: Section; label: string; icon: LucideIcon }[] = [
   { name: 'fleet', label: 'Fleet', icon: Server },
   { name: 'runs', label: 'Runs', icon: Zap },
   { name: 'dispatch', label: 'Dispatch', icon: Play },
   { name: 'add-instance', label: 'Add instance', icon: Plus },
+  { name: 'git-hosts', label: 'Git hosts', icon: GitBranch },
   { name: 'passkeys', label: 'Passkeys', icon: KeyRound },
 ];
 
@@ -39,6 +40,8 @@ function sectionOf(route: Route): Section | null {
       return 'add-instance';
     case 'passkeys':
       return 'passkeys';
+    case 'git-hosts':
+      return 'git-hosts';
     case 'sign-up':
     case 'sign-in':
     case 'not-found':

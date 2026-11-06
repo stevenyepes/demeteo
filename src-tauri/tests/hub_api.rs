@@ -1118,6 +1118,7 @@ async fn a_run_shows_its_steps_tickets_pending_gates_and_events_in_offset_order(
             "title": null,
             "project_id": null,
             "project_name": null,
+            "git_token_problem": null,
             "steps": [{"step_id": "s1", "state": "running", "title": null}],
             "tickets": {"completed": 1, "failed": 0, "running": 1},
             "pending_gates": [{"feature_id": "F1", "step_execution_id": "e1",

@@ -1098,7 +1098,7 @@ fn the_session_cookie_is_http_only_secure_and_same_site_strict() {
 /// This table and the next list every state-changing route the Hub serves.
 /// Their lengths are in their types so that losing a row is a compile error
 /// and not a loop that quietly covers one route fewer.
-const SESSION_BOUND_POSTS: [&str; 20] = [
+const SESSION_BOUND_POSTS: [&str; 22] = [
     "/v1/session/end",
     "/v1/passkeys/add/start",
     "/v1/passkeys/add/finish",
@@ -1119,6 +1119,8 @@ const SESSION_BOUND_POSTS: [&str; 20] = [
     "/v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment",
     "/v1/instances/{instance_id}/gates/challenge",
     "/v1/instances/{instance_id}/gates/decision",
+    "/v1/git-hosts/github/manifest",
+    "/v1/git-hosts/{id}/remove",
 ];
 
 /// The `POST` routes that run before there is a session to derive a token
@@ -1422,6 +1424,7 @@ const SESSION_BOUND_GETS: &[&str] = &[
     "/v1/runs",
     "/v1/instances/{instance_id}/runs/{feature_id}",
     "/v1/instances/{instance_id}/requests/{request_id}",
+    "/v1/git-hosts",
 ];
 
 /// No request here reaches the database, which cannot answer: a session

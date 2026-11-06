@@ -729,7 +729,7 @@ fn hub_socket_detectors_fire_on_violations() {
     }
 }
 
-const EXPECTED_TABLES: [&str; 12] = [
+const EXPECTED_TABLES: [&str; 13] = [
     "users",
     "passkeys",
     "instances",
@@ -742,9 +742,22 @@ const EXPECTED_TABLES: [&str; 12] = [
     "sessions",
     "passkey_endorsements",
     "passkey_revocations",
+    "git_hosts",
 ];
 const FORBIDDEN_TOKEN_COLUMNS: [&str; 4] = ["token", "secret", "plaintext", "private_key"];
 const FORBIDDEN_ATTACHMENT_COLUMNS: [&str; 3] = ["data_key", "plaintext", "key"];
+/// GitHub's manifest conversion answers with the App's private key and its
+/// client and webhook secrets; the key goes to Transit and the secrets are
+/// never read (decision 71, amended 2026-11-06). A row names its key by
+/// `transit_key` and holds none of them.
+const FORBIDDEN_GIT_HOST_COLUMNS: [&str; 6] = [
+    "pem",
+    "private_key",
+    "key",
+    "secret",
+    "client_secret",
+    "webhook_secret",
+];
 /// The CSRF token is derived from the session secret and never stored, so a
 /// column for it means that derivation was replaced by a second stored secret.
 const FORBIDDEN_SESSION_COLUMNS: [&str; 6] = [
@@ -927,6 +940,7 @@ fn secret_column_violations(tables: &[Table]) -> Vec<String> {
             &FORBIDDEN_ATTACHMENT_COLUMNS[..],
         ),
         ("sessions", "token_hash", &FORBIDDEN_SESSION_COLUMNS[..]),
+        ("git_hosts", "transit_key", &FORBIDDEN_GIT_HOST_COLUMNS[..]),
     ] {
         let Some(t) = tables.iter().find(|t| t.name == table) else {
             out.push(format!("{table} is missing"));
@@ -1309,7 +1323,8 @@ fn schema_detectors_fire_on_violations() {
 
     let secrets = "CREATE TABLE tokens (\n  token_hash BYTEA\n);\n\
                    CREATE TABLE attachments (\n  wrapped_key TEXT\n);\n\
-                   CREATE TABLE sessions (\n  token_hash BYTEA\n);\n";
+                   CREATE TABLE sessions (\n  token_hash BYTEA\n);\n\
+                   CREATE TABLE git_hosts (\n  transit_key TEXT\n);\n";
     assert!(secret_column_violations(&parse_tables(secrets)).is_empty());
     for (table, required, forbidden) in [
         ("tokens", "token_hash BYTEA", &FORBIDDEN_TOKEN_COLUMNS[..]),
@@ -1322,6 +1337,11 @@ fn schema_detectors_fire_on_violations() {
             "sessions",
             "token_hash BYTEA",
             &FORBIDDEN_SESSION_COLUMNS[..],
+        ),
+        (
+            "git_hosts",
+            "transit_key TEXT",
+            &FORBIDDEN_GIT_HOST_COLUMNS[..],
         ),
     ] {
         let good = format!("CREATE TABLE {table} (\n  {required}\n);\n");

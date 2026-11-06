@@ -26,12 +26,13 @@ describe('AddInstance', () => {
     render(<AddInstance />);
 
     const steps = within(screen.getByRole('list', { name: 'A runner host' })).getAllByRole('listitem');
-    expect(steps).toHaveLength(3);
+    expect(steps).toHaveLength(4);
     expect(steps[0].querySelector('.font-mono')?.textContent).toBe(
       `demeteo-runner hub pair ${window.location.origin}`,
     );
     expect(within(steps[1]).getByRole('link', { name: 'Pair runner' })).toHaveAttribute('href', '#/device');
     expect(steps[2]).toHaveTextContent(/fingerprint/);
+    expect(within(steps[3]).getByRole('link', { name: 'Git hosts' })).toHaveAttribute('href', '#/git-hosts');
   });
 
   it("shows this Hub's URL from the page origin, in monospace", () => {

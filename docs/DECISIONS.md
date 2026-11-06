@@ -547,6 +547,22 @@ the download is destroyed. The Hub signs the App's JWT through Transit. This
 stops the key from being copied, not from being used: a compromised Hub process
 can still ask Transit to sign, which is the accepted risk in the row above.
 
+*Amended 2026-11-06: the key passes through the Hub's memory once, when the App
+is created.* An operator importing a downloaded key by hand needed OpenBao's
+root token, and that is where a real deployment stalled. So the Hub creates the
+App itself, through GitHub's App manifest flow
+([HUB.md §6.5](HUB.md#65-git-tokens-for-hub-started-runs)): GitHub answers the
+conversion with the private key, and the Hub wraps it for Transit's import at
+once and drops it. The key is in Hub memory for that one request, never on
+disk, in Postgres or in a log, and never again: Transit imports it as
+non-exportable, refuses a second import under the same name, and the Hub's
+policy grants import and signing but no export. The conversion's client and
+webhook secrets are never read. A compromised Hub could therefore capture the
+key of an App created while it is compromised, which it could already use
+through Transit; it cannot read one created earlier. Several Apps may be
+connected, each under its own Transit key, and the App set by environment keeps
+working beside them.
+
 **Minting is narrow.** Only for a run the Hub dispatched to a paired runner,
 only while that run is live, only for that run's repository, and only with
 `contents: write` and `pull_requests: write`. A minted token is never written to

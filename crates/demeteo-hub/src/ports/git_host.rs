@@ -1,4 +1,5 @@
 use super::KeyServiceError;
+use crate::store::UserId;
 use async_trait::async_trait;
 use std::fmt;
 
@@ -44,10 +45,18 @@ impl fmt::Debug for InstallationToken {
 /// operator which side to look at.
 #[derive(Debug, thiserror::Error)]
 pub enum MintError {
-    /// The repository's host is neither github.com nor the configured GitHub
-    /// Enterprise Server, so there is no API to ask. Nothing a retry changes.
-    #[error("no GitHub API is configured for host `{0}`")]
+    /// No App is connected or configured for the repository's host. A human
+    /// can connect one while the run waits, so this is retried, not final.
+    #[error("no GitHub App is connected for host `{0}`")]
     UnknownHost(String),
+    /// More than one of the tenant's Apps is installed on the repository.
+    /// Neither is chosen: which bot opens the pull request is the user's
+    /// call, and a guess would differ from one fetch to the next.
+    #[error("{0} connected GitHub Apps are installed on the repository")]
+    Ambiguous(usize),
+    /// The Hub's own record of connected Apps could not be read.
+    #[error("the connected git hosts could not be read: {0}")]
+    Hosts(String),
     #[error("the App JWT could not be signed: {0}")]
     Signing(KeyServiceError),
     #[error("GitHub could not be reached: {0}")]
@@ -66,9 +75,12 @@ pub enum MintError {
 /// and `pull_requests: write`, and nothing else.
 #[async_trait]
 pub trait GitTokenMinter: Send + Sync {
-    /// `now` is Unix seconds, the clock the App JWT is issued by.
+    /// `user` is the tenant whose start asked: only its connected Apps, and
+    /// the one configured for the whole Hub, may mint. `now` is Unix
+    /// seconds, the clock the App JWT is issued by.
     async fn mint(
         &self,
+        user: UserId,
         repository: &GithubRepository,
         now: u64,
     ) -> Result<InstallationToken, MintError>;

@@ -26,7 +26,11 @@ pub fn rp() -> RelyingParty {
     }
 }
 
+/// An empty body, as a `204` answers, is `null`.
 pub fn as_json(text: &str) -> Value {
+    if text.is_empty() {
+        return Value::Null;
+    }
     serde_json::from_str(text).unwrap()
 }
 

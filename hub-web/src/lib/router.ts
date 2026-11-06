@@ -20,6 +20,11 @@ export type Route =
   | { name: 'sign-up' }
   | { name: 'sign-in' }
   | { name: 'passkeys' }
+  /**
+   * `connected` and `failed` are where the Hub sends the browser back from
+   * GitHub's App manifest flow: the new host's id, or why it did not connect.
+   */
+  | { name: 'git-hosts'; connected?: string; failed?: string }
   | { name: 'not-found'; path: string };
 
 export function parseRoute(hash: string): Route {
@@ -43,6 +48,10 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
     case 'sign-in':
     case 'passkeys':
       return [route.name];
+    case 'git-hosts':
+      if (route.connected !== undefined) return ['git-hosts', 'connected', route.connected];
+      if (route.failed !== undefined) return ['git-hosts', 'failed', route.failed];
+      return ['git-hosts'];
     case 'dispatch':
       return route.instanceId === undefined ? ['dispatch'] : ['instances', route.instanceId, 'dispatch'];
     case 'pair':
@@ -83,6 +92,8 @@ function matchSegments(segments: string[] | null): Route | null {
         return { name: head };
       case 'device':
         return { name: 'device' };
+      case 'git-hosts':
+        return { name: 'git-hosts' };
       default:
         return null;
     }
@@ -90,9 +101,18 @@ function matchSegments(segments: string[] | null): Route | null {
   if (head === 'runs') return segments.length === 3 ? { name: 'runs', instanceId, featureId: tail } : null;
   if (head === 'pair') return segments.length === 2 ? { name: 'pair', request: segments[1] } : null;
   if (head === 'device') return segments.length === 2 ? { name: 'device', userCode: segments[1] } : null;
+  if (head === 'git-hosts') return gitHostsOutcome(segments);
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };
   if (segments.length === 3 && tail === 'dispatch') return { name: 'dispatch', instanceId };
   if (segments.length === 4 && tail === 'runs') return { name: 'run', instanceId, featureId };
+  return null;
+}
+
+function gitHostsOutcome(segments: string[]): Route | null {
+  if (segments.length !== 3) return null;
+  const [, outcome, value] = segments;
+  if (outcome === 'connected') return { name: 'git-hosts', connected: value };
+  if (outcome === 'failed') return { name: 'git-hosts', failed: value };
   return null;
 }

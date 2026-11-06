@@ -1,10 +1,14 @@
-use demeteo_hub::adapters::github_app::{self, GithubApp};
+use demeteo_hub::adapters::github_app;
 use demeteo_hub::adapters::openbao::{http_client, OpenBaoKeys};
 use demeteo_hub::attachments::postgres::PostgresAttachments;
 use demeteo_hub::attachments::sweep;
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::config::Config;
-use demeteo_hub::ports::{KeyService, RsaSigner};
+use demeteo_hub::git_hosts::manifest::GitHostsSetup;
+use demeteo_hub::git_hosts::minter::GithubApps;
+use demeteo_hub::git_hosts::port::GitHostStore;
+use demeteo_hub::git_hosts::postgres::PostgresGitHosts;
+use demeteo_hub::ports::{KeyImporter, KeyService, RsaSigner};
 use demeteo_hub::socket::SHUTDOWN_DRAIN_SECS;
 use demeteo_hub::startup::{classify_key_probe, serve_until_stopped, KeyStatus};
 use demeteo_hub::{routes, store};
@@ -43,16 +47,17 @@ async fn run() -> Result<(), String> {
     let http =
         http_client(OPENBAO_CONNECT_TIMEOUT, OPENBAO_TOTAL_TIMEOUT).map_err(|e| e.to_string())?;
     let openbao = Arc::new(
-        OpenBaoKeys::new(
+        OpenBaoKeys::with_auth(
             http,
             &config.openbao_addr,
             &config.transit_mount,
-            &config.openbao_token,
+            &config.openbao_auth,
         )
         .map_err(|e| e.to_string())?,
     );
     let keys: Arc<dyn KeyService> = openbao.clone();
-    let signer: Arc<dyn RsaSigner> = openbao;
+    let signer: Arc<dyn RsaSigner> = openbao.clone();
+    let importer: Arc<dyn KeyImporter> = openbao;
 
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
@@ -71,7 +76,8 @@ async fn run() -> Result<(), String> {
         rp_id: config.rp_id,
         origin: config.origin,
     };
-    let mut state = routes::AppState::new(
+    let git_hosts: Arc<dyn GitHostStore> = Arc::new(PostgresGitHosts::new(db.clone()));
+    let state = routes::AppState::new(
         db,
         rp,
         keys,
@@ -80,21 +86,33 @@ async fn run() -> Result<(), String> {
         config.attachments,
     )
     .map_err(|e| e.to_string())?;
-    // Unconfigured is a supported deployment, not a fault: the Hub serves
-    // everything else and answers `POST /git-token` with `503`.
-    match config.github_app {
-        Some(settings) => {
-            let http = github_app::http_client(GITHUB_CONNECT_TIMEOUT, GITHUB_TOTAL_TIMEOUT)?;
-            tracing::info!(
-                app_id = settings.app_id,
-                "minting git tokens as a GitHub App"
-            );
-            state = state
-                .with_git_tokens(Arc::new(GithubApp::new(http, signer, settings)))
-                .with_git_token_window(config.git_token_window_secs);
-        }
-        None => tracing::info!("no GitHub App is configured; no git token will be minted"),
+    // One minter serves every tenant: the App configured here, if any, and
+    // the Apps each tenant connects from the Hub's pages, read per fetch.
+    // With neither, `POST /git-token` answers `503 github_app_missing`.
+    match &config.github_app {
+        Some(settings) => tracing::info!(
+            app_id = settings.app_id,
+            "minting git tokens as a GitHub App"
+        ),
+        None => tracing::info!("no GitHub App is configured; connected Apps alone will mint"),
     }
+    let github = github_app::http_client(GITHUB_CONNECT_TIMEOUT, GITHUB_TOTAL_TIMEOUT)?;
+    let minter = GithubApps::new(
+        github.clone(),
+        signer,
+        Arc::clone(&git_hosts),
+        config.github_app,
+    );
+    let setup = GitHostsSetup {
+        store: git_hosts,
+        importer,
+        http: github,
+        hosts: config.github_hosts,
+    };
+    let state = state
+        .with_git_tokens(Arc::new(minter))
+        .with_git_token_window(config.git_token_window_secs)
+        .with_git_hosts(Arc::new(setup));
     let app = routes::router(state.clone(), &config.web_dir);
     serve_until_stopped(
         listener,

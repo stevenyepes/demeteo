@@ -109,45 +109,57 @@ Put the resulting `client_token` in `.env` as `OPENBAO_TOKEN`. Do not use the ro
 `OPENBAO_TOKEN`, and do not add `-no-default-policy`: OpenBao's `default` policy is what lets
 the token renew and look itself up.
 
-### A GitHub App for runner runs
+### GitHub Apps for runner runs
 
-Optional. Without it the Hub mints no git token, and a run it starts on a runner parks
-`needs-credentials` ([`HUB.md` §6.5](../../docs/HUB.md#65-git-tokens-for-hub-started-runs)).
+Optional. Without one the Hub mints no git token, and a run it starts on a runner waits
+for one ([`HUB.md` §6.5](../../docs/HUB.md#65-git-tokens-for-hub-started-runs)).
 
-1. Create a GitHub App with **Contents** and **Pull requests** set to read and write, and
-   no other permission. Install it on **selected repositories** only, never all of an
-   account's. Download its private key.
-2. Convert the key to base64 PKCS#8 DER and import it into Transit. The CLI does the BYOK
-   wrapping:
+**Grant the import once.** Add three lines to the `demeteo-hub` policy above and write it
+again. This is the last step that needs the root token:
 
-   ```bash
-   openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem -outform DER | base64 -w0 > app.key.b64
-   docker compose cp app.key.b64 openbao:/tmp/app.key.b64
-   docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
-     bao transit import transit/keys/demeteo-hub-github-app @/tmp/app.key.b64 type=rsa-2048
-   docker compose exec openbao rm /tmp/app.key.b64
-   ```
+```
+path "transit/wrapping_key"    { capabilities = ["read"] }
+path "transit/keys/+/import"   { capabilities = ["update"] }
+path "transit/sign/+/sha2-256" { capabilities = ["update"] }
+```
 
-3. Shred `app.private-key.pem` and `app.key.b64` on the host. The key now exists only in
-   Transit.
-4. Add one line to the `demeteo-hub` policy above and write it again:
+The Hub reads Transit's wrapping key, imports an App's key wrapped under it, and signs with
+SHA-256 only, so the policy names that path and not the bare `transit/sign/+`. Transit
+imports each key non-exportable and refuses an import over an existing name, and the policy
+grants no export and no `deletion_allowed`. `scripts/dev-hub.sh` adds the same lines to the
+dev OpenBao.
 
-   ```
-   path "transit/sign/demeteo-hub-github-app/sha2-256" { capabilities = ["update"] }
-   ```
+**Connect an App from the web app.** Sign in, open **Git hosts**, and choose **Connect
+GitHub**, naming an organization or leaving it empty for your own account. GitHub opens
+with the App filled in (private, **Contents** and **Pull requests** read and write, no
+webhook); confirm it there. GitHub sends you back to the Hub, which stores the App's key in
+Transit as `demeteo-hub-gh-<app id>`, and Git hosts then links to installing the App. Install
+it on **selected repositories** only. Several Apps may be connected; a repository must have
+exactly one of them installed. Set `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL`
+(`https://<host>/api/v3`) to offer a GitHub Enterprise Server beside github.com.
 
-   The Hub signs only with SHA-256, so the policy names that path and not the bare
-   `transit/sign/demeteo-hub-github-app`.
-5. Set `DEMETEO_HUB_GITHUB_APP_ID` in `.env` to the App's numeric id, and recreate `hub`.
-   `DEMETEO_HUB_GITHUB_APP_KEY` names another Transit key, and
-   `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL` (`https://<host>/api/v3`) points at a GitHub
-   Enterprise Server. The Hub refuses to start if either is set without the App id.
-   `DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` (default `86400`) is how long after acceptance a
-   start with no wall clock of its own may still get tokens.
+`DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` (default `86400`) is how long after acceptance a start
+with no wall clock of its own may still get tokens.
 
-Rotate the App key by generating a new one on GitHub, importing it under a new Transit
-name, changing `DEMETEO_HUB_GITHUB_APP_KEY` and the policy line, and deleting the old key on
-GitHub. A runner holds no copy, so nothing else changes.
+**An App set by environment** still works, for every tenant, beside connected ones. Import
+its downloaded key yourself with the root token:
+
+```bash
+openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem -outform DER | base64 -w0 > app.key.b64
+docker compose cp app.key.b64 openbao:/tmp/app.key.b64
+docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
+  bao transit import transit/keys/demeteo-hub-github-app @/tmp/app.key.b64 type=rsa-2048
+docker compose exec openbao rm /tmp/app.key.b64
+```
+
+Shred `app.private-key.pem` and `app.key.b64`, then set `DEMETEO_HUB_GITHUB_APP_ID` to the
+App's numeric id and recreate `hub`. `DEMETEO_HUB_GITHUB_APP_KEY` names another Transit key;
+the Hub refuses to start if it is set without the App id.
+
+Rotate an environment App's key by generating a new one on GitHub, importing it under a new
+Transit name, changing `DEMETEO_HUB_GITHUB_APP_KEY`, and deleting the old key on GitHub. For
+a connected App, connect a new one, install it, and remove the old one from Git hosts and
+from GitHub. A runner holds no copy, so nothing else changes.
 
 ### A deployment that predates the signing key
 
@@ -318,6 +330,9 @@ in the `postgres-data` volume, and the passkey stays on the authenticator under 
 | `OPENBAO_ADDR` | hub | OpenBao address (compose network only) |
 | `OPENBAO_TOKEN` | hub | the least-privilege Transit token |
 | `OPENBAO_TOKEN_FILE` | hub | path to a file holding that token, as an alternative to `OPENBAO_TOKEN` |
+| `OPENBAO_K8S_ROLE` | hub | log in with the pod's Kubernetes service account under this role instead of a token; refused beside `OPENBAO_TOKEN` or `OPENBAO_TOKEN_FILE` |
+| `OPENBAO_K8S_JWT_FILE` | hub | the projected service-account token that login presents; required with the role, and read again at every login |
+| `OPENBAO_K8S_MOUNT` | hub | where OpenBao's Kubernetes auth is mounted (default `kubernetes`) |
 | `DEMETEO_HUB_TRANSIT_MOUNT` | hub | Transit mount, default `transit` |
 | `DEMETEO_HUB_TRANSIT_KEY` | hub | name of the Transit key that wraps, default `demeteo-hub` |
 | `DEMETEO_HUB_SIGNING_KEY` | hub | name of the Ed25519 Transit key that signs requests, default `demeteo-hub-signing`. Only ASCII letters, digits, `_` and `-` are allowed (`[A-Za-z0-9_-]`); the Hub refuses to start on any other name |
@@ -461,8 +476,12 @@ Whatever chart or manifests you write must keep what this guide establishes:
 - **one replica, `Recreate`** — [Run exactly one `hub`](#run-exactly-one-hub); a rolling
   update runs two for its length;
 - `/healthz` for both probes, which is safe because it stays 200 beside a sealed OpenBao;
-- `OPENBAO_TOKEN_FILE` from a mounted Secret, and a CronJob for
-  [the renewal](#renew-the-token-inside-every-period);
+- either `OPENBAO_K8S_ROLE` with a projected service-account token, so the Hub logs in with
+  its own identity and holds an OpenBao token only in memory, re-logging in before its TTL
+  ends; or `OPENBAO_TOKEN_FILE` from a mounted Secret and a CronJob for
+  [the renewal](#renew-the-token-inside-every-period). The first needs no token Secret and
+  no renewal. With OpenBao's declarative self-initialization it also needs no root token,
+  because none is ever handed out;
 - a private ingress, or one with a per-client rate limit
   ([No per-client limit](#no-per-client-limit-one-replica)).
 

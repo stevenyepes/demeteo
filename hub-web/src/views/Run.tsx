@@ -7,6 +7,7 @@ import { CeremonyError } from '../components/CeremonyError';
 import { PageHeader } from '../components/PageHeader';
 import { RunEvents } from '../components/RunEvents';
 import { RunGatesWaiting } from '../components/RunGatesWaiting';
+import { RunGitTokenProblem } from '../components/RunGitTokenProblem';
 import { RunStepList } from '../components/RunStepList';
 import { StepInspector } from '../components/StepInspector';
 import { TicketProgress } from '../components/TicketProgress';
@@ -117,6 +118,7 @@ function Loaded({ instanceId, featureId, detail, statusByNode, readAt, stale, sc
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]">
       <div className="flex min-w-0 flex-col gap-4">
         {stale && <StaleNotice readAt={readAt} />}
+        {detail.gitTokenProblem !== null && <RunGitTokenProblem problem={detail.gitTokenProblem} />}
         {detail.workflow === null ? (
           <NotReported detail={detail} statusByNode={statusByNode} titles={titles} onSelect={setSelectedStepId} />
         ) : (
