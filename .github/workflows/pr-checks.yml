@@ -155,7 +155,7 @@ jobs:
   # Windows-only test module that no ubuntu job can build fails here.
   # (AGENTS.md §3 "Cross-OS", docs/WINDOWS_PARITY.md "Gates")
   #
-  # macos-14 is pinned to the image build.yml releases from, so a PR compiles
+  # macos-15 is pinned to the image build.yml releases from, so a PR compiles
   # on the same SDK the shipped .app is built with.
   #
   # The tests are `cross-os-test` below, a separate job so that this one — the
@@ -166,7 +166,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-14]
+        platform: [windows-latest, macos-15]
 
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 25
@@ -245,7 +245,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: macos-14, shard: 1, shards: 1 }
+          - { platform: macos-15, shard: 1, shards: 1 }
           - { platform: windows-latest, shard: 1, shards: 3 }
           - { platform: windows-latest, shard: 2, shards: 3 }
           - { platform: windows-latest, shard: 3, shards: 3 }
