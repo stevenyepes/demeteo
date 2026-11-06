@@ -66,6 +66,14 @@ export function AddInstance() {
               The code is good for ten minutes. The runner finishes pairing on its own once you
               approve.
             </Step>
+            <Step number={4} title="Let its runs push">
+              Runs this Hub starts on the runner push and open pull requests as a GitHub App you
+              own. Connect one once on{' '}
+              <a href={routeHref({ name: 'git-hosts' })} className="text-accent-ink hover:underline">
+                Git hosts
+              </a>
+              , and choose the repositories it may reach.
+            </Step>
           </ol>
         </section>
         <section aria-labelledby="add-instance-trust" className="panel min-w-0 flex-[1_1_340px] p-6">

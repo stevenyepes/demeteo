@@ -605,6 +605,51 @@ pub async fn find_start(
 ///
 /// Two statements and not one `SET … = COALESCE(…)`: every fetch after the
 /// first would otherwise write the row again to change nothing.
+/// What [`note_git_token_problem`] last recorded for the start bound to
+/// `feature_id`: the run's page reads it to say what a human has to do.
+pub async fn git_token_problem_of(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    feature_id: &str,
+) -> Result<Option<String>, StoreError> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "SELECT git_token_problem FROM instance_requests \
+         WHERE user_id = $1 AND instance_id = $2 AND git_token_feature_id = $3 \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(feature_id)
+    .fetch_optional(db)
+    .await?
+    .flatten())
+}
+
+/// Records why the newest git-token fetch for this start minted nothing, or
+/// clears it with `None`. Written only when it changes, so a runner retrying
+/// once a minute does not rewrite the row each time.
+pub async fn note_git_token_problem(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    id: &RequestId,
+    problem: Option<&str>,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "UPDATE instance_requests SET git_token_problem = $4 \
+         WHERE user_id = $1 AND instance_id = $2 AND id = $3 \
+         AND git_token_problem IS DISTINCT FROM $4",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(id.as_slice())
+    .bind(problem)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 pub async fn bind_git_token_feature(
     user: UserId,
     db: &Db,

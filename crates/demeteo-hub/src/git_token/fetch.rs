@@ -80,7 +80,15 @@ pub async fn issue(
         .ok_or(TokenRefusal::NoStart)?;
     bound_verdict(Some(&bound), &body.feature_id)?;
 
-    minter.mint(&repository, now).await.map_err(|error| {
+    let minted = minter.mint(user, &repository, now).await;
+    let refusal = minted.as_ref().err().map(mint_verdict);
+    if let Err(error) = store
+        .note_problem(user, instance, id, refusal.and_then(TokenRefusal::problem))
+        .await
+    {
+        tracing::warn!(%error, "a git-token problem could not be recorded");
+    }
+    minted.map_err(|error| {
         tracing::warn!(%error, "no git token was minted");
         ApiError::from(mint_verdict(&error))
     })
@@ -173,6 +181,8 @@ mod tests {
         /// A binding another fetch committed between this one's read and its
         /// `UPDATE`.
         raced: Option<String>,
+        /// What the newest mint left recorded for the run's page.
+        problem: Mutex<Option<&'static str>>,
     }
 
     impl Fleet {
@@ -225,6 +235,19 @@ mod tests {
             Ok(bound.clone())
         }
 
+        async fn note_problem(
+            &self,
+            user: UserId,
+            instance: InstanceId,
+            id: RequestId,
+            problem: Option<&'static str>,
+        ) -> Result<(), StoreError> {
+            self.holding(user, instance)?;
+            assert_eq!(id, REQUEST);
+            *self.problem.lock().unwrap() = problem;
+            Ok(())
+        }
+
         async fn events(
             &self,
             user: UserId,
@@ -265,6 +288,7 @@ mod tests {
     impl GitTokenMinter for Minter {
         async fn mint(
             &self,
+            _user: UserId,
             repository: &GithubRepository,
             now: u64,
         ) -> Result<InstallationToken, MintError> {
@@ -332,6 +356,7 @@ mod tests {
             events: Vec::new(),
             bound: Mutex::new(None),
             raced: None,
+            problem: Mutex::new(None),
         }
     }
 
@@ -508,7 +533,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_gitlab_start_is_422_and_so_is_a_github_host_with_no_api() {
+    async fn a_gitlab_start_is_422_and_a_github_host_with_no_app_waits_for_one() {
         let gitlab = Fleet {
             start: Some(accepted_start("gitlab")),
             ..fleet()
@@ -520,11 +545,13 @@ mod tests {
         );
         assert!(minter.asked().is_empty());
 
+        let fleet = fleet();
         let minter = Minter::answering(vec![Err(MintError::UnknownHost("ghe".to_owned()))]);
         assert_eq!(
-            status_of(&fleet(), Some(&minter), "f-1").await,
-            Err(StatusCode::UNPROCESSABLE_ENTITY)
+            status_of(&fleet, Some(&minter), "f-1").await,
+            Err(StatusCode::SERVICE_UNAVAILABLE)
         );
+        assert_eq!(*fleet.problem.lock().unwrap(), Some("github_app_missing"));
     }
 
     #[tokio::test]
@@ -541,6 +568,24 @@ mod tests {
             Err(StatusCode::SERVICE_UNAVAILABLE)
         );
         assert_eq!(fleet.bound.lock().unwrap().as_deref(), Some("f-1"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_mint_is_recorded_for_the_run_and_cleared_by_the_next_that_mints() {
+        let fleet = fleet();
+        let minter = Minter::answering(vec![Err(MintError::NotInstalled), minted()]);
+
+        assert_eq!(
+            status_of(&fleet, Some(&minter), "f-1").await,
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        );
+        assert_eq!(
+            *fleet.problem.lock().unwrap(),
+            Some("github_app_not_installed")
+        );
+
+        assert!(status_of(&fleet, Some(&minter), "f-1").await.is_ok());
+        assert_eq!(*fleet.problem.lock().unwrap(), None);
     }
 
     #[tokio::test]

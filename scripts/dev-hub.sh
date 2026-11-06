@@ -136,6 +136,18 @@ path "transit/keys/demeteo-hub-signing"      { capabilities = ["read"] }
 path "transit/sign/demeteo-hub-signing"      { capabilities = ["update"] }
 EOF
   fi
+  # Connecting an App from the Hub's own pages imports its key, so the
+  # token may read the wrapping key, import new keys and sign with any of
+  # them (README, "A least-privilege policy and token"). Appended, not
+  # rewritten, so a policy from before this grant is upgraded in place.
+  if ! bao policy read demeteo-hub | grep -q 'transit/wrapping_key'; then
+    say "letting the Hub's token import connected GitHub App keys"
+    { bao policy read demeteo-hub
+      echo 'path "transit/wrapping_key"    { capabilities = ["read"] }'
+      echo 'path "transit/keys/+/import"   { capabilities = ["update"] }'
+      echo 'path "transit/sign/+/sha2-256" { capabilities = ["update"] }'
+    } | bao policy write demeteo-hub - >/dev/null
+  fi
   unset BAO_TOKEN
 }
 

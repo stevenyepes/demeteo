@@ -55,6 +55,7 @@ function runDetail(instance_id: string, feature_id: string, overrides: Record<st
     tickets: { completed: 0, failed: 0, running: 0 },
     pending_gates: [],
     events: [],
+    git_token_problem: null,
     ...overrides,
   };
 }

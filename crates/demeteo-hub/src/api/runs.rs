@@ -54,6 +54,10 @@ pub struct RunDetailView {
     /// The readable events, in offset order. An unreadable row is left out
     /// for the reason [`by_feature`] gives.
     pub events: Vec<EventView>,
+    /// Why this run, started by the Hub on a runner, could not get a git
+    /// token on its newest try: the code `POST /git-token` answered
+    /// (`github_app_not_installed`, …). `None` for every other run.
+    pub git_token_problem: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -153,7 +157,15 @@ pub async fn run_detail(
         .remove(feature_id)
         .ok_or(ApiError::NOT_FOUND)?;
     let labels = RunLabels::of(snapshot_of(api, user, row.id).await?.as_ref());
-    Ok(detail(&row, feature_id, &events, &labels))
+    let git_token_problem = api
+        .store
+        .git_token_problem(user, row.id, feature_id)
+        .await
+        .map_err(store_failed)?;
+    Ok(RunDetailView {
+        git_token_problem,
+        ..detail(&row, feature_id, &events, &labels)
+    })
 }
 
 pub async fn get_runs(
@@ -251,6 +263,7 @@ fn detail(
                 ticket_id: event.payload.ticket_id.clone(),
             })
             .collect(),
+        git_token_problem: None,
     }
 }
 

@@ -6,6 +6,7 @@
 use crate::adapters::github_app::{GithubAppSettings, GithubHost};
 use crate::adapters::openbao::{is_key_name, KEY_NAME_ALPHABET};
 use crate::attachments::AttachmentSettings;
+use crate::git_hosts::manifest::ConnectableHost;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ const DEFAULT_GITHUB_APP_KEY: &str = "demeteo-hub-github-app";
 /// and its public API. A GitHub Enterprise Server is named by its operator.
 const GITHUB_HOST: &str = "github.com";
 const GITHUB_API: &str = "https://api.github.com";
+const GITHUB_WEB: &str = "https://github.com";
 
 const DATABASE_URL: &str = "DATABASE_URL";
 const BIND: &str = "DEMETEO_HUB_BIND";
@@ -78,6 +80,11 @@ pub struct Config {
     /// no git token, and `POST /git-token` answers `503`. The App key is a
     /// Transit name, as the signing key is, so nothing here is a secret.
     pub github_app: Option<GithubAppSettings>,
+    /// Where a GitHub App can be connected from the Hub's pages: github.com
+    /// always, then the GitHub Enterprise Server named by
+    /// `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL`. The configured App reaches
+    /// the same hosts.
+    pub github_hosts: Vec<ConnectableHost>,
     /// The git-token window of a start that names no wall clock of its own;
     /// a start that does is held to that instead.
     pub git_token_window_secs: u64,
@@ -162,7 +169,8 @@ impl Config {
             sweep_secs: positive_or_default(ATTACHMENT_SWEEP_SECS, defaults.sweep_secs)?,
         };
 
-        let github_app = github_app(&lookup)?;
+        let github_hosts = github_hosts(&lookup)?;
+        let github_app = github_app(&lookup, &github_hosts)?;
         let git_token_window_secs =
             positive_or_default(GIT_TOKEN_WINDOW_SECS, DEFAULT_GIT_TOKEN_WINDOW_SECS)?;
 
@@ -180,27 +188,42 @@ impl Config {
             web_dir: PathBuf::from(or_default(WEB_DIR, DEFAULT_WEB_DIR)),
             attachments,
             github_app,
+            github_hosts,
             git_token_window_secs,
         })
     }
 }
 
-/// The App id switches minting on, and the other two variables mean nothing
-/// without it, so either set alone is refused rather than ignored: an
+fn github_hosts(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<ConnectableHost>, ConfigError> {
+    let mut hosts = vec![ConnectableHost {
+        host: GITHUB_HOST.to_owned(),
+        api_base: GITHUB_API.to_owned(),
+        web_base: GITHUB_WEB.to_owned(),
+    }];
+    if let Some(url) = lookup(GITHUB_ENTERPRISE_API_URL).filter(|v| !v.is_empty()) {
+        hosts.push(enterprise_host(&url)?);
+    }
+    Ok(hosts)
+}
+
+/// The App id switches the configured App on, and its key name means
+/// nothing without it, so a key set alone is refused rather than ignored: an
 /// operator who named a key expects tokens, and would otherwise find out
-/// from a runner's `503`s.
+/// from a runner's `503`s. The Enterprise Server stands on its own, since an
+/// App can be connected there from the Hub's pages.
 fn github_app(
     lookup: &impl Fn(&str) -> Option<String>,
+    hosts: &[ConnectableHost],
 ) -> Result<Option<GithubAppSettings>, ConfigError> {
     let set = |var: &str| lookup(var).filter(|v| !v.is_empty());
     let Some(app_id) = set(GITHUB_APP_ID) else {
-        for var in [GITHUB_APP_KEY, GITHUB_ENTERPRISE_API_URL] {
-            if set(var).is_some() {
-                return Err(ConfigError::Invalid {
-                    var,
-                    reason: format!("it means nothing unless `{GITHUB_APP_ID}` is set too"),
-                });
-            }
+        if set(GITHUB_APP_KEY).is_some() {
+            return Err(ConfigError::Invalid {
+                var: GITHUB_APP_KEY,
+                reason: format!("it means nothing unless `{GITHUB_APP_ID}` is set too"),
+            });
         }
         return Ok(None);
     };
@@ -223,20 +246,21 @@ fn github_app(
             ),
         });
     }
-    let mut hosts = vec![GithubHost {
-        host: GITHUB_HOST.to_owned(),
-        api_base: GITHUB_API.to_owned(),
-    }];
-    if let Some(url) = set(GITHUB_ENTERPRISE_API_URL) {
-        hosts.push(enterprise_host(&url)?);
-    }
+    let hosts = hosts
+        .iter()
+        .map(|h| GithubHost {
+            host: h.host.clone(),
+            api_base: h.api_base.clone(),
+        })
+        .collect();
     Ok(Some(GithubAppSettings { app_id, key, hosts }))
 }
 
 /// A GitHub Enterprise Server's API base, `https://<host>[:port]/api/v3`,
-/// and the host its repositories are cloned from, which is the same one.
-/// Only `https`: the App JWT rides on every request to it.
-fn enterprise_host(url: &str) -> Result<GithubHost, ConfigError> {
+/// the host its repositories are cloned from, which is the same one, and
+/// its web root at that host. Only `https`: the App JWT rides on every
+/// request to it.
+fn enterprise_host(url: &str) -> Result<ConnectableHost, ConfigError> {
     let invalid = |reason: &str| ConfigError::Invalid {
         var: GITHUB_ENTERPRISE_API_URL,
         reason: format!("`{url}` {reason}"),
@@ -256,7 +280,8 @@ fn enterprise_host(url: &str) -> Result<GithubHost, ConfigError> {
     if host == GITHUB_HOST {
         return Err(invalid("names github.com, which needs no setting"));
     }
-    Ok(GithubHost {
+    Ok(ConnectableHost {
+        web_base: format!("https://{host}"),
         host,
         api_base: url.trim_end_matches('/').to_owned(),
     })
@@ -440,6 +465,7 @@ impl fmt::Debug for Config {
             .field("web_dir", &self.web_dir)
             .field("attachments", &self.attachments)
             .field("github_app", &self.github_app)
+            .field("github_hosts", &self.github_hosts)
             .finish()
     }
 }
@@ -519,6 +545,9 @@ mod tests {
             }
         );
         assert_eq!(app.hosts.len(), 2);
+        let config = load(&env).unwrap();
+        assert_eq!(config.github_hosts[1].web_base, "https://ghe.example:8443");
+        assert_eq!(config.github_hosts[0].web_base, "https://github.com");
     }
 
     fn refused_var(env: &HashMap<&'static str, String>) -> &'static str {
@@ -585,12 +614,27 @@ mod tests {
     }
 
     #[test]
-    fn a_github_key_or_server_without_an_app_id_is_refused_not_ignored() {
-        for var in [GITHUB_APP_KEY, GITHUB_ENTERPRISE_API_URL] {
-            let mut env = full();
-            env.insert(var, "https://ghe.example/api/v3".to_owned());
-            assert_eq!(refused_var(&env), var);
-        }
+    fn a_github_key_without_an_app_id_is_refused_not_ignored() {
+        let mut env = full();
+        env.insert(GITHUB_APP_KEY, "ghe-app".to_owned());
+        assert_eq!(refused_var(&env), GITHUB_APP_KEY);
+    }
+
+    #[test]
+    fn an_enterprise_server_alone_is_a_host_to_connect_apps_on() {
+        let mut env = full();
+        env.insert(
+            GITHUB_ENTERPRISE_API_URL,
+            "https://ghe.example/api/v3".to_owned(),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.github_app, None);
+        let hosts: Vec<&str> = config
+            .github_hosts
+            .iter()
+            .map(|h| h.host.as_str())
+            .collect();
+        assert_eq!(hosts, ["github.com", "ghe.example"]);
     }
 
     #[test]

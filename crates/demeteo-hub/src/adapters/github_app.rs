@@ -8,8 +8,7 @@
 //! from bytes, the JWT and the URLs, is built by free functions, so the
 //! exact bytes are reachable from a test with no server.
 
-use crate::ports::{GitTokenMinter, GithubRepository, InstallationToken, MintError, RsaSigner};
-use async_trait::async_trait;
+use crate::ports::{GithubRepository, InstallationToken, MintError, RsaSigner};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
@@ -211,13 +210,36 @@ impl GithubApp {
     }
 }
 
-#[async_trait]
-impl GitTokenMinter for GithubApp {
-    async fn mint(
+/// This App's installation on one repository, and the App JWT that found
+/// it, which the token request reuses. `Debug` omits the JWT: it is a
+/// credential for its ten minutes.
+pub struct Installed {
+    id: u64,
+    jwt: String,
+    api_base: String,
+}
+
+impl std::fmt::Debug for Installed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Installed")
+            .field("id", &self.id)
+            .field("api_base", &self.api_base)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GithubApp {
+    pub fn settings(&self) -> &GithubAppSettings {
+        &self.settings
+    }
+
+    /// `None` when the App is not installed on the repository: GitHub's
+    /// lookup answers 404, which also covers an App id naming another App.
+    pub async fn installation(
         &self,
         repository: &GithubRepository,
         now: u64,
-    ) -> Result<InstallationToken, MintError> {
+    ) -> Result<Option<Installed>, MintError> {
         let api_base = api_base_for(&self.settings.hosts, &repository.host)
             .ok_or_else(|| MintError::UnknownHost(repository.host.clone()))?;
         let jwt = self.app_jwt(now).await?;
@@ -232,15 +254,39 @@ impl GitTokenMinter for GithubApp {
             .await
             .map_err(transport)?;
         if lookup.status() == StatusCode::NOT_FOUND {
-            return Err(MintError::NotInstalled);
+            return Ok(None);
         }
         let installation: Installation = answered(lookup, LOOKUP).await?;
+        Ok(Some(Installed {
+            id: installation.id,
+            jwt,
+            api_base: api_base.to_owned(),
+        }))
+    }
 
+    /// A one-App mint: the installation, then its token.
+    pub async fn mint(
+        &self,
+        repository: &GithubRepository,
+        now: u64,
+    ) -> Result<InstallationToken, MintError> {
+        let installed = self
+            .installation(repository, now)
+            .await?
+            .ok_or(MintError::NotInstalled)?;
+        self.issue(installed, repository).await
+    }
+
+    pub async fn issue(
+        &self,
+        installed: Installed,
+        repository: &GithubRepository,
+    ) -> Result<InstallationToken, MintError> {
         let issued = self
             .request(
                 reqwest::Method::POST,
-                access_tokens_url(api_base, installation.id),
-                &jwt,
+                access_tokens_url(&installed.api_base, installed.id),
+                &installed.jwt,
             )
             .json(&token_request_body(repository))
             .send()
@@ -251,6 +297,92 @@ impl GitTokenMinter for GithubApp {
             unix_of_iso8601(&token.expires_at).ok_or(MintError::Malformed(TOKEN_REQUEST))?;
         Ok(InstallationToken::new(token.token, expires_at))
     }
+}
+
+/// What GitHub hands back once, from the manifest conversion: the new App's
+/// id and slug, the account that owns it, and its private key. The client
+/// and webhook secrets in the same answer are never deserialised, so they
+/// cannot be kept by accident. `Debug` omits the key.
+#[derive(Deserialize)]
+pub struct ConvertedApp {
+    pub id: u64,
+    pub slug: String,
+    pub owner: Option<AppOwner>,
+    pem: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppOwner {
+    pub login: String,
+}
+
+impl ConvertedApp {
+    /// The private key, consumed: the caller imports it and keeps nothing.
+    pub fn into_pem(self) -> String {
+        self.pem
+    }
+}
+
+impl std::fmt::Debug for ConvertedApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConvertedApp")
+            .field("id", &self.id)
+            .field("slug", &self.slug)
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ConversionError {
+    /// The `code` GitHub redirected with is not one it could have issued, so
+    /// it is not sent: it is interpolated into the URL path.
+    #[error("the manifest code is not a code")]
+    BadCode,
+    #[error("GitHub could not be reached: {0}")]
+    Transport(String),
+    /// 404 is a code already used or older than its hour.
+    #[error("GitHub answered HTTP {0} to the manifest conversion")]
+    Refused(u16),
+    #[error("GitHub answered the manifest conversion with a body this build cannot read")]
+    Malformed,
+}
+
+const MAX_CODE_LEN: usize = 128;
+
+pub fn conversion_url(api_base: &str, code: &str) -> Option<String> {
+    let a_code = !code.is_empty()
+        && code.len() <= MAX_CODE_LEN
+        && code.bytes().all(|b| b.is_ascii_alphanumeric());
+    a_code.then(|| format!("{api_base}/app-manifests/{code}/conversions"))
+}
+
+/// Exchanges the one-hour code GitHub redirected back with for the App it
+/// created. Unauthenticated by GitHub's design: the code is the credential,
+/// and it works once.
+pub async fn convert_manifest(
+    http: &reqwest::Client,
+    api_base: &str,
+    code: &str,
+) -> Result<ConvertedApp, ConversionError> {
+    let url = conversion_url(api_base, code).ok_or(ConversionError::BadCode)?;
+    let response = http
+        .post(url)
+        .header(ACCEPT, MEDIA_TYPE)
+        .header(API_VERSION_HEADER, API_VERSION)
+        .header(USER_AGENT, AGENT)
+        .send()
+        .await
+        .map_err(|e| ConversionError::Transport(e.without_url().to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(ConversionError::Refused(status.as_u16()));
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| ConversionError::Transport(e.without_url().to_string()))?;
+    serde_json::from_slice(&body).map_err(|_| ConversionError::Malformed)
 }
 
 /// A 2xx body read as `T`. Any other status is reported by its number
@@ -604,5 +736,66 @@ mod tests {
             ),
             "{sealed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_manifest_code_converts_to_the_app_without_its_other_secrets() {
+        let (base, served) = answering(vec![(
+            201,
+            serde_json::json!({
+                "id": 5647010,
+                "slug": "demeteo-hub-example",
+                "owner": {"login": "octo-org"},
+                "client_id": "Iv23li",
+                "client_secret": "client-secret",
+                "webhook_secret": "webhook-secret",
+                "pem": "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n",
+            }),
+        )])
+        .await;
+
+        let app = convert_manifest(&reqwest::Client::new(), &base, "a1b2c3")
+            .await
+            .unwrap();
+        let requests = served.await.unwrap();
+
+        assert!(requests[0].starts_with("POST /app-manifests/a1b2c3/conversions HTTP/1.1"));
+        assert!(!requests[0].to_ascii_lowercase().contains("authorization:"));
+        assert_eq!(
+            (app.id, app.slug.as_str()),
+            (5647010, "demeteo-hub-example")
+        );
+        assert_eq!(
+            app.owner.as_ref().map(|o| o.login.as_str()),
+            Some("octo-org")
+        );
+        let debug = format!("{app:?}");
+        assert!(
+            !debug.contains("PRIVATE KEY") && !debug.contains("secret"),
+            "{debug}"
+        );
+        assert!(app
+            .into_pem()
+            .starts_with("-----BEGIN RSA PRIVATE KEY-----"));
+    }
+
+    #[tokio::test]
+    async fn a_used_code_is_refused_and_a_code_that_is_no_code_is_never_sent() {
+        let (base, _served) = answering(vec![(404, serde_json::json!({}))]).await;
+        let http = reqwest::Client::new();
+
+        assert_eq!(
+            convert_manifest(&http, &base, "used").await.unwrap_err(),
+            ConversionError::Refused(404)
+        );
+        for code in ["", "../app", "a?b", &"a".repeat(MAX_CODE_LEN + 1)] {
+            assert_eq!(
+                convert_manifest(&http, "http://github.invalid", code)
+                    .await
+                    .unwrap_err(),
+                ConversionError::BadCode,
+                "{code}"
+            );
+        }
     }
 }

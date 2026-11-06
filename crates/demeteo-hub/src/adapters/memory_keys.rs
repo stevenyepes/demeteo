@@ -1,4 +1,4 @@
-use crate::ports::{DataKey, KeyService, KeyServiceError, RsaSigner};
+use crate::ports::{DataKey, KeyImporter, KeyService, KeyServiceError, RsaPrivateKey, RsaSigner};
 use async_trait::async_trait;
 use aws_lc_rs::error::Unspecified;
 use aws_lc_rs::rand::SystemRandom;
@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 /// Starts with Transit's `vault:` so a wrapped data key passes
 /// [`WrappedKey::parse`](crate::store::attachments::WrappedKey::parse) and an
@@ -29,8 +30,9 @@ const DATA_KEY_LEN: usize = 32;
 pub struct MemoryKeys {
     keys: BTreeMap<String, Ed25519KeyPair>,
     /// Apart from `keys`: a name is one type of key, as in Transit, so an
-    /// RS256 signature asked of an Ed25519 name is `UnknownKey`.
-    rsa: BTreeMap<String, RsaKeyPair>,
+    /// RS256 signature asked of an Ed25519 name is `UnknownKey`. Behind a
+    /// lock because [`KeyImporter`] adds to it through `&self`.
+    rsa: Mutex<BTreeMap<String, RsaKeyPair>>,
     sealed: bool,
     counter: AtomicU64,
 }
@@ -46,23 +48,30 @@ impl MemoryKeys {
                 .into_iter()
                 .map(|name| (name.into(), generated_key_pair()))
                 .collect(),
-            rsa: BTreeMap::new(),
+            rsa: Mutex::new(BTreeMap::new()),
             sealed: false,
             counter: AtomicU64::new(0),
         }
     }
 
     /// Adds a 2048-bit RSA key under `name`, as a GitHub App key is.
-    pub fn with_rsa_key(mut self, name: impl Into<String>) -> Self {
-        self.rsa.insert(name.into(), generated_rsa_key_pair());
+    pub fn with_rsa_key(self, name: impl Into<String>) -> Self {
+        self.rsa_keys()
+            .insert(name.into(), generated_rsa_key_pair());
         self
+    }
+
+    fn rsa_keys(&self) -> MutexGuard<'_, BTreeMap<String, RsaKeyPair>> {
+        self.rsa
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The PKCS#1 `RSAPublicKey` DER of the RSA key `name`, which a test
     /// verifies an RS256 signature under. Transit would answer it as PEM; the
     /// Hub never asks, so the port has no method for it.
     pub fn rsa_public_key(&self, name: &str) -> Option<Vec<u8>> {
-        self.rsa
+        self.rsa_keys()
             .get(name)
             .map(|key| key.public_key().as_ref().to_vec())
     }
@@ -72,7 +81,7 @@ impl MemoryKeys {
     pub fn sealed() -> Self {
         Self {
             keys: BTreeMap::new(),
-            rsa: BTreeMap::new(),
+            rsa: Mutex::new(BTreeMap::new()),
             sealed: true,
             counter: AtomicU64::new(0),
         }
@@ -141,8 +150,8 @@ impl RsaSigner for MemoryKeys {
         if self.sealed {
             return Err(KeyServiceError::Sealed);
         }
-        let pair = self
-            .rsa
+        let keys = self.rsa_keys();
+        let pair = keys
             .get(key)
             .ok_or_else(|| KeyServiceError::UnknownKey(key.to_owned()))?;
         let mut signature = vec![0; pair.public_modulus_len()];
@@ -154,6 +163,28 @@ impl RsaSigner for MemoryKeys {
         )
         .map_err(|Unspecified| KeyServiceError::Malformed("RSA signing failed".into()))?;
         Ok(signature)
+    }
+}
+
+/// Transit refuses an import over a name it already holds, of either type,
+/// and so does this.
+#[async_trait]
+impl KeyImporter for MemoryKeys {
+    async fn import_rsa(&self, name: &str, key: RsaPrivateKey) -> Result<(), KeyServiceError> {
+        if self.sealed {
+            return Err(KeyServiceError::Sealed);
+        }
+        let mut keys = self.rsa_keys();
+        if keys.contains_key(name) || self.keys.contains_key(name) {
+            return Err(KeyServiceError::Upstream {
+                status: 400,
+                detail: format!("key \"{name}\" already exists"),
+            });
+        }
+        let pair = RsaKeyPair::from_pkcs8(key.pkcs8_der())
+            .map_err(|_| KeyServiceError::Malformed("not a PKCS#8 RSA key".into()))?;
+        keys.insert(name.to_owned(), pair);
+        Ok(())
     }
 }
 
@@ -257,6 +288,43 @@ mod tests {
         ));
         assert!(is_sealed(
             MemoryKeys::sealed().sign_rs256("app", b"x").await
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_imported_key_signs_and_a_second_import_of_its_name_is_refused() {
+        use crate::adapters::transit_import::rsa_key_from_pem;
+        use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+        use aws_lc_rs::signature::RSA_PKCS1_2048_8192_SHA256;
+        let source = aws_lc_rs::rsa::KeyPair::generate(KeySize::Rsa2048).unwrap();
+        let pem = || {
+            let der = AsDer::<Pkcs8V1Der>::as_der(&source).unwrap();
+            let pem = format!(
+                "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+                STANDARD.encode(der.as_ref())
+            );
+            rsa_key_from_pem(&pem).unwrap()
+        };
+        let keys = double();
+
+        keys.import_rsa("app", pem()).await.unwrap();
+        let signature = keys.sign_rs256("app", b"a.b").await.unwrap();
+        assert!(UnparsedPublicKey::new(
+            &RSA_PKCS1_2048_8192_SHA256,
+            aws_lc_rs::signature::KeyPair::public_key(&source).as_ref()
+        )
+        .verify(b"a.b", &signature)
+        .is_ok());
+        assert!(matches!(
+            keys.import_rsa("app", pem()).await,
+            Err(KeyServiceError::Upstream { status: 400, .. })
+        ));
+        assert!(matches!(
+            keys.import_rsa(KNOWN, pem()).await,
+            Err(KeyServiceError::Upstream { status: 400, .. })
+        ));
+        assert!(is_sealed(
+            MemoryKeys::sealed().import_rsa("app", pem()).await
         ));
     }
 

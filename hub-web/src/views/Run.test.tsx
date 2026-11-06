@@ -132,6 +132,7 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
     title: null,
     project_id: null,
     project_name: null,
+    git_token_problem: null,
     ...overrides,
   };
 }
@@ -841,6 +842,23 @@ describe('Run, end to end on the real wrappers', () => {
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
     expect(asked).toHaveLength(polled);
+  });
+
+  it('says why a Hub-started run cannot push, and where to fix it', async () => {
+    stubFetch(json(detail({ workflow: null, git_token_problem: 'github_app_not_installed' })));
+    render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+
+    const card = await screen.findByRole('region', { name: 'Git token' });
+    expect(card).toHaveTextContent(/not installed on this repository/);
+    expect(within(card).getByRole('link', { name: 'Open Git hosts' })).toHaveAttribute('href', '#/git-hosts');
+  });
+
+  it('shows no git token card for a run with no problem', async () => {
+    stubFetch(json(detail({ workflow: null })));
+    render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+
+    await screen.findByText(/this instance has not reported the run's graph/i);
+    expect(screen.queryByRole('region', { name: 'Git token' })).toBeNull();
   });
 });
 

@@ -44,6 +44,15 @@ pub trait ApiStore: Send + Sync {
         id: RequestId,
     ) -> Result<Option<RequestRecord>, StoreError>;
 
+    /// Why the newest git-token fetch for the start that created
+    /// `feature_id` minted nothing, by its route code, or `None`.
+    async fn git_token_problem(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        feature_id: &str,
+    ) -> Result<Option<String>, StoreError>;
+
     /// The credential ids of the tenant's trusted passkeys, as unpadded
     /// base64url, for a ceremony's `allowCredentials`.
     async fn trusted_credential_ids(&self, user: UserId) -> Result<Vec<String>, StoreError>;

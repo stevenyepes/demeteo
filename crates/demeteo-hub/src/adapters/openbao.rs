@@ -1,4 +1,5 @@
-use crate::ports::{DataKey, KeyService, KeyServiceError, RsaSigner};
+use super::transit_import::{wrap_for_import, TRANSIT_RSA_TYPE};
+use crate::ports::{DataKey, KeyImporter, KeyService, KeyServiceError, RsaPrivateKey, RsaSigner};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -24,6 +25,7 @@ enum Op {
     ReadKey,
     Sign,
     SignRs256,
+    Import,
 }
 
 impl Op {
@@ -32,7 +34,7 @@ impl Op {
             Op::Encrypt => "encrypt",
             Op::Decrypt => "decrypt",
             Op::DataKey => "datakey/plaintext",
-            Op::ReadKey => "keys",
+            Op::ReadKey | Op::Import => "keys",
             Op::Sign | Op::SignRs256 => "sign",
         }
     }
@@ -43,6 +45,7 @@ impl Op {
     fn suffix(self) -> &'static str {
         match self {
             Op::SignRs256 => "/sha2-256",
+            Op::Import => "/import",
             Op::Encrypt | Op::Decrypt | Op::DataKey | Op::ReadKey | Op::Sign => "",
         }
     }
@@ -71,6 +74,27 @@ struct InputBody {
 struct RsaInputBody {
     input: String,
     signature_algorithm: &'static str,
+}
+
+/// `hash_function` is the OAEP hash [`wrap_for_import`] used, not the key's
+/// signing hash. `exportable` and `allow_plaintext_backup` are spelled out
+/// false so a change of Transit's defaults cannot make the key readable.
+#[derive(Serialize)]
+struct ImportBody {
+    ciphertext: String,
+    #[serde(rename = "type")]
+    key_type: &'static str,
+    hash_function: &'static str,
+    exportable: bool,
+    allow_plaintext_backup: bool,
+}
+
+const OAEP_HASH: &str = "SHA256";
+const WRAPPING_KEY_PATH: &str = "wrapping_key";
+
+#[derive(Deserialize)]
+struct WrappingKeyData {
+    public_key: String,
 }
 
 #[derive(Deserialize)]
@@ -229,6 +253,29 @@ impl KeyService for OpenBaoKeys {
 }
 
 #[async_trait]
+impl KeyImporter for OpenBaoKeys {
+    async fn import_rsa(&self, name: &str, key: RsaPrivateKey) -> Result<(), KeyServiceError> {
+        check_key_name(name)?;
+        let wrapping = self
+            .http
+            .get(wrapping_key_url(&self.addr, &self.mount))
+            .header(TOKEN_HEADER, self.token.clone());
+        let wrapping = parse_envelope::<WrappingKeyData>(
+            &answer(wrapping, Op::Import, WRAPPING_KEY_PATH).await?,
+        )?;
+        let body = ImportBody {
+            ciphertext: wrap_for_import(&wrapping.public_key, &key)?,
+            key_type: TRANSIT_RSA_TYPE,
+            hash_function: OAEP_HASH,
+            exportable: false,
+            allow_plaintext_backup: false,
+        };
+        drop(key);
+        self.call(Op::Import, name, &body).await.map(drop)
+    }
+}
+
+#[async_trait]
 impl RsaSigner for OpenBaoKeys {
     async fn sign_rs256(&self, key: &str, message: &[u8]) -> Result<Vec<u8>, KeyServiceError> {
         let body = RsaInputBody {
@@ -302,6 +349,14 @@ fn endpoint_url(addr: &str, mount: &str, op: Op, key: &str) -> String {
         op.path(),
         key,
         op.suffix()
+    )
+}
+
+fn wrapping_key_url(addr: &str, mount: &str) -> String {
+    format!(
+        "{}/v1/{}/{WRAPPING_KEY_PATH}",
+        addr.trim_end_matches('/'),
+        mount.trim_matches('/'),
     )
 }
 
@@ -463,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn urls_cover_the_six_transit_routes() {
+    fn urls_cover_the_transit_routes() {
         let url = |op| endpoint_url("http://bao:8200/", "transit", op, "hub");
         assert_eq!(url(Op::Encrypt), "http://bao:8200/v1/transit/encrypt/hub");
         assert_eq!(url(Op::Decrypt), "http://bao:8200/v1/transit/decrypt/hub");
@@ -476,6 +531,14 @@ mod tests {
         assert_eq!(
             url(Op::SignRs256),
             "http://bao:8200/v1/transit/sign/hub/sha2-256"
+        );
+        assert_eq!(
+            url(Op::Import),
+            "http://bao:8200/v1/transit/keys/hub/import"
+        );
+        assert_eq!(
+            wrapping_key_url("http://bao:8200/", "/transit/"),
+            "http://bao:8200/v1/transit/wrapping_key"
         );
     }
 
@@ -872,6 +935,17 @@ mod tests {
 
     /// Answers one request with `body` and hands back what the client sent.
     async fn answering_once(body: Vec<u8>) -> (String, tokio::task::JoinHandle<String>) {
+        let (addr, served) = answering_in_turn(vec![body]).await;
+        (
+            addr,
+            tokio::spawn(async move { served.await.unwrap().remove(0) }),
+        )
+    }
+
+    /// Answers one connection per body, in order, and hands back each request.
+    async fn answering_in_turn(
+        bodies: Vec<Vec<u8>>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -879,35 +953,112 @@ mod tests {
             .unwrap();
         let addr = listener.local_addr().unwrap();
         let served = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut seen = Vec::new();
-            let mut chunk = [0u8; 1024];
-            let request = loop {
-                let n = socket.read(&mut chunk).await.unwrap();
-                seen.extend_from_slice(&chunk[..n]);
-                let text = String::from_utf8_lossy(&seen).into_owned();
-                let complete = text.split_once("\r\n\r\n").is_some_and(|(head, sent)| {
-                    let declared = head
-                        .lines()
-                        .filter_map(|line| line.split_once(':'))
-                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    sent.len() >= declared
-                });
-                if complete || n == 0 {
-                    break text;
-                }
-            };
-            let head = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                body.len()
-            );
-            socket.write_all(head.as_bytes()).await.unwrap();
-            socket.write_all(&body).await.unwrap();
-            request
+            let mut requests = Vec::new();
+            for body in bodies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut seen = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let request = loop {
+                    let n = socket.read(&mut chunk).await.unwrap();
+                    seen.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&seen).into_owned();
+                    let complete = text.split_once("\r\n\r\n").is_some_and(|(head, sent)| {
+                        let declared = head
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        sent.len() >= declared
+                    });
+                    if complete || n == 0 {
+                        break text;
+                    }
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(head.as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
+                requests.push(request);
+            }
+            requests
         });
         (format!("http://{addr}"), served)
+    }
+
+    /// The wrapping key is read, then the key is imported under its name as
+    /// a non-exportable `rsa-2048`: two requests, and the second carries the
+    /// wrapped key and never the PKCS#8.
+    #[tokio::test]
+    async fn an_import_reads_the_wrapping_key_then_posts_the_wrapped_key() {
+        use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der};
+        use aws_lc_rs::rsa::{KeyPair, KeySize};
+        use aws_lc_rs::signature::KeyPair as _;
+
+        let pem = |label: &str, der: &[u8]| {
+            format!(
+                "-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
+                STANDARD.encode(der)
+            )
+        };
+        let wrapping = KeyPair::generate(KeySize::Rsa2048).unwrap();
+        let wrapping_pub = AsDer::<PublicKeyX509Der>::as_der(wrapping.public_key()).unwrap();
+        let target = KeyPair::generate(KeySize::Rsa2048).unwrap();
+        let target_pkcs8 = AsDer::<Pkcs8V1Der>::as_der(&target).unwrap();
+        let key = super::super::transit_import::rsa_key_from_pem(&pem(
+            "PRIVATE KEY",
+            target_pkcs8.as_ref(),
+        ))
+        .unwrap();
+
+        let wrapping_answer = serde_json::to_vec(&serde_json::json!({"data": {
+            "public_key": pem("PUBLIC KEY", wrapping_pub.as_ref()),
+        }}))
+        .unwrap();
+        let (addr, served) = answering_in_turn(vec![wrapping_answer, b"{}".to_vec()]).await;
+        let keys = OpenBaoKeys::new(reqwest::Client::new(), &addr, "transit", "t").unwrap();
+
+        keys.import_rsa("demeteo-hub-gh-7", key).await.unwrap();
+        let requests = served.await.unwrap();
+
+        assert!(requests[0].starts_with("GET /v1/transit/wrapping_key HTTP/1.1"));
+        assert!(requests[1].starts_with("POST /v1/transit/keys/demeteo-hub-gh-7/import HTTP/1.1"));
+        let (_, sent) = requests[1].split_once("\r\n\r\n").unwrap();
+        let sent: serde_json::Value = serde_json::from_str(sent).unwrap();
+        assert_eq!(sent["type"], "rsa-2048");
+        assert_eq!(sent["hash_function"], "SHA256");
+        assert_eq!(sent["exportable"], false);
+        assert_eq!(sent["allow_plaintext_backup"], false);
+        let ciphertext = STANDARD
+            .decode(sent["ciphertext"].as_str().unwrap())
+            .unwrap();
+        assert!(!ciphertext
+            .windows(target_pkcs8.as_ref().len())
+            .any(|w| w == target_pkcs8.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn an_import_under_a_name_that_is_not_a_path_segment_sends_nothing() {
+        let keys =
+            OpenBaoKeys::new(reqwest::Client::new(), "http://127.0.0.1:9", "transit", "t").unwrap();
+        let key = generated_import_key();
+        assert!(matches!(
+            keys.import_rsa("../sys", key).await,
+            Err(KeyServiceError::InvalidKeyName(name)) if name == "../sys"
+        ));
+    }
+
+    fn generated_import_key() -> RsaPrivateKey {
+        use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+        let pair = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).unwrap();
+        let der = AsDer::<Pkcs8V1Der>::as_der(&pair).unwrap();
+        super::super::transit_import::rsa_key_from_pem(&format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            STANDARD.encode(der.as_ref())
+        ))
+        .unwrap()
     }
 
     #[tokio::test]

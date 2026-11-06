@@ -22,7 +22,9 @@ use demeteo_hub::routes::AppState;
 use demeteo_hub::store::device_keys::NewDeviceKey;
 use demeteo_hub::store::instances::{pair_instance, InstanceKind, NewInstanceLabels, NewPairing};
 use demeteo_hub::store::pool::create_user;
-use demeteo_hub::store::requests::{insert_request, record_outcome, NewRequest};
+use demeteo_hub::store::requests::{
+    git_token_problem_of, insert_request, record_outcome, NewRequest,
+};
 use demeteo_hub::store::run_mirror::{mirror_event, NewEvent};
 use demeteo_hub::store::{Db, InstanceId, UserId};
 use demeteo_hub_protocol::{
@@ -40,20 +42,26 @@ const TOKEN: &str = "ghs_handed_over_and_never_kept";
 const REQUEST: [u8; 16] = [7; 16];
 const REQUEST_TEXT: &str = "BwcHBwcHBwcHBwcHBwcHBw";
 
-/// Answers every mint with [`TOKEN`] and keeps what it was asked for.
+/// Answers every mint with [`TOKEN`], or with "not installed" while
+/// `uninstalled` is set, and keeps what it was asked for.
 #[derive(Default)]
 struct FakeGithub {
     asked: Mutex<Vec<GithubRepository>>,
+    uninstalled: Mutex<bool>,
 }
 
 #[async_trait]
 impl GitTokenMinter for FakeGithub {
     async fn mint(
         &self,
+        _user: UserId,
         repository: &GithubRepository,
         now: u64,
     ) -> Result<InstallationToken, MintError> {
         self.asked.lock().unwrap().push(repository.clone());
+        if *self.uninstalled.lock().unwrap() {
+            return Err(MintError::NotInstalled);
+        }
         Ok(InstallationToken::new(TOKEN.to_owned(), now + 3600))
     }
 }
@@ -249,6 +257,35 @@ async fn a_runner_is_handed_a_token_for_its_accepted_start_and_its_feature_is_bo
         assert_eq!((status, body), (409, json!({"error": "feature_mismatch"})));
         assert_eq!(bound_feature(&db).await.as_deref(), Some("f-1"));
         assert!(!token_stored(&db).await);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_app_not_installed_is_recorded_for_the_run_until_a_token_is_minted() {
+    in_fresh_schema(|db| async move {
+        let user = create_user(&db).await.unwrap();
+        let runner = Paired::new(&db, user, InstanceKind::Runner).await;
+        runner.started(&db, true).await;
+        let github = Arc::new(FakeGithub::default());
+        *github.uninstalled.lock().unwrap() = true;
+        let base = serve_state(state_over(db.clone(), Arc::clone(&github))).await;
+        let problem = || git_token_problem_of(user, &db, runner.instance, "f-1");
+
+        let (status, _, body) = runner.ask(&base, "f-1").await;
+        assert_eq!(
+            (status, body),
+            (503, json!({"error": "github_app_not_installed"}))
+        );
+        assert_eq!(
+            problem().await.unwrap().as_deref(),
+            Some("github_app_not_installed")
+        );
+
+        *github.uninstalled.lock().unwrap() = false;
+        assert_eq!(runner.ask(&base, "f-1").await.0, 200);
+        assert_eq!(problem().await.unwrap(), None);
     })
     .await;
 }

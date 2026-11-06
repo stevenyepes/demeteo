@@ -65,7 +65,7 @@ const SIGNED_OUT: Answers = {
 
 const INSTANCE_UUID = '6f1c2b3a-0000-4000-8000-000000000001';
 
-const NAV_HREFS = ['#/fleet', '#/runs', '#/dispatch', '#/add-instance', '#/passkeys'];
+const NAV_HREFS = ['#/fleet', '#/runs', '#/dispatch', '#/add-instance', '#/git-hosts', '#/passkeys'];
 
 const ROUTES: { hash: string; heading: string; activeHref: string }[] = [
   { hash: '#/fleet', heading: 'Fleet', activeHref: '#/fleet' },
@@ -134,7 +134,7 @@ describe('App shell, signed in', () => {
     );
   });
 
-  it('links to the five top-level views from a named navigation landmark', async () => {
+  it('links to the six top-level views from a named navigation landmark', async () => {
     await renderAt('#/fleet');
 
     expect(screen.getByRole('navigation')).toHaveAccessibleName();

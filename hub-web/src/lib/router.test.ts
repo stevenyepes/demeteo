@@ -16,6 +16,9 @@ const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/sign-up', { name: 'sign-up' }],
   ['#/sign-in', { name: 'sign-in' }],
   ['#/passkeys', { name: 'passkeys' }],
+  ['#/git-hosts', { name: 'git-hosts' }],
+  ['#/git-hosts/connected/3f2b1c3e-6a1f-4b8e-9c3d-2a1b0c9d8e7f', { name: 'git-hosts', connected: '3f2b1c3e-6a1f-4b8e-9c3d-2a1b0c9d8e7f' }],
+  ['#/git-hosts/failed/import_forbidden', { name: 'git-hosts', failed: 'import_forbidden' }],
   ['#/pair/eyJyZXF1ZXN0IjoiMSJ9', { name: 'pair', request: 'eyJyZXF1ZXN0IjoiMSJ9' }],
   ['#/device', { name: 'device' }],
   ['#/device/BCDF-GHJK', { name: 'device', userCode: 'BCDF-GHJK' }],
@@ -45,6 +48,13 @@ describe('parseRoute', () => {
   it.each(LINKABLE_ROUTES)('reads the literal hash %s', (hash, route) => {
     expect(parseRoute(hash)).toEqual(route);
   });
+
+  it.each(['#/git-hosts/connected', '#/git-hosts/elsewhere/x', '#/git-hosts/failed/a/b'])(
+    'reads %s, which no redirect sends, as not-found',
+    (hash) => {
+      expect(parseRoute(hash).name).toBe('not-found');
+    },
+  );
 
   it('reports an unknown path as not-found, carrying the path', () => {
     expect(parseRoute('#/nowhere')).toEqual({ name: 'not-found', path: '/nowhere' });

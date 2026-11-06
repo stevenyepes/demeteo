@@ -62,6 +62,11 @@ export type RunDetail = {
   tickets: TicketProgress;
   pendingGates: PendingGate[];
   events: RunEvent[];
+  /**
+   * Why a run this Hub started on a runner got no git token on its newest
+   * try, as the code `POST /git-token` answered. `null` for every other run.
+   */
+  gitTokenProblem: string | null;
 };
 
 export type RunsFilter = { instance?: string; status?: RunStatus };
@@ -112,6 +117,7 @@ type WireRunDetail = {
   tickets: TicketProgress;
   pending_gates: WirePendingGate[];
   events: WireRunEvent[];
+  git_token_problem: string | null;
 };
 
 const STATUSES: readonly unknown[] = ['running', 'completed', 'failed', 'cancelled'] satisfies RunStatus[];
@@ -168,6 +174,7 @@ function runDetailOf(wire: WireRunDetail): RunDetail {
     tickets: ticketProgressOf(wire.tickets),
     pendingGates: wire.pending_gates.map(pendingGateOf),
     events: wire.events.map(runEventOf),
+    gitTokenProblem: wire.git_token_problem,
   };
 }
 
@@ -261,7 +268,8 @@ const isWireRunDetail: Guard<WireRunDetail> = (value): value is WireRunDetail =>
     isListOf(memberOf(value, 'steps'), isWireStepView) &&
     isTicketProgress(memberOf(value, 'tickets')) &&
     isListOf(memberOf(value, 'pending_gates'), isWirePendingGate) &&
-    isListOf(memberOf(value, 'events'), isWireRunEvent)
+    isListOf(memberOf(value, 'events'), isWireRunEvent) &&
+    isStringOrNull(memberOf(value, 'git_token_problem'))
   );
 };
 

@@ -5,7 +5,8 @@ use aws_lc_rs::signature::{UnparsedPublicKey, ED25519, RSA_PKCS1_2048_8192_SHA25
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use demeteo_hub::adapters::openbao::OpenBaoKeys;
-use demeteo_hub::ports::{KeyService, KeyServiceError, RsaSigner};
+use demeteo_hub::adapters::transit_import::rsa_key_from_pem;
+use demeteo_hub::ports::{KeyImporter, KeyService, KeyServiceError, RsaSigner};
 
 const ADDR_ENV: &str = "OPENBAO_ADDR";
 const TOKEN_ENV: &str = "OPENBAO_TOKEN";
@@ -145,4 +146,37 @@ async fn an_rs256_signature_verifies_under_the_imported_app_key() {
     assert_eq!(signature.len(), 256);
     verifier.verify(message, &signature).unwrap();
     assert!(verifier.verify(b"not signed", &signature).is_err());
+}
+
+/// What connecting an App does, under the Hub's own least-privilege token:
+/// a key it generated is imported under a new name, signs RS256 there, and
+/// a second import under that name is refused. Each run uses a fresh name,
+/// since Transit keeps a key until it is deleted by hand.
+#[tokio::test]
+#[ignore = "needs OpenBao with the import grant: see deploy/hub/README.md"]
+async fn an_imported_key_signs_and_its_name_cannot_be_imported_over() {
+    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+    use aws_lc_rs::rsa::{KeyPair, KeySize};
+    use aws_lc_rs::signature::KeyPair as _;
+
+    let source = KeyPair::generate(KeySize::Rsa2048).unwrap();
+    let pem = || {
+        let der = AsDer::<Pkcs8V1Der>::as_der(&source).unwrap();
+        rsa_key_from_pem(&format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            STANDARD.encode(der.as_ref())
+        ))
+        .unwrap()
+    };
+    let name = format!("demeteo-hub-test-import-{}", uuid::Uuid::new_v4().simple());
+    let keys = service();
+
+    keys.import_rsa(&name, pem()).await.unwrap();
+    let message = b"eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOjd9";
+    let signature = keys.sign_rs256(&name, message).await.unwrap();
+    UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, source.public_key().as_ref())
+        .verify(message, &signature)
+        .unwrap();
+
+    assert!(keys.import_rsa(&name, pem()).await.is_err());
 }

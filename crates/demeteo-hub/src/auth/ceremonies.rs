@@ -27,6 +27,12 @@ pub const MAX_LIVE_SESSION_BOUND: usize = 16_384;
 
 const CEREMONY_ID_LEN: usize = 16;
 
+/// How long a GitHub App manifest round trip may take: the user leaves for
+/// GitHub, may sign in there and edits the App's form before GitHub
+/// redirects back. Five minutes, the passkey ceremonies' TTL, is too short
+/// for that; GitHub's own code lives an hour, which is longer than needed.
+pub const MANIFEST_TTL_SECS: u64 = 30 * 60;
+
 #[derive(Debug)]
 pub enum Ceremony {
     /// A first passkey, for a tenant that exists only once this finishes.
@@ -89,6 +95,18 @@ pub enum Ceremony {
         scopes: Vec<Scope>,
         challenge: [u8; 32],
     },
+    /// A GitHub App being created from the Hub's manifest, between the page
+    /// that sent the browser to GitHub and GitHub's redirect back. The id is
+    /// the manifest's `state`, and that redirect carries no session cookie
+    /// (it is cross-site and the cookie is `SameSite=Strict`), so this entry
+    /// is the only thing that says whose App it is: `user`, read from here
+    /// and never from the redirect. `host` is the connectable host it was
+    /// started for.
+    GithubManifest {
+        user: UserId,
+        holder: Vec<u8>,
+        host: String,
+    },
 }
 
 /// Whose allowance an entry is held under.
@@ -112,7 +130,22 @@ impl Ceremony {
             | Ceremony::Endorse { holder, .. }
             | Ceremony::Revoke { holder, .. }
             | Ceremony::Gate { holder, .. }
-            | Ceremony::Device { holder, .. } => Budget::Holder(holder),
+            | Ceremony::Device { holder, .. }
+            | Ceremony::GithubManifest { holder, .. } => Budget::Holder(holder),
+        }
+    }
+
+    /// No wildcard arm, for the reason [`budget`](Self::budget) gives.
+    fn ttl_secs(&self) -> u64 {
+        match self {
+            Ceremony::GithubManifest { .. } => MANIFEST_TTL_SECS,
+            Ceremony::Register { .. }
+            | Ceremony::SignIn { .. }
+            | Ceremony::Add { .. }
+            | Ceremony::Endorse { .. }
+            | Ceremony::Revoke { .. }
+            | Ceremony::Gate { .. }
+            | Ceremony::Device { .. } => CHALLENGE_TTL_SECS,
         }
     }
 }
@@ -228,8 +261,8 @@ pub struct Ceremonies {
 }
 
 impl Ceremonies {
-    /// Holds `ceremony` until [`CHALLENGE_TTL_SECS`] after `now` (Unix
-    /// seconds) and returns the id that takes it back: 16 random bytes as
+    /// Holds `ceremony` until its TTL after `now` (Unix seconds):
+    /// [`CHALLENGE_TTL_SECS`], or [`MANIFEST_TTL_SECS`] for a manifest. Returns the id that takes it back: 16 random bytes as
     /// base64url without padding. Entries that expired before `now` are
     /// dropped first and count toward no budget.
     pub fn insert(&self, now: u64, ceremony: Ceremony) -> Result<String, InsertError> {
@@ -242,7 +275,7 @@ impl Ceremonies {
         live.make_room(ceremony.budget())?;
         live.inserted += 1;
         let held = Held {
-            expires_at: now.saturating_add(CHALLENGE_TTL_SECS),
+            expires_at: now.saturating_add(ceremony.ttl_secs()),
             order: live.inserted,
             ceremony,
         };
@@ -371,7 +404,8 @@ mod tests {
             | Ceremony::Register { .. }
             | Ceremony::SignIn { .. }
             | Ceremony::Add { .. }
-            | Ceremony::Device { .. } => None,
+            | Ceremony::Device { .. }
+            | Ceremony::GithubManifest { .. } => None,
         }
     }
 
@@ -390,7 +424,8 @@ mod tests {
             | Ceremony::SignIn { .. }
             | Ceremony::Add { .. }
             | Ceremony::Gate { .. }
-            | Ceremony::Device { .. } => None,
+            | Ceremony::Device { .. }
+            | Ceremony::GithubManifest { .. } => None,
         }
     }
 
@@ -454,6 +489,26 @@ mod tests {
 
         assert!(ceremonies.take(NOW + CHALLENGE_TTL_SECS + 1, &id).is_none());
         assert!(ceremonies.take(NOW, &id).is_none());
+    }
+
+    #[test]
+    fn a_manifest_outlives_a_passkey_challenge_and_then_expires() {
+        let ceremonies = Ceremonies::default();
+        let manifest = || Ceremony::GithubManifest {
+            user: UserId::generate(),
+            holder: MINE.to_vec(),
+            host: "github.com".to_owned(),
+        };
+        let kept = ceremonies.insert(NOW, manifest()).unwrap();
+        let expired = ceremonies.insert(NOW, manifest()).unwrap();
+
+        assert!(ceremonies
+            .take(NOW + CHALLENGE_TTL_SECS + 1, &kept)
+            .is_some());
+        assert!(ceremonies
+            .take(NOW + MANIFEST_TTL_SECS + 1, &expired)
+            .is_none());
+        assert_eq!(ceremonies.held_under(MINE), 0);
     }
 
     #[test]

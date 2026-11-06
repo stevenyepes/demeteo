@@ -28,8 +28,10 @@ pub struct GitTokenBody {
 }
 
 /// Why no token is handed over, past admission. Each is one answer the
-/// runner acts on: [`NoStart`](Self::NoStart) and
-/// [`Unavailable`](Self::Unavailable) it retries, the rest it stops on.
+/// runner acts on: [`NoStart`](Self::NoStart) and every `503` it retries, the
+/// rest it stops on. The three App refusals are `503`s with codes of their
+/// own: a human can fix each while the run waits, and the run's page says
+/// which ([`problem`](Self::problem)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenRefusal {
     /// The body does not parse, or its `feature_id` is no id.
@@ -43,12 +45,36 @@ pub enum TokenRefusal {
     /// The bound run's mirror says it has ended.
     RunEnded,
     /// The start's repository is not one a GitHub App can be installed on:
-    /// another provider, a name that is not `owner/repo`, or a host no API
-    /// is configured for.
+    /// another provider, or a name that is not `owner/repo`.
     NotGithub,
-    /// No token can be minted now: no App is configured, or the key service
-    /// or GitHub could not mint one.
+    /// No App is connected or configured for the repository's host.
+    NoApp,
+    /// No connected App is installed on the repository.
+    NotInstalled,
+    /// More than one connected App is installed on the repository.
+    Ambiguous,
+    /// No token can be minted now: the key service or GitHub could not mint
+    /// one.
     Unavailable,
+}
+
+impl TokenRefusal {
+    /// The code a mint failure is recorded under for the run's page, and
+    /// answered with. `None` for a refusal of the request itself, which no
+    /// human on the Hub's side can act on.
+    pub fn problem(self) -> Option<&'static str> {
+        match self {
+            TokenRefusal::NoApp => Some("github_app_missing"),
+            TokenRefusal::NotInstalled => Some("github_app_not_installed"),
+            TokenRefusal::Ambiguous => Some("github_app_ambiguous"),
+            TokenRefusal::Unavailable => Some("git_token_unavailable"),
+            TokenRefusal::Malformed
+            | TokenRefusal::NoStart
+            | TokenRefusal::FeatureMismatch
+            | TokenRefusal::RunEnded
+            | TokenRefusal::NotGithub => None,
+        }
+    }
 }
 
 impl From<TokenRefusal> for ApiError {
@@ -63,9 +89,13 @@ impl From<TokenRefusal> for ApiError {
             TokenRefusal::NotGithub => {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "repository_not_github")
             }
-            TokenRefusal::Unavailable => {
-                ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "git_token_unavailable")
-            }
+            TokenRefusal::NoApp
+            | TokenRefusal::NotInstalled
+            | TokenRefusal::Ambiguous
+            | TokenRefusal::Unavailable => match refusal.problem() {
+                Some(code) => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, code),
+                None => ApiError::INTERNAL,
+            },
         }
     }
 }
@@ -198,14 +228,17 @@ fn is_github_name(segment: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
-/// What a failed mint answers. A host with no API is the one failure no
-/// retry changes; every other one is a service to wait for.
+/// What a failed mint answers. Every one is retried: the three about Apps
+/// wait for a human to connect, install or remove one, the rest for a
+/// service.
 pub fn mint_verdict(error: &MintError) -> TokenRefusal {
     match error {
-        MintError::UnknownHost(_) => TokenRefusal::NotGithub,
-        MintError::Signing(_)
+        MintError::UnknownHost(_) => TokenRefusal::NoApp,
+        MintError::NotInstalled => TokenRefusal::NotInstalled,
+        MintError::Ambiguous(_) => TokenRefusal::Ambiguous,
+        MintError::Hosts(_)
+        | MintError::Signing(_)
         | MintError::Transport(_)
-        | MintError::NotInstalled
         | MintError::Refused { .. }
         | MintError::Malformed(_) => TokenRefusal::Unavailable,
     }
@@ -501,15 +534,23 @@ mod tests {
     }
 
     #[test]
-    fn only_a_host_with_no_api_is_a_mint_failure_not_worth_retrying() {
+    fn each_app_problem_has_its_own_refusal_and_the_rest_are_unavailable() {
         assert_eq!(
             mint_verdict(&MintError::UnknownHost("ghe.example".to_owned())),
-            TokenRefusal::NotGithub
+            TokenRefusal::NoApp
+        );
+        assert_eq!(
+            mint_verdict(&MintError::NotInstalled),
+            TokenRefusal::NotInstalled
+        );
+        assert_eq!(
+            mint_verdict(&MintError::Ambiguous(2)),
+            TokenRefusal::Ambiguous
         );
         for error in [
+            MintError::Hosts("down".to_owned()),
             MintError::Signing(KeyServiceError::Sealed),
             MintError::Transport("down".to_owned()),
-            MintError::NotInstalled,
             MintError::Refused {
                 step: "token request",
                 status: 403,
@@ -529,10 +570,17 @@ mod tests {
             (TokenRefusal::FeatureMismatch, StatusCode::CONFLICT),
             (TokenRefusal::RunEnded, StatusCode::GONE),
             (TokenRefusal::NotGithub, StatusCode::UNPROCESSABLE_ENTITY),
+            (TokenRefusal::NoApp, StatusCode::SERVICE_UNAVAILABLE),
+            (TokenRefusal::NotInstalled, StatusCode::SERVICE_UNAVAILABLE),
+            (TokenRefusal::Ambiguous, StatusCode::SERVICE_UNAVAILABLE),
             (TokenRefusal::Unavailable, StatusCode::SERVICE_UNAVAILABLE),
         ] {
             let response = axum::response::IntoResponse::into_response(status(refusal));
             assert_eq!(response.status(), code, "{refusal:?}");
         }
+        assert_eq!(
+            status(TokenRefusal::NotInstalled),
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "github_app_not_installed")
+        );
     }
 }
