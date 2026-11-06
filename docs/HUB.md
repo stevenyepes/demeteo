@@ -2024,6 +2024,14 @@ the name of the App's Transit key. No column holds a secret. The App's private
 key is in Transit only, imported once (§6.5); its client and webhook secrets
 were never read.
 
+**The Hub's own way into OpenBao** is a token an operator minted, or, on
+Kubernetes, a login with the pod's service account (`OPENBAO_K8S_ROLE`). The
+login's token lives only in Hub memory, for the role's TTL, and is replaced at
+two thirds of it or when OpenBao refuses it
+([`adapters/openbao_auth.rs`](../crates/demeteo-hub/src/adapters/openbao_auth.rs)).
+The service-account token is no stronger than the token it replaces: whoever can
+mount the Hub's service account in its namespace can log in as the Hub.
+
 **Hub server secrets live in OpenBao or are encrypted under Transit — never
 plaintext in Postgres.** That includes the request-signing key (§4) and the key
 material for attachments (§6.3).

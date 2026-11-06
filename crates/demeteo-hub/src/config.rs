@@ -5,6 +5,7 @@
 
 use crate::adapters::github_app::{GithubAppSettings, GithubHost};
 use crate::adapters::openbao::{is_key_name, KEY_NAME_ALPHABET};
+use crate::adapters::openbao_auth::{KubernetesLogin, OpenBaoAuth};
 use crate::attachments::AttachmentSettings;
 use crate::git_hosts::manifest::ConnectableHost;
 use std::fmt;
@@ -31,6 +32,10 @@ const WEB_DIR: &str = "DEMETEO_HUB_WEB_DIR";
 const OPENBAO_ADDR: &str = "OPENBAO_ADDR";
 const OPENBAO_TOKEN: &str = "OPENBAO_TOKEN";
 const OPENBAO_TOKEN_FILE: &str = "OPENBAO_TOKEN_FILE";
+const OPENBAO_K8S_ROLE: &str = "OPENBAO_K8S_ROLE";
+const OPENBAO_K8S_MOUNT: &str = "OPENBAO_K8S_MOUNT";
+const OPENBAO_K8S_JWT_FILE: &str = "OPENBAO_K8S_JWT_FILE";
+const DEFAULT_K8S_MOUNT: &str = "kubernetes";
 const TRANSIT_MOUNT: &str = "DEMETEO_HUB_TRANSIT_MOUNT";
 const TRANSIT_KEY: &str = "DEMETEO_HUB_TRANSIT_KEY";
 const SIGNING_KEY: &str = "DEMETEO_HUB_SIGNING_KEY";
@@ -68,7 +73,8 @@ pub struct Config {
     pub rp_id: String,
     pub database_url: String,
     pub openbao_addr: String,
-    pub openbao_token: String,
+    /// A token, or a Kubernetes login when `OPENBAO_K8S_ROLE` is set.
+    pub openbao_auth: OpenBaoAuth,
     pub transit_mount: String,
     pub transit_key: String,
     /// The Transit name of the Ed25519 request-signing key. The key itself
@@ -181,7 +187,7 @@ impl Config {
             rp_id,
             database_url: required(DATABASE_URL)?,
             openbao_addr: required(OPENBAO_ADDR)?,
-            openbao_token: openbao_token(&lookup)?,
+            openbao_auth: openbao_auth(&lookup)?,
             transit_mount: or_default(TRANSIT_MOUNT, DEFAULT_TRANSIT_MOUNT),
             transit_key: or_default(TRANSIT_KEY, DEFAULT_TRANSIT_KEY),
             signing_key,
@@ -285,6 +291,35 @@ fn enterprise_host(url: &str) -> Result<ConnectableHost, ConfigError> {
         host,
         api_base: url.trim_end_matches('/').to_owned(),
     })
+}
+
+/// Both set is refused rather than one winning: an operator who moved to the
+/// Kubernetes login and left a token behind would otherwise keep a standing
+/// credential they believe is gone.
+fn openbao_auth(lookup: &impl Fn(&str) -> Option<String>) -> Result<OpenBaoAuth, ConfigError> {
+    let set = |var| lookup(var).filter(|v: &String| !v.is_empty());
+    let Some(role) = set(OPENBAO_K8S_ROLE) else {
+        return openbao_token(lookup).map(OpenBaoAuth::Token);
+    };
+    if set(OPENBAO_TOKEN).is_some() || set(OPENBAO_TOKEN_FILE).is_some() {
+        return Err(ConfigError::Invalid {
+            var: OPENBAO_K8S_ROLE,
+            reason: format!("is set together with `{OPENBAO_TOKEN}` or `{OPENBAO_TOKEN_FILE}`"),
+        });
+    }
+    let mount = set(OPENBAO_K8S_MOUNT).unwrap_or_else(|| DEFAULT_K8S_MOUNT.to_owned());
+    if !mount.split('/').all(is_key_name) {
+        return Err(ConfigError::Invalid {
+            var: OPENBAO_K8S_MOUNT,
+            reason: format!("each segment may hold only {KEY_NAME_ALPHABET}"),
+        });
+    }
+    let jwt_file = set(OPENBAO_K8S_JWT_FILE).ok_or(ConfigError::Missing(OPENBAO_K8S_JWT_FILE))?;
+    Ok(OpenBaoAuth::Kubernetes(KubernetesLogin {
+        role,
+        mount,
+        jwt_file: PathBuf::from(jwt_file),
+    }))
 }
 
 fn openbao_token(lookup: &impl Fn(&str) -> Option<String>) -> Result<String, ConfigError> {
@@ -458,7 +493,7 @@ impl fmt::Debug for Config {
             .field("rp_id", &self.rp_id)
             .field("database_url", &redact_database_url(&self.database_url))
             .field("openbao_addr", &self.openbao_addr)
-            .field("openbao_token", &REDACTED)
+            .field("openbao_auth", &self.openbao_auth)
             .field("transit_mount", &self.transit_mount)
             .field("transit_key", &self.transit_key)
             .field("signing_key", &self.signing_key)
@@ -692,7 +727,51 @@ mod tests {
         env.insert(OPENBAO_TOKEN_FILE, path.to_string_lossy().into_owned());
         let config = load(&env);
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(config.unwrap().openbao_token, "s.fromfile");
+        assert_eq!(
+            config.unwrap().openbao_auth,
+            OpenBaoAuth::Token("s.fromfile".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_kubernetes_role_logs_in_with_the_named_token_file_and_needs_no_openbao_token() {
+        let mut env = full();
+        env.remove(OPENBAO_TOKEN);
+        env.insert(OPENBAO_K8S_ROLE, "demeteo-hub".to_owned());
+        env.insert(
+            OPENBAO_K8S_JWT_FILE,
+            "/var/run/secrets/openbao-sa/token".to_owned(),
+        );
+        assert_eq!(
+            load(&env).unwrap().openbao_auth,
+            OpenBaoAuth::Kubernetes(KubernetesLogin {
+                role: "demeteo-hub".to_owned(),
+                mount: DEFAULT_K8S_MOUNT.to_owned(),
+                jwt_file: PathBuf::from("/var/run/secrets/openbao-sa/token"),
+            })
+        );
+
+        env.remove(OPENBAO_K8S_JWT_FILE);
+        let err = load(&env).unwrap_err().to_string();
+        assert!(err.contains(OPENBAO_K8S_JWT_FILE), "{err}");
+
+        env.insert(OPENBAO_K8S_JWT_FILE, "/t".to_owned());
+        env.insert(OPENBAO_K8S_MOUNT, "../sys".to_owned());
+        let err = load(&env).unwrap_err().to_string();
+        assert!(err.contains(OPENBAO_K8S_MOUNT), "{err}");
+    }
+
+    #[test]
+    fn a_kubernetes_role_beside_a_token_refuses_startup() {
+        for token_var in [OPENBAO_TOKEN, OPENBAO_TOKEN_FILE] {
+            let mut env = full();
+            env.remove(OPENBAO_TOKEN);
+            env.insert(token_var, "s.leftover".to_owned());
+            env.insert(OPENBAO_K8S_ROLE, "demeteo-hub".to_owned());
+            env.insert(OPENBAO_K8S_JWT_FILE, "/t".to_owned());
+            let err = load(&env).unwrap_err().to_string();
+            assert!(err.contains(OPENBAO_K8S_ROLE), "{token_var}: {err}");
+        }
     }
 
     #[test]
