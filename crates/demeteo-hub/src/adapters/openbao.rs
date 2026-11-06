@@ -1,9 +1,9 @@
+use super::openbao_auth::{Credential, OpenBaoAuth};
 use super::transit_import::{wrap_for_import, TRANSIT_RSA_TYPE};
 use crate::ports::{DataKey, KeyImporter, KeyService, KeyServiceError, RsaPrivateKey, RsaSigner};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use reqwest::header::HeaderValue;
 use reqwest::{Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -14,6 +14,7 @@ const TOKEN_HEADER: &str = "X-Vault-Token";
 const STATUS_SEALED: u16 = 503;
 const STATUS_NOT_FOUND: u16 = 404;
 const STATUS_BAD_REQUEST: u16 = 400;
+const STATUS_FORBIDDEN: u16 = 403;
 const KEY_NOT_FOUND_MARKER: &str = "key not found";
 const SIGNATURE_PREFIX: &str = "vault:v";
 
@@ -139,13 +140,14 @@ struct ErrorBody {
     errors: Vec<String>,
 }
 
-/// Transit client. Address, mount and token are constructor arguments (read
-/// from `Config` by the composition root); the key name travels per call.
+/// Transit client. Address, mount and how to authenticate are constructor
+/// arguments (read from `Config` by the composition root); the key name
+/// travels per call.
 pub struct OpenBaoKeys {
     http: reqwest::Client,
     addr: String,
     mount: String,
-    token: HeaderValue,
+    credential: Credential,
 }
 
 impl fmt::Debug for OpenBaoKeys {
@@ -159,34 +161,32 @@ impl fmt::Debug for OpenBaoKeys {
 }
 
 impl OpenBaoKeys {
+    /// Over a static token.
     pub fn new(
         http: reqwest::Client,
         addr: &str,
         mount: &str,
         token: &str,
     ) -> Result<Self, KeyServiceError> {
-        let mut token = HeaderValue::from_str(token)
-            .map_err(|_| KeyServiceError::Transport("token is not a valid header value".into()))?;
-        token.set_sensitive(true);
+        Self::with_auth(http, addr, mount, &OpenBaoAuth::Token(token.to_owned()))
+    }
+
+    pub fn with_auth(
+        http: reqwest::Client,
+        addr: &str,
+        mount: &str,
+        auth: &OpenBaoAuth,
+    ) -> Result<Self, KeyServiceError> {
+        let login_mount = match auth {
+            OpenBaoAuth::Token(_) => String::new(),
+            OpenBaoAuth::Kubernetes(login) => check_mount(&login.mount)?,
+        };
         Ok(Self {
+            credential: Credential::new(&http, addr, &login_mount, auth)?,
             http,
             addr: addr.to_owned(),
             mount: check_mount(mount)?,
-            token,
         })
-    }
-
-    fn request(
-        &self,
-        method: Method,
-        op: Op,
-        key: &str,
-    ) -> Result<RequestBuilder, KeyServiceError> {
-        check_key_name(key)?;
-        Ok(self
-            .http
-            .request(method, endpoint_url(&self.addr, &self.mount, op, key))
-            .header(TOKEN_HEADER, self.token.clone()))
     }
 
     async fn call(
@@ -195,12 +195,47 @@ impl OpenBaoKeys {
         key: &str,
         body: &impl Serialize,
     ) -> Result<Vec<u8>, KeyServiceError> {
-        let request = self.request(Method::POST, op, key)?.json(body);
-        answer(request, op, key).await
+        check_key_name(key)?;
+        let url = endpoint_url(&self.addr, &self.mount, op, key);
+        self.exchange(Method::POST, &url, Some(body), op, key).await
     }
 
     async fn read(&self, op: Op, key: &str) -> Result<Vec<u8>, KeyServiceError> {
-        answer(self.request(Method::GET, op, key)?, op, key).await
+        check_key_name(key)?;
+        let url = endpoint_url(&self.addr, &self.mount, op, key);
+        self.exchange(Method::GET, &url, None::<&()>, op, key).await
+    }
+
+    /// One request, sent again once if OpenBao refused a token that a fresh
+    /// login can replace: a Kubernetes login's token can be revoked or
+    /// expire early (an OpenBao restart, a role's TTL shortened), and the
+    /// next login is the whole cure. A static token is never retried.
+    async fn exchange<B: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<&B>,
+        op: Op,
+        key: &str,
+    ) -> Result<Vec<u8>, KeyServiceError> {
+        let mut retried = false;
+        loop {
+            let token = self.credential.header().await?;
+            let mut request = self
+                .http
+                .request(method.clone(), url)
+                .header(TOKEN_HEADER, token.clone());
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            match answer(request, op, key).await {
+                Err(KeyServiceError::Upstream {
+                    status: STATUS_FORBIDDEN,
+                    ..
+                }) if !retried && self.credential.forget(&token).await => retried = true,
+                other => return other,
+            }
+        }
     }
 }
 
@@ -256,12 +291,17 @@ impl KeyService for OpenBaoKeys {
 impl KeyImporter for OpenBaoKeys {
     async fn import_rsa(&self, name: &str, key: RsaPrivateKey) -> Result<(), KeyServiceError> {
         check_key_name(name)?;
-        let wrapping = self
-            .http
-            .get(wrapping_key_url(&self.addr, &self.mount))
-            .header(TOKEN_HEADER, self.token.clone());
+        let url = wrapping_key_url(&self.addr, &self.mount);
         let wrapping = parse_envelope::<WrappingKeyData>(
-            &answer(wrapping, Op::Import, WRAPPING_KEY_PATH).await?,
+            &self
+                .exchange(
+                    Method::GET,
+                    &url,
+                    None::<&()>,
+                    Op::Import,
+                    WRAPPING_KEY_PATH,
+                )
+                .await?,
         )?;
         let body = ImportBody {
             ciphertext: wrap_for_import(&wrapping.public_key, &key)?,
@@ -946,6 +986,13 @@ mod tests {
     async fn answering_in_turn(
         bodies: Vec<Vec<u8>>,
     ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        answering_with(bodies.into_iter().map(|body| (200, body)).collect()).await
+    }
+
+    /// As [`answering_in_turn`], each answer with its own status.
+    async fn answering_with(
+        answers: Vec<(u16, Vec<u8>)>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -954,8 +1001,15 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let served = tokio::spawn(async move {
             let mut requests = Vec::new();
-            for body in bodies {
-                let (mut socket, _) = listener.accept().await.unwrap();
+            for (status, body) in answers {
+                // A client that sends fewer requests than scripted must fail
+                // the test that expected them, not hang it.
+                let Ok(accepted) =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept()).await
+                else {
+                    break;
+                };
+                let (mut socket, _) = accepted.unwrap();
                 let mut seen = Vec::new();
                 let mut chunk = [0u8; 1024];
                 let request = loop {
@@ -976,7 +1030,7 @@ mod tests {
                     }
                 };
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    "HTTP/1.1 {status} Answer\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                     body.len()
                 );
                 socket.write_all(head.as_bytes()).await.unwrap();
@@ -1130,13 +1184,13 @@ mod tests {
         assert!(is_malformed(keys.sign_rs256("app", b"a.b").await));
     }
 
-    #[test]
-    fn debug_never_prints_the_token() {
+    #[tokio::test]
+    async fn debug_never_prints_the_token() {
         let keys =
             OpenBaoKeys::new(reqwest::Client::new(), "http://bao", "transit", "s.sekret").unwrap();
         let shown = format!("{keys:?}");
         assert!(!shown.contains("sekret"), "{shown}");
-        assert!(keys.token.is_sensitive());
+        assert!(keys.credential.header().await.unwrap().is_sensitive());
     }
 
     #[test]
@@ -1149,5 +1203,174 @@ mod tests {
         )
         .unwrap_err();
         assert!(!err.to_string().contains("bad"));
+    }
+
+    fn login_answer(token: &str, lease: u64) -> (u16, Vec<u8>) {
+        let body = serde_json::json!({"auth": {
+            "client_token": token,
+            "lease_duration": lease,
+            "renewable": true,
+        }});
+        (200, serde_json::to_vec(&body).unwrap())
+    }
+
+    fn encrypted() -> (u16, Vec<u8>) {
+        let body = serde_json::json!({"data": {"ciphertext": "vault:v1:abc"}});
+        (200, serde_json::to_vec(&body).unwrap())
+    }
+
+    fn denied() -> (u16, Vec<u8>) {
+        (403, br#"{"errors":["permission denied"]}"#.to_vec())
+    }
+
+    /// A service-account token file that is removed when the test ends.
+    struct JwtFile(std::path::PathBuf);
+
+    impl JwtFile {
+        fn holding(name: &str, jwt: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("hub-jwt-{}-{name}", std::process::id()));
+            std::fs::write(&path, jwt).unwrap();
+            Self(path)
+        }
+
+        fn auth(&self) -> OpenBaoAuth {
+            OpenBaoAuth::Kubernetes(crate::adapters::openbao_auth::KubernetesLogin {
+                role: "demeteo-hub".to_owned(),
+                mount: "kubernetes".to_owned(),
+                jwt_file: self.0.clone(),
+            })
+        }
+    }
+
+    impl Drop for JwtFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn logging_in(addr: &str, jwt: &JwtFile) -> OpenBaoKeys {
+        OpenBaoKeys::with_auth(reqwest::Client::new(), addr, "transit", &jwt.auth()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_kubernetes_login_comes_first_and_its_token_is_used_until_renewal() {
+        let jwt = JwtFile::holding("first", "jwt-of-the-pod\n");
+        let (addr, served) = answering_with(vec![
+            login_answer("s.fromlogin", 3600),
+            encrypted(),
+            encrypted(),
+        ])
+        .await;
+        let keys = logging_in(&addr, &jwt);
+
+        keys.encrypt("k", b"x").await.unwrap();
+        keys.encrypt("k", b"y").await.unwrap();
+
+        let sent = served.await.unwrap();
+        assert!(
+            sent[0].starts_with("POST /v1/auth/kubernetes/login "),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[0].contains(r#""role":"demeteo-hub""#), "{}", sent[0]);
+        assert!(sent[0].contains(r#""jwt":"jwt-of-the-pod""#), "{}", sent[0]);
+        for transit in &sent[1..] {
+            assert!(
+                transit.starts_with("POST /v1/transit/encrypt/k "),
+                "{transit}"
+            );
+            assert!(transit.contains("x-vault-token: s.fromlogin"), "{transit}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_login_reads_the_token_file_again() {
+        let jwt = JwtFile::holding("rotated", "jwt-before");
+        let (addr, served) = answering_with(vec![
+            login_answer("s.one", 1),
+            encrypted(),
+            login_answer("s.two", 1),
+            encrypted(),
+        ])
+        .await;
+        let keys = logging_in(&addr, &jwt);
+
+        keys.encrypt("k", b"x").await.unwrap();
+        std::fs::write(&jwt.0, "jwt-after").unwrap();
+        keys.encrypt("k", b"x").await.unwrap();
+
+        let sent = served.await.unwrap();
+        assert!(sent[2].contains(r#""jwt":"jwt-after""#), "{}", sent[2]);
+        assert!(sent[3].contains("x-vault-token: s.two"), "{}", sent[3]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_replaced_by_one_fresh_login_and_the_call_sent_again() {
+        let jwt = JwtFile::holding("refused", "jwt");
+        let (addr, served) = answering_with(vec![
+            login_answer("s.revoked", 3600),
+            denied(),
+            login_answer("s.fresh", 3600),
+            encrypted(),
+        ])
+        .await;
+        let keys = logging_in(&addr, &jwt);
+
+        assert_eq!(keys.encrypt("k", b"x").await.unwrap(), "vault:v1:abc");
+        let sent = served.await.unwrap();
+        assert!(sent[3].contains("x-vault-token: s.fresh"), "{}", sent[3]);
+    }
+
+    #[tokio::test]
+    async fn a_token_refused_again_after_a_fresh_login_is_the_answer() {
+        let jwt = JwtFile::holding("twice", "jwt");
+        let (addr, served) = answering_with(vec![
+            login_answer("s.one", 3600),
+            denied(),
+            login_answer("s.two", 3600),
+            denied(),
+        ])
+        .await;
+        let keys = logging_in(&addr, &jwt);
+
+        let outcome = keys.encrypt("k", b"x").await;
+        assert!(
+            matches!(outcome, Err(KeyServiceError::Upstream { status: 403, .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(served.await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_static_token_refused_is_not_sent_again() {
+        let (addr, served) = answering_with(vec![denied()]).await;
+        let keys = OpenBaoKeys::new(reqwest::Client::new(), &addr, "transit", "s.token").unwrap();
+
+        let outcome = keys.encrypt("k", b"x").await;
+        assert!(
+            matches!(outcome, Err(KeyServiceError::Upstream { status: 403, .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(served.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_missing_token_file_fails_before_anything_is_sent() {
+        let jwt = JwtFile::holding("gone", "jwt");
+        let auth = jwt.auth();
+        drop(jwt);
+        let keys = OpenBaoKeys::with_auth(
+            reqwest::Client::new(),
+            "http://127.0.0.1:9",
+            "transit",
+            &auth,
+        )
+        .unwrap();
+
+        let outcome = keys.encrypt("k", b"x").await;
+        assert!(
+            matches!(&outcome, Err(KeyServiceError::Transport(m)) if m.contains("service account token")),
+            "{outcome:?}"
+        );
     }
 }

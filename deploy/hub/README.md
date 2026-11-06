@@ -330,6 +330,9 @@ in the `postgres-data` volume, and the passkey stays on the authenticator under 
 | `OPENBAO_ADDR` | hub | OpenBao address (compose network only) |
 | `OPENBAO_TOKEN` | hub | the least-privilege Transit token |
 | `OPENBAO_TOKEN_FILE` | hub | path to a file holding that token, as an alternative to `OPENBAO_TOKEN` |
+| `OPENBAO_K8S_ROLE` | hub | log in with the pod's Kubernetes service account under this role instead of a token; refused beside `OPENBAO_TOKEN` or `OPENBAO_TOKEN_FILE` |
+| `OPENBAO_K8S_JWT_FILE` | hub | the projected service-account token that login presents; required with the role, and read again at every login |
+| `OPENBAO_K8S_MOUNT` | hub | where OpenBao's Kubernetes auth is mounted (default `kubernetes`) |
 | `DEMETEO_HUB_TRANSIT_MOUNT` | hub | Transit mount, default `transit` |
 | `DEMETEO_HUB_TRANSIT_KEY` | hub | name of the Transit key that wraps, default `demeteo-hub` |
 | `DEMETEO_HUB_SIGNING_KEY` | hub | name of the Ed25519 Transit key that signs requests, default `demeteo-hub-signing`. Only ASCII letters, digits, `_` and `-` are allowed (`[A-Za-z0-9_-]`); the Hub refuses to start on any other name |
@@ -473,8 +476,12 @@ Whatever chart or manifests you write must keep what this guide establishes:
 - **one replica, `Recreate`** — [Run exactly one `hub`](#run-exactly-one-hub); a rolling
   update runs two for its length;
 - `/healthz` for both probes, which is safe because it stays 200 beside a sealed OpenBao;
-- `OPENBAO_TOKEN_FILE` from a mounted Secret, and a CronJob for
-  [the renewal](#renew-the-token-inside-every-period);
+- either `OPENBAO_K8S_ROLE` with a projected service-account token, so the Hub logs in with
+  its own identity and holds an OpenBao token only in memory, re-logging in before its TTL
+  ends; or `OPENBAO_TOKEN_FILE` from a mounted Secret and a CronJob for
+  [the renewal](#renew-the-token-inside-every-period). The first needs no token Secret and
+  no renewal. With OpenBao's declarative self-initialization it also needs no root token,
+  because none is ever handed out;
 - a private ingress, or one with a per-client rate limit
   ([No per-client limit](#no-per-client-limit-one-replica)).
 

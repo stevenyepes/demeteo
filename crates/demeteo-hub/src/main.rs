@@ -47,11 +47,11 @@ async fn run() -> Result<(), String> {
     let http =
         http_client(OPENBAO_CONNECT_TIMEOUT, OPENBAO_TOTAL_TIMEOUT).map_err(|e| e.to_string())?;
     let openbao = Arc::new(
-        OpenBaoKeys::new(
+        OpenBaoKeys::with_auth(
             http,
             &config.openbao_addr,
             &config.transit_mount,
-            &config.openbao_token,
+            &config.openbao_auth,
         )
         .map_err(|e| e.to_string())?,
     );
