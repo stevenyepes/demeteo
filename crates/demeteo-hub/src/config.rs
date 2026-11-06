@@ -3,6 +3,7 @@
 //! This is the only file allowed to spell a host, port or filesystem root
 //! (`tests/no_literals.rs`), so an image never bakes one in.
 
+use crate::adapters::github_app::{GithubAppSettings, GithubHost};
 use crate::adapters::openbao::{is_key_name, KEY_NAME_ALPHABET};
 use crate::attachments::AttachmentSettings;
 use std::fmt;
@@ -14,6 +15,11 @@ const DEFAULT_WEB_DIR: &str = "/srv/hub-web";
 const DEFAULT_TRANSIT_MOUNT: &str = "transit";
 const DEFAULT_TRANSIT_KEY: &str = "demeteo-hub";
 const DEFAULT_SIGNING_KEY: &str = "demeteo-hub-signing";
+const DEFAULT_GITHUB_APP_KEY: &str = "demeteo-hub-github-app";
+/// The one host a GitHub App is reached at without configuration: github.com
+/// and its public API. A GitHub Enterprise Server is named by its operator.
+const GITHUB_HOST: &str = "github.com";
+const GITHUB_API: &str = "https://api.github.com";
 
 const DATABASE_URL: &str = "DATABASE_URL";
 const BIND: &str = "DEMETEO_HUB_BIND";
@@ -29,6 +35,13 @@ const SIGNING_KEY: &str = "DEMETEO_HUB_SIGNING_KEY";
 const ATTACHMENT_MAX_BYTES: &str = "DEMETEO_HUB_ATTACHMENT_MAX_BYTES";
 const ATTACHMENT_TTL_SECS: &str = "DEMETEO_HUB_ATTACHMENT_TTL_SECS";
 const ATTACHMENT_SWEEP_SECS: &str = "DEMETEO_HUB_ATTACHMENT_SWEEP_SECS";
+const GITHUB_APP_ID: &str = "DEMETEO_HUB_GITHUB_APP_ID";
+const GITHUB_APP_KEY: &str = "DEMETEO_HUB_GITHUB_APP_KEY";
+const GITHUB_ENTERPRISE_API_URL: &str = "DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL";
+const GIT_TOKEN_WINDOW_SECS: &str = "DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS";
+/// A day: how long a Hub-started run that names no wall clock may still get
+/// git tokens after its start was accepted.
+pub const DEFAULT_GIT_TOKEN_WINDOW_SECS: u64 = 86_400;
 
 const REDACTED: &str = "<redacted>";
 
@@ -61,6 +74,13 @@ pub struct Config {
     pub signing_key: String,
     pub web_dir: PathBuf,
     pub attachments: AttachmentSettings,
+    /// `None` unless `DEMETEO_HUB_GITHUB_APP_ID` is set: the Hub then mints
+    /// no git token, and `POST /git-token` answers `503`. The App key is a
+    /// Transit name, as the signing key is, so nothing here is a secret.
+    pub github_app: Option<GithubAppSettings>,
+    /// The git-token window of a start that names no wall clock of its own;
+    /// a start that does is held to that instead.
+    pub git_token_window_secs: u64,
 }
 
 impl Config {
@@ -142,6 +162,10 @@ impl Config {
             sweep_secs: positive_or_default(ATTACHMENT_SWEEP_SECS, defaults.sweep_secs)?,
         };
 
+        let github_app = github_app(&lookup)?;
+        let git_token_window_secs =
+            positive_or_default(GIT_TOKEN_WINDOW_SECS, DEFAULT_GIT_TOKEN_WINDOW_SECS)?;
+
         Ok(Self {
             bind,
             public_url,
@@ -155,8 +179,87 @@ impl Config {
             signing_key,
             web_dir: PathBuf::from(or_default(WEB_DIR, DEFAULT_WEB_DIR)),
             attachments,
+            github_app,
+            git_token_window_secs,
         })
     }
+}
+
+/// The App id switches minting on, and the other two variables mean nothing
+/// without it, so either set alone is refused rather than ignored: an
+/// operator who named a key expects tokens, and would otherwise find out
+/// from a runner's `503`s.
+fn github_app(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Option<GithubAppSettings>, ConfigError> {
+    let set = |var: &str| lookup(var).filter(|v| !v.is_empty());
+    let Some(app_id) = set(GITHUB_APP_ID) else {
+        for var in [GITHUB_APP_KEY, GITHUB_ENTERPRISE_API_URL] {
+            if set(var).is_some() {
+                return Err(ConfigError::Invalid {
+                    var,
+                    reason: format!("it means nothing unless `{GITHUB_APP_ID}` is set too"),
+                });
+            }
+        }
+        return Ok(None);
+    };
+    let app_id = match app_id.parse::<u64>() {
+        Ok(id) if id > 0 => id,
+        _ => {
+            return Err(ConfigError::Invalid {
+                var: GITHUB_APP_ID,
+                reason: format!("`{app_id}` is not a GitHub App id, a positive integer"),
+            })
+        }
+    };
+    let key = set(GITHUB_APP_KEY).unwrap_or_else(|| DEFAULT_GITHUB_APP_KEY.to_owned());
+    if !is_key_name(&key) {
+        return Err(ConfigError::Invalid {
+            var: GITHUB_APP_KEY,
+            reason: format!(
+                "`{key}` is not a Transit key name the Hub can address: only \
+                 {KEY_NAME_ALPHABET} are allowed"
+            ),
+        });
+    }
+    let mut hosts = vec![GithubHost {
+        host: GITHUB_HOST.to_owned(),
+        api_base: GITHUB_API.to_owned(),
+    }];
+    if let Some(url) = set(GITHUB_ENTERPRISE_API_URL) {
+        hosts.push(enterprise_host(&url)?);
+    }
+    Ok(Some(GithubAppSettings { app_id, key, hosts }))
+}
+
+/// A GitHub Enterprise Server's API base, `https://<host>[:port]/api/v3`,
+/// and the host its repositories are cloned from, which is the same one.
+/// Only `https`: the App JWT rides on every request to it.
+fn enterprise_host(url: &str) -> Result<GithubHost, ConfigError> {
+    let invalid = |reason: &str| ConfigError::Invalid {
+        var: GITHUB_ENTERPRISE_API_URL,
+        reason: format!("`{url}` {reason}"),
+    };
+    let rest = url
+        .split_once("://")
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
+        .map(|(_, rest)| rest)
+        .ok_or_else(|| invalid("must be an `https://` URL"))?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if authority.is_empty() || authority.contains('@') || url.contains(['?', '#']) {
+        return Err(invalid(
+            "must name a host, and no credentials, query or fragment",
+        ));
+    }
+    let host = authority.to_ascii_lowercase();
+    if host == GITHUB_HOST {
+        return Err(invalid("names github.com, which needs no setting"));
+    }
+    Ok(GithubHost {
+        host,
+        api_base: url.trim_end_matches('/').to_owned(),
+    })
 }
 
 fn openbao_token(lookup: &impl Fn(&str) -> Option<String>) -> Result<String, ConfigError> {
@@ -336,6 +439,7 @@ impl fmt::Debug for Config {
             .field("signing_key", &self.signing_key)
             .field("web_dir", &self.web_dir)
             .field("attachments", &self.attachments)
+            .field("github_app", &self.github_app)
             .finish()
     }
 }
@@ -369,6 +473,124 @@ mod tests {
         assert_eq!(config.transit_mount, DEFAULT_TRANSIT_MOUNT);
         assert_eq!(config.transit_key, DEFAULT_TRANSIT_KEY);
         assert_eq!(config.signing_key, "demeteo-hub-signing");
+    }
+
+    #[test]
+    fn no_github_app_id_means_no_github_app() {
+        assert_eq!(load(&full()).unwrap().github_app, None);
+        let mut env = full();
+        env.insert(GITHUB_APP_ID, String::new());
+        assert_eq!(load(&env).unwrap().github_app, None);
+    }
+
+    #[test]
+    fn a_github_app_id_alone_reaches_github_com_under_the_default_key() {
+        let mut env = full();
+        env.insert(GITHUB_APP_ID, "424242".to_owned());
+        assert_eq!(
+            load(&env).unwrap().github_app,
+            Some(GithubAppSettings {
+                app_id: 424_242,
+                key: DEFAULT_GITHUB_APP_KEY.to_owned(),
+                hosts: vec![GithubHost {
+                    host: "github.com".to_owned(),
+                    api_base: "https://api.github.com".to_owned(),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn an_enterprise_server_is_reached_at_its_own_api_beside_github_com() {
+        let mut env = full();
+        env.insert(GITHUB_APP_ID, "7".to_owned());
+        env.insert(GITHUB_APP_KEY, "ghe-app".to_owned());
+        env.insert(
+            GITHUB_ENTERPRISE_API_URL,
+            "https://GHE.example:8443/api/v3/".to_owned(),
+        );
+        let app = load(&env).unwrap().github_app.unwrap();
+        assert_eq!(app.key, "ghe-app");
+        assert_eq!(
+            app.hosts[1],
+            GithubHost {
+                host: "ghe.example:8443".to_owned(),
+                api_base: "https://GHE.example:8443/api/v3".to_owned(),
+            }
+        );
+        assert_eq!(app.hosts.len(), 2);
+    }
+
+    fn refused_var(env: &HashMap<&'static str, String>) -> &'static str {
+        match load(env) {
+            Err(ConfigError::Invalid { var, .. }) => var,
+            other => panic!("not refused: {:?}", other.map(|c| c.github_app)),
+        }
+    }
+
+    #[test]
+    fn a_github_setting_the_hub_cannot_use_names_its_variable() {
+        let cases: [(&str, &str, &str); 12] = [
+            (GITHUB_APP_ID, "0", GITHUB_APP_ID),
+            (GITHUB_APP_ID, "-1", GITHUB_APP_ID),
+            (GITHUB_APP_ID, "Iv1.abc", GITHUB_APP_ID),
+            (GITHUB_APP_KEY, "a/b", GITHUB_APP_KEY),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "http://ghe.example/api/v3",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "ghe.example/api/v3",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "https:///api/v3",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "https://u:p@ghe.example/api/v3",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "https://ghe.example/api/v3?x=1",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "https://ghe.example/api/v3#x",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "https://github.com/api/v3",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+            (
+                GITHUB_ENTERPRISE_API_URL,
+                "https://GitHub.com",
+                GITHUB_ENTERPRISE_API_URL,
+            ),
+        ];
+        for (var, value, named) in cases {
+            let mut env = full();
+            env.insert(GITHUB_APP_ID, "7".to_owned());
+            env.insert(var, value.to_owned());
+            assert_eq!(refused_var(&env), named, "{var}={value}");
+        }
+    }
+
+    #[test]
+    fn a_github_key_or_server_without_an_app_id_is_refused_not_ignored() {
+        for var in [GITHUB_APP_KEY, GITHUB_ENTERPRISE_API_URL] {
+            let mut env = full();
+            env.insert(var, "https://ghe.example/api/v3".to_owned());
+            assert_eq!(refused_var(&env), var);
+        }
     }
 
     #[test]

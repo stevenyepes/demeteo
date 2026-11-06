@@ -41,6 +41,48 @@ pub struct WebAuthnAssertion {
     pub signature: String,
 }
 
+/// Where a runner clones from. `full_name` is `owner/repo` (no scheme, no
+/// host), the shape core's `RunSpec.repo_path` takes; it is not named after
+/// that field because a `path` on the wire is what `tests/leak_surface.rs`
+/// exists to refuse, and this one names a repository on a Git host, never a
+/// directory. `provider_kind` is the Project's own, never inferred from
+/// `host`: a self-hosted GitLab and a GitHub Enterprise are both just a host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerRepository {
+    pub provider_kind: String,
+    pub host: String,
+    pub full_name: String,
+}
+
+/// The Workflow version a runner runs, inline, because a runner has no copy
+/// of a desktop's Workflows. `version` names the one the Hub signed, so the
+/// run is pinned to a version and not to whatever is latest when it lands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerWorkflow {
+    pub workflow_id: String,
+    pub version: u32,
+    pub name: String,
+    pub steps_json: String,
+}
+
+/// What a runner needs to start a run that a desktop would find in its own
+/// database: the Hub resolves it from `source_instance_id`'s snapshot and
+/// signs it into the envelope, so the runner acts on nothing unsigned.
+///
+/// There is no credential field, deliberately. The Hub stores every envelope
+/// it queues and redelivers it unchanged, so a Git token here would sit in
+/// its database for as long as the request row does; a runner fetches one
+/// over the socket after it accepts the start instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerStart {
+    pub source_instance_id: String,
+    pub repository: RunnerRepository,
+    pub workflow: RunnerWorkflow,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartFeature {
@@ -65,6 +107,11 @@ pub struct StartFeature {
     pub max_wall_clock_secs: Option<u64>,
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
+    /// `Some` only on a start addressed to a runner. Skipped when `None` so a
+    /// desktop's start serialises, and signs, exactly as it did before the
+    /// field existed; see [`SignedRequest::signing_bytes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<Box<RunnerStart>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +222,18 @@ fn put_assertion(enc: &mut Encoder, a: &WebAuthnAssertion) -> Result<(), EncodeE
     enc.put_str(&a.signature)
 }
 
+fn put_runner(enc: &mut Encoder, r: &RunnerStart) -> Result<(), EncodeError> {
+    enc.put_u8(1);
+    enc.put_str(&r.source_instance_id)?;
+    enc.put_str(&r.repository.provider_kind)?;
+    enc.put_str(&r.repository.host)?;
+    enc.put_str(&r.repository.full_name)?;
+    enc.put_str(&r.workflow.workflow_id)?;
+    enc.put_u32(r.workflow.version);
+    enc.put_str(&r.workflow.name)?;
+    enc.put_str(&r.workflow.steps_json)
+}
+
 fn put_payload(enc: &mut Encoder, payload: &RequestPayload) -> Result<(), EncodeError> {
     match payload {
         RequestPayload::StartFeature(b) => {
@@ -200,7 +259,14 @@ fn put_payload(enc: &mut Encoder, payload: &RequestPayload) -> Result<(), Encode
                 e.put_str(&a.id)?;
                 e.put_u64(a.size);
                 e.put_str(&a.sha256)
-            })
+            })?;
+            // Not `put_opt`: its `0x00` for `None` would change the bytes of
+            // every start a desktop verifies, and every desktop that predates
+            // `runner` would then drop every start as a bad signature.
+            match &b.runner {
+                None => Ok(()),
+                Some(r) => put_runner(enc, r),
+            }
         }
         RequestPayload::CancelFeature(b) => {
             enc.put_u8(2);
@@ -243,6 +309,15 @@ impl SignedRequest {
     /// instance_id`, `u64 issued_at`, `u64 expires_at`, `u8` payload tag
     /// (start_feature=1 … passkey_revocation=6), then the variant's fields in
     /// declaration order, so `StartFeature.max_budget_cents` is an `opt<u64>`.
+    ///
+    /// The one exception is `StartFeature.runner`, the last field: `None`
+    /// contributes **no bytes at all**, not the `0x00` of an `opt`, so a start
+    /// without it signs exactly as it did before the field existed. `Some` is
+    /// `u8 1`, `str source_instance_id`, then [`RunnerRepository`]'s three
+    /// strings and [`RunnerWorkflow`]'s `str workflow_id, u32 version, str
+    /// name, str steps_json`. It cannot be confused with `None` because it is
+    /// last: the bytes either end after `attachments` or go on.
+    ///
     /// Nested, an [`AttachmentRef`] is `str id, u64 size, str sha256`; a
     /// [`StepOverride`] is `str step_id, opt<str> agent_kind, opt<str> model,
     /// opt<u8> effort`; a [`WebAuthnAssertion`] is its four strings in

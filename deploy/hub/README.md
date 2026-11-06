@@ -109,6 +109,46 @@ Put the resulting `client_token` in `.env` as `OPENBAO_TOKEN`. Do not use the ro
 `OPENBAO_TOKEN`, and do not add `-no-default-policy`: OpenBao's `default` policy is what lets
 the token renew and look itself up.
 
+### A GitHub App for runner runs
+
+Optional. Without it the Hub mints no git token, and a run it starts on a runner parks
+`needs-credentials` ([`HUB.md` §6.5](../../docs/HUB.md#65-git-tokens-for-hub-started-runs)).
+
+1. Create a GitHub App with **Contents** and **Pull requests** set to read and write, and
+   no other permission. Install it on **selected repositories** only, never all of an
+   account's. Download its private key.
+2. Convert the key to base64 PKCS#8 DER and import it into Transit. The CLI does the BYOK
+   wrapping:
+
+   ```bash
+   openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem -outform DER | base64 -w0 > app.key.b64
+   docker compose cp app.key.b64 openbao:/tmp/app.key.b64
+   docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
+     bao transit import transit/keys/demeteo-hub-github-app @/tmp/app.key.b64 type=rsa-2048
+   docker compose exec openbao rm /tmp/app.key.b64
+   ```
+
+3. Shred `app.private-key.pem` and `app.key.b64` on the host. The key now exists only in
+   Transit.
+4. Add one line to the `demeteo-hub` policy above and write it again:
+
+   ```
+   path "transit/sign/demeteo-hub-github-app/sha2-256" { capabilities = ["update"] }
+   ```
+
+   The Hub signs only with SHA-256, so the policy names that path and not the bare
+   `transit/sign/demeteo-hub-github-app`.
+5. Set `DEMETEO_HUB_GITHUB_APP_ID` in `.env` to the App's numeric id, and recreate `hub`.
+   `DEMETEO_HUB_GITHUB_APP_KEY` names another Transit key, and
+   `DEMETEO_HUB_GITHUB_ENTERPRISE_API_URL` (`https://<host>/api/v3`) points at a GitHub
+   Enterprise Server. The Hub refuses to start if either is set without the App id.
+   `DEMETEO_HUB_GIT_TOKEN_WINDOW_SECS` (default `86400`) is how long after acceptance a
+   start with no wall clock of its own may still get tokens.
+
+Rotate the App key by generating a new one on GitHub, importing it under a new Transit
+name, changing `DEMETEO_HUB_GITHUB_APP_KEY` and the policy line, and deleting the old key on
+GitHub. A runner holds no copy, so nothing else changes.
+
 ### A deployment that predates the signing key
 
 A Hub set up before pairing existed has one Transit key and a three-path policy. It starts and

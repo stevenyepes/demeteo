@@ -10,13 +10,24 @@
 
 use demeteo_core::ports::git_credentials::GitCredentialSource;
 use demeteo_core::ports::runner_run::RunnerRunPort;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Default)]
 pub struct CredentialStore {
-    pats: Mutex<HashMap<String, String>>,
+    inner: Mutex<Held>,
+}
+
+#[derive(Default)]
+struct Held {
+    pats: HashMap<String, String>,
+    /// Runs a Hub-minted token may still be delivered to: opened before the
+    /// run's driver exists, closed by [`CredentialStore::remove`]. The
+    /// driver's wipe and its status write are two steps, so a keeper that
+    /// read a live status can still lose the race to the wipe; this is what
+    /// makes the wipe win.
+    open: HashSet<String>,
 }
 
 impl CredentialStore {
@@ -24,32 +35,53 @@ impl CredentialStore {
         Self::default()
     }
 
+    fn held(&self) -> std::sync::MutexGuard<'_, Held> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Re-supplying a PAT for a run already holding one overwrites it —
     /// this is the "re-inject after a runner restart" path (§6.2), not
     /// just first-injection.
     pub fn insert(&self, run_id: &str, pat: String) {
-        self.pats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(run_id.to_string(), pat);
+        self.held().pats.insert(run_id.to_string(), pat);
     }
 
     pub fn get(&self, run_id: &str) -> Option<String> {
-        self.pats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(run_id)
-            .cloned()
+        self.held().pats.get(run_id).cloned()
     }
 
     /// Wipe the credential for a run. Called on every terminal state
     /// (completed / failed / cancelled / pr_ready) so the PAT's
     /// in-memory lifetime never outlives the run it was injected for.
+    /// Also closes the run to [`Self::deliver`].
     pub fn remove(&self, run_id: &str) {
-        self.pats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(run_id);
+        let mut held = self.held();
+        held.pats.remove(run_id);
+        held.open.remove(run_id);
+    }
+
+    /// Lets [`Self::deliver`] reach `run_id` until it is removed. Opened
+    /// before anything can wipe the run, or a wipe that came first would
+    /// leave nothing to close.
+    pub fn open_delivery(&self, run_id: &str) {
+        self.held().open.insert(run_id.to_string());
+    }
+
+    /// Ends the delivery window without wiping what the run holds.
+    pub fn close_delivery(&self, run_id: &str) {
+        self.held().open.remove(run_id);
+    }
+
+    /// [`Self::insert`], only while the run's delivery window is open: a
+    /// run the driver wiped is never handed a token again. `false` means
+    /// nothing was stored.
+    pub fn deliver(&self, run_id: &str, token: String) -> bool {
+        let mut held = self.held();
+        if !held.open.contains(run_id) {
+            return false;
+        }
+        held.pats.insert(run_id.to_string(), token);
+        true
     }
 }
 

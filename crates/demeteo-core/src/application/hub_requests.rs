@@ -1,16 +1,17 @@
-//! What the desktop does with one request the Hub relays over the instance
-//! socket: the I/O half of [`crate::domain::hub_request`], which decides.
+//! What an instance does with one request the Hub relays over its socket: the I/O half of [`crate::domain::hub_request`], which decides.
 //!
-//! A start is launched by the call the desktop's own launch button makes,
-//! [`launch_run`](crate::application::launch::launch_run) with
-//! [`RunPlacement::Local`](crate::domain::run_placement::RunPlacement::Local),
-//! so a Hub-started run is the same run wherever it executes. Nothing here
-//! asks which transport carries it. The MCP surface's start is not used
-//! either: it drops the run shape a Hub request carries.
+//! A start and a cancel land in the instance's [`HubRunControl`], the calls
+//! its own control surface makes (decision 64, read per instance). On a
+//! desktop that is [`DesktopRuns`]: the launch button's
+//! [`launch_run`](crate::application::launch::launch_run), so a Hub-started
+//! run is the same run wherever it executes, and the stop button's
+//! [`step_control::cancel_feature`]. The MCP surface's start is not used: it
+//! drops the run shape a Hub request carries. A `demeteo-runner` refuses
+//! starts ([`StartSupport::Refused`](crate::ports::hub::StartSupport::Refused)),
+//! judged before anything a start names is read or fetched.
 //!
-//! Cancel and step assignment are likewise the desktop's own calls: the
-//! feature cancel its stop button makes, resolved to whoever owns the run,
-//! and [`step_control::set_step_assignment`], decision 54's resolver. A gate
+//! Step assignment is the desktop's own call on every instance,
+//! [`step_control::set_step_assignment`], decision 54's resolver. A gate
 //! decision is the presenter's `gate_decide`, the desktop's own `gate_decide`
 //! command, made once its passkey assertion has verified. A revocation has no
 //! desktop counterpart: its only effect is the trusted set's own write. An
@@ -27,24 +28,26 @@ use demeteo_hub_protocol::{
 };
 use tokio::sync::{Mutex, MutexGuard};
 
-use crate::application::remote_runs::{cancel_remote_run, find_mirror_for_feature};
 use crate::application::step_control;
 use crate::domain::hub_request::log::parse_scope;
 use crate::domain::hub_request::{
-    decide, effective_scopes, latest_execution, precheck, reassignment_refusal, required_scope,
-    step_assignment, unparsed_refusal, verify_signature, DropReason, ExecuteKind,
-    HubRequestLogEntry, LogKind, LogOutcome, Precheck, Verdict, MAX_REQUEST_ID_LEN,
+    cancel_refusal, decide, effective_scopes, latest_execution, needs_committed_total, precheck,
+    reassignment_refusal, required_scope, step_assignment, unparsed_refusal, verify_signature,
+    DropReason, ExecuteKind, HubRequestLogEntry, LogKind, LogOutcome, Precheck, Verdict,
+    MAX_REQUEST_ID_LEN,
 };
 use crate::domain::ids::FeatureId;
-use crate::error::AppError;
 use crate::ports::hub::{
     HubAttachmentFetcher, HubPasskeyTrust, HubPinRepository, HubPolicyReader, HubRequestHandler,
-    HubRequestRepository,
+    HubRequestRepository, HubRunControl,
 };
 use crate::state::AppContext;
 
+mod desktop_runs;
 mod start;
 mod trust;
+
+pub use desktop_runs::DesktopRuns;
 
 const DAY_MS: u64 = 86_400_000;
 
@@ -73,6 +76,7 @@ pub struct HubRequestPorts {
 pub struct HubRequests {
     ctx: Arc<AppContext>,
     ports: HubRequestPorts,
+    runs: Arc<dyn HubRunControl>,
     /// Held across judging and logging a start, so one start is handled at a
     /// time: the daily ceiling is judged against the starts already
     /// committed, and two starts judged at once would each miss the other.
@@ -144,23 +148,11 @@ fn refusal_str(reason: RefusalReason) -> Option<String> {
         .and_then(|v| v.as_str().map(str::to_owned))
 }
 
-/// Stop a run the way the desktop's own cancel does, sent to whoever owns
-/// it as [`step_control`] sends a step: a run a `demeteo-runner` owns is
-/// refused by the local executor, so it is cancelled on the runner.
-async fn cancel_feature(ctx: &AppContext, feature_id: &str) -> Result<(), AppError> {
-    match find_mirror_for_feature(ctx, feature_id.to_owned())? {
-        Some(mirror) => cancel_remote_run(ctx, mirror.machine_id, mirror.run_id).await,
-        None => ctx
-            .executor
-            .feature_cancel(feature_id)
-            .await
-            .map_err(AppError::from),
-    }
-}
-
 impl HubRequests {
+    /// Over [`DesktopRuns`]; a runner replaces them with [`Self::with_runs`].
     pub fn new(ctx: Arc<AppContext>, ports: HubRequestPorts) -> Self {
         Self {
+            runs: Arc::new(DesktopRuns::new(ctx.clone())),
             ctx,
             ports,
             turn: Mutex::new(()),
@@ -174,6 +166,11 @@ impl HubRequests {
     /// test can pause the clock instead.
     pub fn with_fetch_deadline(mut self, deadline: Duration) -> Self {
         self.fetch_deadline = deadline;
+        self
+    }
+
+    pub fn with_runs(mut self, runs: Arc<dyn HubRunControl>) -> Self {
+        self.runs = runs;
         self
     }
 
@@ -235,15 +232,17 @@ impl HubRequests {
         }
         // Before `try_consume`: a request this cannot judge is deferred, and a
         // deferred id has to stay unspent or its redelivery reads `replayed`.
-        let committed = match &request.payload {
-            RequestPayload::StartFeature(_) => match self.committed_cents(now_ms) {
+        let starts = self.runs.starts();
+        let committed = if needs_committed_total(&request.payload, starts) {
+            match self.committed_cents(now_ms) {
                 Ok(total) => Some(total),
                 Err(e) => {
                     tracing::warn!(error = %e, "Hub request deferred: the committed total did not load");
                     return Settled::verdict(Verdict::Defer);
                 }
-            },
-            _ => None,
+            }
+        } else {
+            None
         };
         let record = match self.trust_record(&request.payload) {
             Ok(record) => record,
@@ -269,8 +268,10 @@ impl HubRequests {
         if let Err(e) = self.ports.requests.prune_consumed(now_secs) {
             tracing::warn!(error = %e, "expired Hub request ids were not pruned");
         }
-        match decide(&request.payload, consumption, committed, &policy) {
-            Verdict::Execute(ExecuteKind::StartFeature(start)) => self.start(start).await,
+        match decide(&request.payload, consumption, committed, &policy, starts) {
+            Verdict::Execute(ExecuteKind::StartFeature(start)) => {
+                self.start(&request.request_id, start).await
+            }
             Verdict::Execute(ExecuteKind::CancelFeature(cancel)) => {
                 self.cancel(&cancel.feature_id).await
             }
@@ -289,7 +290,7 @@ impl HubRequests {
 
     fn committed_cents(&self, now_ms: u64) -> Result<u64, String> {
         let since = i64::try_from(now_ms.saturating_sub(DAY_MS)).unwrap_or(0);
-        self.ctx.features.hub_committed_cents_since(since)
+        self.runs.committed_cents_since(since)
     }
 
     /// `Err` is the answer to send: the feature does not exist, or its lookup
@@ -306,14 +307,15 @@ impl HubRequests {
     }
 
     async fn cancel(&self, feature_id: &str) -> Settled {
-        if let Err(settled) = self.known_feature(&FeatureId::from(feature_id.to_owned())) {
+        let id = FeatureId::from(feature_id.to_owned());
+        if let Err(settled) = self.known_feature(&id) {
             return settled;
         }
-        match cancel_feature(&self.ctx, feature_id).await {
+        match self.runs.cancel(&id).await {
             Ok(()) => Settled::accepted(Some(feature_id.to_owned()), None),
             Err(e) => {
                 tracing::warn!(error = %e, "Hub cancel refused: the cancel failed");
-                Settled::refused(RefusalReason::MalformedBody)
+                Settled::refused(cancel_refusal(&e))
             }
         }
     }

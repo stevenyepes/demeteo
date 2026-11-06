@@ -62,6 +62,7 @@ const ENCODER_FNS: &[&str] = &[
     "put_payload",
     "put_assignment",
     "put_assertion",
+    "put_runner",
 ];
 
 fn source(file: &str) -> &'static str {
@@ -488,8 +489,9 @@ fn every_spec_public_name_is_importable_from_the_crate_root() {
         CursorAck, Decision, Effort, EncodeError, GateDecision, Hello, PasskeyEndorsement,
         PasskeyRevocation, ProjectSnapshot, RefusalReason, RequestHeader, RequestOutcome,
         RequestPayload, RequestResult, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings,
-        Scope, SetStepAssignment, SignedRequest, Snapshot, StartFeature, StepOverride,
-        WebAuthnAssertion, WorkflowVersionSnapshot, PROTOCOL_VERSION,
+        RunnerRepository, RunnerStart, RunnerWorkflow, Scope, SetStepAssignment, SignedRequest,
+        Snapshot, StartFeature, StepOverride, WebAuthnAssertion, WorkflowVersionSnapshot,
+        PROTOCOL_VERSION,
     };
     use std::any::type_name;
 
@@ -516,6 +518,9 @@ fn every_spec_public_name_is_importable_from_the_crate_root() {
         type_name::<SignedRequest>(),
         type_name::<RequestPayload>(),
         type_name::<StartFeature>(),
+        type_name::<RunnerStart>(),
+        type_name::<RunnerRepository>(),
+        type_name::<RunnerWorkflow>(),
         type_name::<CancelFeature>(),
         type_name::<SetStepAssignment>(),
         type_name::<GateDecision>(),

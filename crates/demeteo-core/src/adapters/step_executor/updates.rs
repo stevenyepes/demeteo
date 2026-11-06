@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use crate::domain::ids::FeatureId;
+use crate::domain::run_control::driverless_cancel_ends;
 use crate::ports::db::{FeaturePatch, FeatureRepository};
 use crate::ports::notification::{DomainEvent, NotificationPort};
 
@@ -13,29 +14,29 @@ pub(crate) fn finish_feature(
     status: &str,
     start_time: Instant,
 ) {
-    let total_cost = features
-        .steps_for_feature(f_id)
-        .map(|list| list.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum::<f64>())
-        .unwrap_or(0.0);
-    let total_tokens = features
-        .steps_for_feature(f_id)
-        .map(|list| list.iter().map(|s| s.tokens.unwrap_or(0)).sum::<i64>())
-        .unwrap_or(0);
     let total_dur = format!("{}s", start_time.elapsed().as_secs());
     let _ = features.update(
         f_id,
         &FeaturePatch {
             status: Some(status.to_string()),
-            total_cost: Some(Some(total_cost)),
-            tokens: Some(Some(total_tokens)),
             duration: Some(Some(total_dur)),
-            ..Default::default()
+            ..spend_rollup(features, f_id)
         },
     );
     let _ = notif.emit(&DomainEvent::FeatureStatusChanged {
         feature_id: f_id.clone(),
         status: status.into(),
     });
+}
+
+/// The feature's cost and tokens, summed over its steps.
+fn spend_rollup(features: &dyn FeatureRepository, f_id: &FeatureId) -> FeaturePatch {
+    let steps = features.steps_for_feature(f_id).unwrap_or_default();
+    FeaturePatch {
+        total_cost: Some(Some(steps.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum())),
+        tokens: Some(Some(steps.iter().map(|s| s.tokens.unwrap_or(0)).sum())),
+        ..Default::default()
+    }
 }
 
 /// Move the feature to `awaiting_gate` because the run stopped to ask a
@@ -86,6 +87,31 @@ pub(crate) fn ensure_feature_running(
         return;
     }
     set_feature_status(features, notif, f_id, "running");
+}
+
+/// End a feature no driver is running as `cancelled`, if
+/// [`driverless_cancel_ends`] says nothing else will. A free function over the
+/// two ports it writes, so the rule is reachable without an executor.
+pub(crate) fn cancel_without_driver(
+    features: &dyn FeatureRepository,
+    notif: &dyn NotificationPort,
+    f_id: &FeatureId,
+) {
+    let cur = features.get(f_id).ok().flatten().map(|f| f.status);
+    if !cur.as_deref().is_some_and(driverless_cancel_ends) {
+        return;
+    }
+    let _ = features.update(
+        f_id,
+        &FeaturePatch {
+            status: Some("cancelled".to_string()),
+            ..spend_rollup(features, f_id)
+        },
+    );
+    let _ = notif.emit(&DomainEvent::FeatureStatusChanged {
+        feature_id: f_id.clone(),
+        status: "cancelled".to_string(),
+    });
 }
 
 fn set_feature_status(

@@ -6,6 +6,9 @@ export type { RunStatus, RunSummary };
 
 export type HubScope = 'read' | 'spend' | 'gates';
 
+/** How the instance paired: `null` for a kind this build does not know, or a Hub that does not say. */
+export type InstanceKind = 'desktop' | 'runner' | null;
+
 /** The three labels are `null` when the instance's snapshot gives none (docs/HUB.md §6.4). */
 export type NeedsYou = {
   instanceId: string;
@@ -20,6 +23,7 @@ export type NeedsYou = {
 
 export type FleetInstance = {
   id: string;
+  kind: InstanceKind;
   label: string | null;
   present: boolean;
   os: string | null;
@@ -63,6 +67,7 @@ export type RunShapeDefaults = {
 
 export type InstanceDetail = {
   id: string;
+  kind: InstanceKind;
   present: boolean;
   connectedAt: number | null;
   lastSeen: number | null;
@@ -93,6 +98,7 @@ type WireNeedsYou = {
 
 type WireFleetInstance = {
   id: string;
+  kind?: unknown;
   label: string | null;
   present: boolean;
   os: string | null;
@@ -137,6 +143,7 @@ type WireRunShape = {
 
 type WireInstanceDetail = {
   id: string;
+  kind?: unknown;
   present: boolean;
   connected_at: number | null;
   last_seen: number | null;
@@ -169,6 +176,7 @@ export async function getInstance(instanceId: string): Promise<InstanceDetail> {
 function fleetInstanceOf(wire: WireFleetInstance): FleetInstance {
   return {
     id: wire.id,
+    kind: kindOf(wire.kind),
     label: wire.label,
     present: wire.present,
     os: wire.os,
@@ -182,6 +190,11 @@ function fleetInstanceOf(wire: WireFleetInstance): FleetInstance {
     harnesses: wire.harnesses === null ? null : [...wire.harnesses],
     projectCount: wire.project_count,
   };
+}
+
+/** Lenient where scopes are not: the kind decides only a label, never what the page offers. */
+function kindOf(wire: unknown): InstanceKind {
+  return wire === 'desktop' || wire === 'runner' ? wire : null;
 }
 
 function needsYouOf(wire: WireNeedsYou): NeedsYou {
@@ -200,6 +213,7 @@ function needsYouOf(wire: WireNeedsYou): NeedsYou {
 function instanceDetailOf(wire: WireInstanceDetail): InstanceDetail {
   return {
     id: wire.id,
+    kind: kindOf(wire.kind),
     present: wire.present,
     connectedAt: wire.connected_at,
     lastSeen: wire.last_seen,

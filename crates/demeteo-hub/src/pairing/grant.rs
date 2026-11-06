@@ -383,7 +383,7 @@ pub fn redeem(
     if !pkce::verifier_matches(code_verifier, &request.code_challenge) {
         return Err(RedeemRefusal::VerifierMismatch);
     }
-    if !is_bound_to(&request.dpop_jkt, proof_jkt) {
+    if !is_bound_to(&request.ask.dpop_jkt, proof_jkt) {
         return Err(RedeemRefusal::KeyMismatch);
     }
     Ok(())
@@ -484,7 +484,7 @@ pub fn pairing_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pairing::authorize::AuthorizeRequest;
+    use crate::pairing::authorize::{AuthorizeRequest, PairingAsk};
     use crate::store::{InstanceId, UserId};
     use serde_json::json;
 
@@ -983,13 +983,15 @@ mod tests {
             request: AuthorizeRequest {
                 code_challenge: CHALLENGE.to_owned(),
                 redirect_uri: REDIRECT.to_owned(),
-                dpop_jkt: JKT.to_owned(),
-                scopes: vec![Scope::Read, Scope::Spend, Scope::Gates],
                 state: "xyz-123".to_owned(),
-                instance_name: "Workstation".to_owned(),
-                os: "linux".to_owned(),
-                arch: "x86_64".to_owned(),
-                app_version: "1.4.0".to_owned(),
+                ask: PairingAsk {
+                    dpop_jkt: JKT.to_owned(),
+                    scopes: vec![Scope::Read, Scope::Spend, Scope::Gates],
+                    instance_name: "Workstation".to_owned(),
+                    os: "linux".to_owned(),
+                    arch: "x86_64".to_owned(),
+                    app_version: "1.4.0".to_owned(),
+                },
             },
             scopes: vec![Scope::Read, Scope::Gates],
             approved_at: NOW,
@@ -1119,7 +1121,7 @@ mod tests {
     #[test]
     fn the_key_a_code_is_bound_to_is_the_one_its_own_request_named() {
         let mut bound_to_the_other = approval();
-        bound_to_the_other.request.dpop_jkt = OTHER_JKT.to_owned();
+        bound_to_the_other.request.ask.dpop_jkt = OTHER_JKT.to_owned();
 
         assert_eq!(
             redeem(&bound_to_the_other, REDIRECT, VERIFIER, OTHER_JKT, NOW),

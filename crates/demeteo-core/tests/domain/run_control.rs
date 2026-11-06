@@ -406,3 +406,23 @@ fn an_out_of_band_row_has_no_assignment_to_change() {
 
     assert_eq!(out_of_band_refusal(RunAction::Assign, "s-implement"), None);
 }
+
+#[test]
+fn a_driverless_cancel_ends_only_a_run_nothing_else_will_move() {
+    use crate::domain::run_control::driverless_cancel_ends;
+
+    for live in ["running", "awaiting_gate", "gated", "interrupted"] {
+        assert!(driverless_cancel_ends(live), "{live}");
+    }
+    for owned_or_ended in [
+        "bootstrapping",
+        "completed",
+        "awaiting_mr",
+        "failed",
+        "cancelled",
+        "archived",
+        "deleted",
+    ] {
+        assert!(!driverless_cancel_ends(owned_or_ended), "{owned_or_ended}");
+    }
+}

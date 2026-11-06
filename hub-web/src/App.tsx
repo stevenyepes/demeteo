@@ -9,6 +9,7 @@ import { summarizeFleet } from './lib/fleetSummary';
 import { parseRoute, type Route, routeHref } from './lib/router';
 import { useRoute } from './lib/useRoute';
 import { AddInstance } from './views/AddInstance';
+import { ApproveDevice } from './views/ApproveDevice';
 import { ApprovePairing } from './views/ApprovePairing';
 import { Dispatch } from './views/Dispatch';
 import { Fleet } from './views/Fleet';
@@ -66,6 +67,8 @@ function viewFor(route: Route, onSession: () => void): ReactElement {
       return <AddInstance />;
     case 'pair':
       return <ApprovePairing request={route.request} />;
+    case 'device':
+      return <ApproveDevice userCode={route.userCode} />;
     case 'sign-up':
       return <SignUp onSession={onSession} />;
     case 'sign-in':

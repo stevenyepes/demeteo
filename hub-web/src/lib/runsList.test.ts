@@ -44,6 +44,7 @@ function instance(id: string, label: string | null, needsYou: NeedsYou[] | null)
     arch: 'x86_64',
     version: '1.4.2',
     scopes: ['read'],
+    kind: 'desktop',
     readGranted: true,
     lastSeen: 0,
     liveRuns: 0,

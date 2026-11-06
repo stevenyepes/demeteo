@@ -125,6 +125,17 @@ Control RPC methods (over the SSH-tunneled unix socket, R4):
 | `publish_run(run_id, git_pat)` | The desktop's Publish MR on a detached run. Repeats the run's terminal tail — push, then open the PR — from the runner's clone, the only place the branch exists; answers once started, and the outcome arrives through the event log like any run ending. Refused while the run row is `pending`/`running`, for a feature that did not finish, and for one that already has a PR. `git_pat` is stored for the run and wiped at its end, as `inject_credentials`'s is. Decision in `domain::runner_publish`. |
 | `health()` | Heartbeat + version + capacity. |
 
+`cancel_run` stays the only way to stop a run, whoever asks. The desktop's stop
+button resolves a Feature to its owner (`step_control::cancel_feature`), so
+stopping a shadow sends `cancel_run` to its runner even before the UI knows the
+run is detached; and a Hub cancel on a paired runner runs the same body,
+`crates/demeteo-runner/src/control.rs`, without the owner check
+([`HUB.md`](HUB.md) §6.1 *On a runner*). The `hub_*` methods (pairing, status,
+policy, the Hub request log) sit beside these on the same socket: the runner's
+`demeteo-runner hub …` commands and the desktop's runner Hub panel in
+Settings → Machines call them ([`RUNNER_DEV.md`](RUNNER_DEV.md) *Pairing a
+runner with the Hub*).
+
 **Lifecycle:** laptop composes the spec (description, workflow, agent/model,
 unattended flag + gate policy + budget) → `submit_run` → `inject_credentials` →
 runner persists the spec to its own DB → spawns the driver → returns the handle.

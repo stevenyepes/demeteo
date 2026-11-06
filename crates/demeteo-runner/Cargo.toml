@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 async-trait = "0.1"
-demeteo-core = { path = "../demeteo-core", default-features = false, features = ["vendored-openssl"] }
+demeteo-core = { path = "../demeteo-core", default-features = false, features = ["vendored-openssl", "hub-socket"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

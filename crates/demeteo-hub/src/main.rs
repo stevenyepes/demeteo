@@ -1,9 +1,10 @@
+use demeteo_hub::adapters::github_app::{self, GithubApp};
 use demeteo_hub::adapters::openbao::{http_client, OpenBaoKeys};
 use demeteo_hub::attachments::postgres::PostgresAttachments;
 use demeteo_hub::attachments::sweep;
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::config::Config;
-use demeteo_hub::ports::KeyService;
+use demeteo_hub::ports::{KeyService, RsaSigner};
 use demeteo_hub::socket::SHUTDOWN_DRAIN_SECS;
 use demeteo_hub::startup::{classify_key_probe, serve_until_stopped, KeyStatus};
 use demeteo_hub::{routes, store};
@@ -13,6 +14,8 @@ use std::time::Duration;
 
 const OPENBAO_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const OPENBAO_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
+const GITHUB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const GITHUB_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -39,7 +42,7 @@ async fn run() -> Result<(), String> {
 
     let http =
         http_client(OPENBAO_CONNECT_TIMEOUT, OPENBAO_TOTAL_TIMEOUT).map_err(|e| e.to_string())?;
-    let keys: Arc<dyn KeyService> = Arc::new(
+    let openbao = Arc::new(
         OpenBaoKeys::new(
             http,
             &config.openbao_addr,
@@ -48,6 +51,8 @@ async fn run() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?,
     );
+    let keys: Arc<dyn KeyService> = openbao.clone();
+    let signer: Arc<dyn RsaSigner> = openbao;
 
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
@@ -66,7 +71,7 @@ async fn run() -> Result<(), String> {
         rp_id: config.rp_id,
         origin: config.origin,
     };
-    let state = routes::AppState::new(
+    let mut state = routes::AppState::new(
         db,
         rp,
         keys,
@@ -75,6 +80,21 @@ async fn run() -> Result<(), String> {
         config.attachments,
     )
     .map_err(|e| e.to_string())?;
+    // Unconfigured is a supported deployment, not a fault: the Hub serves
+    // everything else and answers `POST /git-token` with `503`.
+    match config.github_app {
+        Some(settings) => {
+            let http = github_app::http_client(GITHUB_CONNECT_TIMEOUT, GITHUB_TOTAL_TIMEOUT)?;
+            tracing::info!(
+                app_id = settings.app_id,
+                "minting git tokens as a GitHub App"
+            );
+            state = state
+                .with_git_tokens(Arc::new(GithubApp::new(http, signer, settings)))
+                .with_git_token_window(config.git_token_window_secs);
+        }
+        None => tracing::info!("no GitHub App is configured; no git token will be minted"),
+    }
     let app = routes::router(state.clone(), &config.web_dir);
     serve_until_stopped(
         listener,

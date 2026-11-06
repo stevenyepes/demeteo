@@ -77,6 +77,7 @@ const ROUTES: { hash: string; heading: string; activeHref: string }[] = [
   { hash: '#/add-instance', heading: 'Add instance', activeHref: '#/add-instance' },
   { hash: '#/passkeys', heading: 'Passkeys', activeHref: '#/passkeys' },
   { hash: '#/pair/eyJyZXF1ZXN0IjoiMSJ9', heading: 'Pair instance', activeHref: '#/add-instance' },
+  { hash: '#/device', heading: 'Pair runner', activeHref: '#/add-instance' },
   { hash: '#/sign-in', heading: 'Fleet', activeHref: '#/fleet' },
   { hash: '#/sign-up', heading: 'Fleet', activeHref: '#/fleet' },
 ];

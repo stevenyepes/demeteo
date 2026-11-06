@@ -38,3 +38,25 @@ pub fn unit_for(
         1,
     ))
 }
+
+/// What the installer runs once the unit is written and before it restarts:
+/// `demeteo-runner hub seal`, which seals the Hub store key and the drop-in
+/// that loads it (docs/HUB.md §4), and keeps an existing key on an upgrade.
+/// `bin` is already shell-quoted.
+pub fn hub_seal_command(bin: &str) -> String {
+    format!("{bin} hub seal")
+}
+
+/// What the install reports when `hub seal` failed. The install itself
+/// succeeds: the runner runs work, and only pairing with a Hub is refused.
+pub fn hub_seal_warning(error: &str) -> String {
+    format!(
+        "This runner can't pair with a Demeteo Hub: sealing its store key failed ({}). \
+         Everything else works.",
+        error.trim()
+    )
+}
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/runner/install.rs"]
+mod tests;

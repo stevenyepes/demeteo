@@ -1,4 +1,4 @@
-import type { FleetInstance, NeedsYou } from './fleet';
+import type { FleetInstance, InstanceKind, NeedsYou } from './fleet';
 import type { RunStatus, RunSummary, TicketProgress } from './runs';
 
 export type FleetSummary = {
@@ -54,6 +54,12 @@ export function elapsedText(then: number | null, now: number): string {
 
 export function platformText(parts: Pick<FleetInstance, 'os' | 'arch' | 'version'>): string {
   return [parts.os, parts.arch, parts.version].filter((part) => part !== null).join(' · ');
+}
+
+const KIND_TEXT = { desktop: 'Desktop', runner: 'Runner' } as const;
+
+export function kindText(kind: InstanceKind): string | null {
+  return kind === null ? null : KIND_TEXT[kind];
 }
 
 export function redactUserinfo(url: string): string {

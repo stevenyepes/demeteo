@@ -20,6 +20,8 @@ export type DispatchRequest = {
   max_budget_cents: number;
   max_wall_clock_secs?: number;
   attachment_ids: string[];
+  /** Required for a runner, refused for a desktop: the desktop whose snapshot the runner runs from. */
+  source_instance_id?: string;
 };
 
 export type Enqueued = { requestId: string; expiresAt: number };

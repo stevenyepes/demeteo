@@ -64,6 +64,7 @@ const WIRE_NEEDS_YOU = {
 
 const WIRE_FLEET_INSTANCE = {
   id: INSTANCE_ID,
+  kind: 'desktop',
   label: 'laptop',
   present: true,
   os: 'linux',
@@ -118,6 +119,7 @@ const WIRE_RUN_SHAPE = {
 
 const WIRE_DETAIL = {
   id: INSTANCE_ID,
+  kind: 'runner',
   present: true,
   connected_at: 1_700_000_050,
   last_seen: 1_700_000_200,
@@ -146,6 +148,18 @@ afterEach(() => {
 });
 
 describe('getFleet', () => {
+  it.each<[string, unknown]>([
+    ['a kind this build does not know', 'mainframe'],
+    ['null', null],
+    ['no kind at all', undefined],
+  ])('reads %s as an unknown kind and still shows the instance', async (_shape, kind) => {
+    stubFetch([get('/v1/fleet', { instances: [{ ...WIRE_FLEET_INSTANCE, kind }] })]);
+
+    const [instance] = await getFleet();
+
+    expect(instance?.kind).toBeNull();
+  });
+
   it('maps every wire instance to its view shape, in the order sent', async () => {
     const { pending } = stubFetch([
       get('/v1/fleet', {
@@ -154,6 +168,7 @@ describe('getFleet', () => {
           {
             ...WIRE_FLEET_INSTANCE,
             id: OTHER_ID,
+            kind: 'runner',
             label: 'desk',
             present: false,
             live_runs: 0,
@@ -168,6 +183,7 @@ describe('getFleet', () => {
     await expect(getFleet()).resolves.toEqual([
       {
         id: INSTANCE_ID,
+        kind: 'desktop',
         label: 'laptop',
         present: true,
         os: 'linux',
@@ -194,6 +210,7 @@ describe('getFleet', () => {
       },
       {
         id: OTHER_ID,
+        kind: 'runner',
         label: 'desk',
         present: false,
         os: 'linux',
@@ -336,6 +353,7 @@ describe('getInstance', () => {
 
     await expect(getInstance(INSTANCE_ID)).resolves.toEqual({
       id: INSTANCE_ID,
+      kind: 'runner',
       present: true,
       connectedAt: 1_700_000_050,
       lastSeen: 1_700_000_200,

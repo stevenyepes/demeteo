@@ -25,7 +25,7 @@ use demeteo_hub::pairing::testing::SoftDeviceKey;
 use demeteo_hub::routes::AppState;
 use demeteo_hub::store::attachments::{insert_attachment, NewAttachment, WrappedKey};
 use demeteo_hub::store::device_keys::NewDeviceKey;
-use demeteo_hub::store::instances::{pair_instance, NewInstanceLabels, NewPairing};
+use demeteo_hub::store::instances::{pair_instance, InstanceKind, NewInstanceLabels, NewPairing};
 use demeteo_hub::store::pool::create_user;
 use demeteo_hub::store::{Db, InstanceId, UserId};
 use demeteo_hub_protocol::Scope;
@@ -81,6 +81,7 @@ impl Tenant {
         let pair = FreshPair::generate().unwrap();
         let rows = pair.rows(family_id, &device_key.jkt, unix_now()).unwrap();
         let new = NewPairing {
+            kind: InstanceKind::Desktop,
             instance: NewInstanceLabels {
                 name: "laptop".to_owned(),
                 os: "linux".to_owned(),

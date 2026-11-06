@@ -1,4 +1,4 @@
-use crate::ports::{DataKey, KeyService, KeyServiceError};
+use crate::ports::{DataKey, KeyService, KeyServiceError, RsaSigner};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -23,6 +23,7 @@ enum Op {
     DataKey,
     ReadKey,
     Sign,
+    SignRs256,
 }
 
 impl Op {
@@ -32,10 +33,24 @@ impl Op {
             Op::Decrypt => "decrypt",
             Op::DataKey => "datakey/plaintext",
             Op::ReadKey => "keys",
-            Op::Sign => "sign",
+            Op::Sign | Op::SignRs256 => "sign",
+        }
+    }
+
+    /// What follows the key name. Transit hashes with SHA-256 by default
+    /// already, but it is named in the path so a change of that default
+    /// cannot change the algorithm a JWT says it was signed with.
+    fn suffix(self) -> &'static str {
+        match self {
+            Op::SignRs256 => "/sha2-256",
+            Op::Encrypt | Op::Decrypt | Op::DataKey | Op::ReadKey | Op::Sign => "",
         }
     }
 }
+
+/// RSASSA-PKCS1-v1_5, which is what RS256 is. Transit's RSA default is PSS,
+/// which GitHub refuses.
+const PKCS1V15: &str = "pkcs1v15";
 
 #[derive(Serialize)]
 struct PlaintextBody {
@@ -50,6 +65,12 @@ struct CiphertextBody<'a> {
 #[derive(Serialize)]
 struct InputBody {
     input: String,
+}
+
+#[derive(Serialize)]
+struct RsaInputBody {
+    input: String,
+    signature_algorithm: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -207,6 +228,22 @@ impl KeyService for OpenBaoKeys {
     }
 }
 
+#[async_trait]
+impl RsaSigner for OpenBaoKeys {
+    async fn sign_rs256(&self, key: &str, message: &[u8]) -> Result<Vec<u8>, KeyServiceError> {
+        let body = RsaInputBody {
+            input: STANDARD.encode(message),
+            signature_algorithm: PKCS1V15,
+        };
+        let answer = self.call(Op::SignRs256, key, &body).await?;
+        let signature = signature_bytes(&answer)?;
+        if signature.is_empty() {
+            return Err(KeyServiceError::Malformed("signature is empty".into()));
+        }
+        Ok(signature)
+    }
+}
+
 /// The client `OpenBaoKeys` should be built over. Without a total timeout a
 /// black-holed OpenBao hangs the startup probe forever instead of letting it
 /// report `Transport`.
@@ -259,11 +296,12 @@ fn check_mount(mount: &str) -> Result<String, KeyServiceError> {
 
 fn endpoint_url(addr: &str, mount: &str, op: Op, key: &str) -> String {
     format!(
-        "{}/v1/{}/{}/{}",
+        "{}/v1/{}/{}/{}{}",
         addr.trim_end_matches('/'),
         mount.trim_matches('/'),
         op.path(),
-        key
+        key,
+        op.suffix()
     )
 }
 
@@ -338,6 +376,13 @@ fn parse_verifying_key(body: &[u8]) -> Result<[u8; 32], KeyServiceError> {
 /// then dropped: the port has no way to ask for a version, so a signature is
 /// always under the latest.
 fn parse_signature(body: &[u8]) -> Result<[u8; 64], KeyServiceError> {
+    let bytes = signature_bytes(body)?;
+    bytes.as_slice().try_into().map_err(|_| {
+        KeyServiceError::Malformed(format!("signature is {} bytes, not 64", bytes.len()))
+    })
+}
+
+fn signature_bytes(body: &[u8]) -> Result<Vec<u8>, KeyServiceError> {
     let signature = parse_envelope::<SignData>(body)?.signature;
     let (version, encoded) = signature
         .strip_prefix(SIGNATURE_PREFIX)
@@ -348,7 +393,7 @@ fn parse_signature(body: &[u8]) -> Result<[u8; 64], KeyServiceError> {
             "signature has no key version".into(),
         ));
     }
-    decode_fixed(encoded, "signature")
+    decode_plaintext(encoded)
 }
 
 /// OpenBao reports a missing Transit key as 400 (decrypt, datakey, sign) or
@@ -418,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn urls_cover_the_five_transit_routes() {
+    fn urls_cover_the_six_transit_routes() {
         let url = |op| endpoint_url("http://bao:8200/", "transit", op, "hub");
         assert_eq!(url(Op::Encrypt), "http://bao:8200/v1/transit/encrypt/hub");
         assert_eq!(url(Op::Decrypt), "http://bao:8200/v1/transit/decrypt/hub");
@@ -428,6 +473,10 @@ mod tests {
         );
         assert_eq!(url(Op::ReadKey), "http://bao:8200/v1/transit/keys/hub");
         assert_eq!(url(Op::Sign), "http://bao:8200/v1/transit/sign/hub");
+        assert_eq!(
+            url(Op::SignRs256),
+            "http://bao:8200/v1/transit/sign/hub/sha2-256"
+        );
     }
 
     #[test]
@@ -899,6 +948,35 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(sent).unwrap(),
             serde_json::json!({ "input": "/wCA" })
         );
+    }
+
+    #[tokio::test]
+    async fn an_rs256_signature_is_asked_for_as_pkcs1v15_over_sha2_256() {
+        let rsa = [5u8; 256];
+        let text = format!("vault:v2:{}", STANDARD.encode(rsa));
+        let (addr, served) = answering_once(sign_response(&text)).await;
+        let keys = OpenBaoKeys::new(reqwest::Client::new(), &addr, "transit", "s.token").unwrap();
+
+        assert_eq!(keys.sign_rs256("app", b"a.b").await.unwrap(), rsa.to_vec());
+
+        let request = served.await.unwrap();
+        let (head, sent) = request.split_once("\r\n\r\n").unwrap();
+        assert!(
+            head.starts_with("POST /v1/transit/sign/app/sha2-256 HTTP/1.1\r\n"),
+            "{head}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(sent).unwrap(),
+            serde_json::json!({ "input": "YS5i", "signature_algorithm": "pkcs1v15" })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_rs256_signature_is_malformed() {
+        let (addr, _served) = answering_once(sign_response("vault:v1:")).await;
+        let keys = OpenBaoKeys::new(reqwest::Client::new(), &addr, "transit", "s.token").unwrap();
+
+        assert!(is_malformed(keys.sign_rs256("app", b"a.b").await));
     }
 
     #[test]

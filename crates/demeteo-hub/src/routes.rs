@@ -5,10 +5,11 @@ use crate::auth::handlers::{self, cookie_text, header_text, ApiError};
 use crate::auth::session::{self, Rejection};
 use crate::auth::webauthn::{RelyingPartyError, Verifier};
 use crate::auth::RelyingParty;
+use crate::git_token;
 use crate::pairing;
 use crate::pairing::pending::Pairings;
 use crate::pairing::signing_key::SigningKey;
-use crate::ports::KeyService;
+use crate::ports::{GitTokenMinter, KeyService};
 use crate::socket;
 use crate::socket::connections::Connections;
 use crate::store::Db;
@@ -45,6 +46,10 @@ struct Shared {
 pub struct AppState {
     db: Db,
     shared: Arc<Shared>,
+    /// `None` when no GitHub App is configured, and `POST /git-token`
+    /// answers `503`. Outside `shared` so that it can be set after `new`.
+    git_tokens: Option<Arc<dyn GitTokenMinter>>,
+    git_token_window_secs: u64,
 }
 
 impl AppState {
@@ -73,7 +78,30 @@ impl AppState {
                 transit_key,
                 attachments,
             }),
+            git_tokens: None,
+            git_token_window_secs: crate::config::DEFAULT_GIT_TOKEN_WINDOW_SECS,
         })
+    }
+
+    /// The state with `minter` serving `POST /git-token`.
+    pub fn with_git_tokens(mut self, minter: Arc<dyn GitTokenMinter>) -> Self {
+        self.git_tokens = Some(minter);
+        self
+    }
+
+    pub fn git_tokens(&self) -> Option<&dyn GitTokenMinter> {
+        self.git_tokens.as_deref()
+    }
+
+    /// The state with `secs` as the token window of a start that names no
+    /// wall clock (`git_token::verdict::window_verdict`).
+    pub fn with_git_token_window(mut self, secs: u64) -> Self {
+        self.git_token_window_secs = secs;
+        self
+    }
+
+    pub fn git_token_window_secs(&self) -> u64 {
+        self.git_token_window_secs
     }
 
     pub fn db(&self) -> &Db {
@@ -120,8 +148,8 @@ impl AppState {
 /// `/healthz` is liveness only: it must stay green while OpenBao is sealed or
 /// Postgres is away, or the orchestrator restarts a Hub that is merely waiting
 /// for a manual unseal. Its handler therefore extracts no part of `state`,
-/// though `/token`, the socket and the attachment fetch beside it and the
-/// `/v1` routes all hold it, and building the router dials nothing. Nor does
+/// though `/token`, the socket, the attachment fetch and the git-token route
+/// beside it and the `/v1` routes all hold it, and building the router dials nothing. Nor does
 /// it wait on a socket: a session runs in a task of its own, and the registry
 /// of them is asked nothing here.
 ///
@@ -138,6 +166,11 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
             pairing::handlers::TOKEN_PATH,
             post(pairing::handlers::token),
         )
+        // Beside `/token`, for its reasons: a runner is not a browser either.
+        .route(
+            pairing::handlers::DEVICE_AUTHORIZATION_PATH,
+            post(pairing::handlers::device_authorization),
+        )
         // Outside `v1` as `/token` is: the desktop that opens it sends no
         // `Origin`, and an upgrade is held to the access token it carries
         // and the proof beside it. `guard_mutations` lets every `GET`
@@ -149,6 +182,12 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
         .route(
             attachments::fetch::FETCH_ROUTE,
             get(attachments::fetch::get_attachment),
+        )
+        // Beside the fetch, for its reasons: a runner asks with its access
+        // token and a proof for this URL.
+        .route(
+            git_token::fetch::GIT_TOKEN_PATH,
+            post(git_token::fetch::post_git_token),
         )
         .with_state(state.clone())
         .merge(v1(state));
@@ -192,6 +231,22 @@ fn v1(state: AppState) -> Router {
             post(pairing::handlers::approve_pairing),
         )
         .route("/v1/pairing/deny", post(pairing::handlers::deny_pairing))
+        .route(
+            "/v1/pairing/device/lookup",
+            post(pairing::handlers::lookup_device),
+        )
+        .route(
+            "/v1/pairing/device/challenge",
+            post(pairing::handlers::challenge_device),
+        )
+        .route(
+            "/v1/pairing/device/approve",
+            post(pairing::handlers::approve_device),
+        )
+        .route(
+            "/v1/pairing/device/deny",
+            post(pairing::handlers::deny_device),
+        )
         .route("/v1/fleet", get(api::fleet::get_fleet))
         .route("/v1/instances/{instance_id}", get(api::fleet::get_instance))
         .route("/v1/runs", get(api::runs::get_runs))

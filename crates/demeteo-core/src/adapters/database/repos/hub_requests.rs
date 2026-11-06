@@ -152,6 +152,25 @@ impl HubRequestRepository for SqliteAdapter {
             .map_err(DbError::Sqlite)?;
         Ok(entries)
     }
+
+    fn accepted_start_of(&self, feature_id: &str) -> Result<Option<String>, AppError> {
+        let conn = self.conn.lock()?;
+        let request_id = conn
+            .query_row(
+                "SELECT request_id FROM hub_request_log
+                 WHERE kind = ?1 AND outcome = ?2 AND feature_id = ?3
+                 ORDER BY id DESC LIMIT 1",
+                params![
+                    LogKind::StartFeature.as_str(),
+                    LogOutcome::Accepted.as_str(),
+                    feature_id
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::Sqlite)?;
+        Ok(request_id)
+    }
 }
 
 impl HubPolicyReader for SqliteAdapter {

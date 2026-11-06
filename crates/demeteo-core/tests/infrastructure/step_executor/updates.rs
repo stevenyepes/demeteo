@@ -176,3 +176,39 @@ fn a_park_and_a_resume_round_trip() {
         vec!["awaiting_gate".to_string(), "running".to_string()]
     );
 }
+
+#[test]
+fn a_driverless_cancel_ends_a_live_feature_and_announces_it_once() {
+    for status in ["running", "awaiting_gate", "interrupted"] {
+        let (adapter, f_id) = feature_at(status);
+        let notif = NotifDouble::default();
+
+        cancel_without_driver(&adapter, &notif, &f_id);
+
+        assert_eq!(status_of(&adapter, &f_id), "cancelled", "{status}");
+        assert_eq!(
+            *notif.statuses.lock().unwrap(),
+            vec!["cancelled".to_string()],
+            "{status}: the Hub learns an end only from this event"
+        );
+    }
+}
+
+#[test]
+fn a_driverless_cancel_leaves_an_ended_or_bootstrapping_feature_alone() {
+    for status in [
+        "bootstrapping",
+        "completed",
+        "awaiting_mr",
+        "failed",
+        "cancelled",
+    ] {
+        let (adapter, f_id) = feature_at(status);
+        let notif = NotifDouble::default();
+
+        cancel_without_driver(&adapter, &notif, &f_id);
+
+        assert_eq!(status_of(&adapter, &f_id), status, "{status}");
+        assert!(notif.statuses.lock().unwrap().is_empty(), "{status}");
+    }
+}

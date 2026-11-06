@@ -126,7 +126,7 @@ fn the_hub_accepts_the_desktops_authorize_query_with_its_loopback_redirect() {
 
     assert_eq!(url.path(), "/authorize");
     assert_eq!(accepted.redirect_uri, redirect_uri);
-    assert_eq!(accepted.dpop_jkt, request.dpop_jkt);
+    assert_eq!(accepted.ask.dpop_jkt, request.dpop_jkt);
     assert_eq!(accepted.code_challenge, request.code_challenge);
     assert_eq!(accepted.state, request.state);
 }

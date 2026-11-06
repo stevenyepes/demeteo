@@ -63,3 +63,15 @@ pub trait KeyService: Send + Sync {
     /// [`verifying_key`](Self::verifying_key) answers for the same name.
     async fn sign(&self, key: &str, message: &[u8]) -> Result<[u8; 64], KeyServiceError>;
 }
+
+/// RS256 under an RSA key the service holds: the GitHub App key, which GitHub
+/// offers only as a download, so it is imported into Transit and the download
+/// destroyed (decision 71). A port of its own rather than a [`KeyService`]
+/// method: only the git-token route signs with it, and no other
+/// implementation should have to answer for an RSA key it never holds.
+#[async_trait]
+pub trait RsaSigner: Send + Sync {
+    /// The RSASSA-PKCS1-v1_5 SHA-256 signature over `message`, raw, as long
+    /// as the key's modulus.
+    async fn sign_rs256(&self, key: &str, message: &[u8]) -> Result<Vec<u8>, KeyServiceError>;
+}

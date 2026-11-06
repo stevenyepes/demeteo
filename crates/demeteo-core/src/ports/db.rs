@@ -174,6 +174,26 @@ pub trait MachineRepository: Send + Sync {
     fn delete_agent_profile(&self, id: &AgentProfileId) -> Result<(), String>;
 }
 
+/// What each runner machine last said of its own Hub pairing (V69), keyed
+/// by the `machine_id` its remote runs are mirrored under. A row goes with
+/// its machine.
+pub trait MachineHubStateRepository: Send + Sync {
+    fn get(
+        &self,
+        machine_id: &str,
+    ) -> Result<Option<crate::domain::hub_socket::RunnerHubState>, String>;
+    /// Replaces the machine's row.
+    fn put(
+        &self,
+        machine_id: &str,
+        state: &crate::domain::hub_socket::RunnerHubState,
+    ) -> Result<(), String>;
+    /// Every row, by machine id.
+    fn all(
+        &self,
+    ) -> Result<std::collections::HashMap<String, crate::domain::hub_socket::RunnerHubState>, String>;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. ThreadRepository
 // ─────────────────────────────────────────────────────────────────────────────

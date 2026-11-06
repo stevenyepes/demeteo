@@ -11,6 +11,7 @@
 //! [`verify`](super::dpop::verify) would take them again.
 
 use super::authorize::AuthorizeRequest;
+use super::device::DeviceCodes;
 use super::dpop::VerifiedProof;
 use super::{
     AUTHORIZATION_CODE_TTL_SECS, CONSENT_TTL_SECS, DPOP_MAX_AGE_SECS, MAX_PENDING,
@@ -134,6 +135,7 @@ struct Pending {
 pub struct Pairings {
     held: Mutex<Pending>,
     max_proofs: usize,
+    devices: DeviceCodes,
 }
 
 impl Default for Pairings {
@@ -147,7 +149,15 @@ impl Pairings {
         Self {
             held: Mutex::default(),
             max_proofs,
+            devices: DeviceCodes::default(),
         }
+    }
+
+    /// The runners' device-code pairings, behind a lock of their own: they
+    /// are started by anyone, and a flood of them must hold up no desktop's
+    /// consent.
+    pub fn devices(&self) -> &DeviceCodes {
+        &self.devices
     }
 
     /// Holds `request` for `user` until [`CONSENT_TTL_SECS`] after `now`
@@ -278,6 +288,7 @@ mod tests {
     use super::*;
     use crate::auth::challenge::base64url_decode;
     use crate::auth::cose::P256Point;
+    use crate::pairing::authorize::PairingAsk;
     use crate::pairing::jwk::DeviceJwk;
 
     const NOW: u64 = 1_700_000_000;
@@ -288,13 +299,15 @@ mod tests {
         AuthorizeRequest {
             code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".to_owned(),
             redirect_uri: "http://127.0.0.1:49152/callback".to_owned(),
-            dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I".to_owned(),
-            scopes: vec![Scope::Read, Scope::Spend],
             state: state.to_owned(),
-            instance_name: "Workstation".to_owned(),
-            os: "linux".to_owned(),
-            arch: "x86_64".to_owned(),
-            app_version: "1.4.0".to_owned(),
+            ask: PairingAsk {
+                dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I".to_owned(),
+                scopes: vec![Scope::Read, Scope::Spend],
+                instance_name: "Workstation".to_owned(),
+                os: "linux".to_owned(),
+                arch: "x86_64".to_owned(),
+                app_version: "1.4.0".to_owned(),
+            },
         }
     }
 

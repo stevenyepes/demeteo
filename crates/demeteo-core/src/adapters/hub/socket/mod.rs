@@ -17,7 +17,9 @@ use crate::domain::hub_socket::{
     after_close, after_refresh, backoff, resets_backoff, Reconnect, RefreshEnd, SocketEnd,
     StopReason,
 };
-use crate::ports::hub::{DialFailure, HubSnapshotSource, HubSocketDialer, SocketUpgrade};
+use crate::ports::hub::{
+    DialFailure, HubRunKeys, HubSnapshotSource, HubSocketDialer, SocketUpgrade,
+};
 use crate::ports::run_events::RunEventsPort;
 use crate::shared::time::now_secs;
 
@@ -86,6 +88,9 @@ pub struct SocketConfig {
     /// See [`SessionContext::snapshots`] and [`SessionContext::snapshot_wake`].
     pub snapshots: Arc<dyn HubSnapshotSource>,
     pub snapshot_wake: Arc<Notify>,
+    /// See [`SessionContext::run_keys`]; the one [`Self::snapshots`] reports
+    /// through, so a run is reported under one id or not at all.
+    pub run_keys: Arc<dyn HubRunKeys>,
     /// See [`SessionContext::snapshot_debounce`].
     pub snapshot_debounce: Duration,
     /// Where the socket task is spawned; `start_socket` is synchronous, so

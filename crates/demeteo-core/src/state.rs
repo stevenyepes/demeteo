@@ -199,6 +199,10 @@ pub struct AppContext {
     /// Tauri app populates it.
     pub remote_run_mirror: Arc<dyn RemoteRunMirrorPort>,
 
+    /// What each runner machine last said of its own Hub pairing (V69),
+    /// refreshed on reconcile. Like the mirror, only the Tauri app writes it.
+    pub machine_hub_state: Arc<dyn crate::ports::db::MachineHubStateRepository>,
+
     /// The feature's live sync, if it has one (V43). Read through
     /// [`crate::application::sync_session::get_reconciled`] rather than
     /// directly: the row is a claim and the working tree is the authority.

@@ -767,7 +767,7 @@ async fn approving_a_pairing_redirects_to_the_requested_uri_with_a_code_and_the_
         Some(ApprovedPairing {
             user,
             request: asked(&pairing_request()),
-            scopes: asked(&only_gates).scopes,
+            scopes: asked(&only_gates).ask.scopes,
             approved_at: NOW,
         })
     );

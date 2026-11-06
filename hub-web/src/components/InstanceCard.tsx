@@ -1,9 +1,9 @@
-import { Laptop, Monitor } from 'lucide-react';
+import { Laptop, Monitor, Server } from 'lucide-react';
 
 import { buttonClasses } from '../../../src/components/ui/Button';
 import { Chip } from '../../../src/components/ui/Chip';
 import type { FleetInstance } from '../lib/fleet';
-import { elapsedText, instanceRows, platformText } from '../lib/fleetSummary';
+import { elapsedText, instanceRows, kindText, platformText } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
 import type { RunSummary } from '../lib/runs';
 import { InstanceRunRow } from './InstanceRunRow';
@@ -19,7 +19,8 @@ interface InstanceCardProps {
 
 export function InstanceCard({ instance, runs, now }: InstanceCardProps) {
   const name = instance.label ?? instance.id;
-  const Icon = instance.os?.toLowerCase().startsWith('mac') ? Laptop : Monitor;
+  const Icon = instance.kind === 'runner' ? Server : instance.os?.toLowerCase().startsWith('mac') ? Laptop : Monitor;
+  const kind = kindText(instance.kind);
   const footer = [projectsText(instance.projectCount), seenText(instance, now)].filter((part) => part !== null);
   return (
     <article className="panel flex flex-col gap-4 p-5">
@@ -45,6 +46,7 @@ export function InstanceCard({ instance, runs, now }: InstanceCardProps) {
       </div>
       <Body instance={instance} runs={runs} now={now} />
       <div className="flex flex-wrap items-center gap-2">
+        {kind !== null && <Chip tone="slate">{kind}</Chip>}
         {(instance.harnesses ?? []).map((harness) => (
           <Chip key={harness} tone="slate">
             {harness}

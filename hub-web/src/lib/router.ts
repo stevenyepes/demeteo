@@ -15,6 +15,8 @@ export type Route =
   | { name: 'dispatch'; instanceId?: string }
   | { name: 'add-instance' }
   | { name: 'pair'; request: string }
+  /** Where a runner's `verification_uri` lands, with its code once `verification_uri_complete` carries one. */
+  | { name: 'device'; userCode?: string }
   | { name: 'sign-up' }
   | { name: 'sign-in' }
   | { name: 'passkeys' }
@@ -45,6 +47,8 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
       return route.instanceId === undefined ? ['dispatch'] : ['instances', route.instanceId, 'dispatch'];
     case 'pair':
       return ['pair', route.request];
+    case 'device':
+      return route.userCode === undefined ? ['device'] : ['device', route.userCode];
     case 'instance':
       return ['instances', route.instanceId];
     case 'run':
@@ -77,12 +81,15 @@ function matchSegments(segments: string[] | null): Route | null {
       case 'sign-in':
       case 'passkeys':
         return { name: head };
+      case 'device':
+        return { name: 'device' };
       default:
         return null;
     }
   }
   if (head === 'runs') return segments.length === 3 ? { name: 'runs', instanceId, featureId: tail } : null;
   if (head === 'pair') return segments.length === 2 ? { name: 'pair', request: segments[1] } : null;
+  if (head === 'device') return segments.length === 2 ? { name: 'device', userCode: segments[1] } : null;
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };
   if (segments.length === 3 && tail === 'dispatch') return { name: 'dispatch', instanceId };

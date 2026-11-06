@@ -36,6 +36,10 @@ pub struct HubPins {
 pub struct SecretString(String);
 
 impl SecretString {
+    pub(super) fn new(value: String) -> Self {
+        Self(value)
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -139,6 +143,21 @@ impl RefreshAnswer {
     }
 }
 
+/// What `/git-token` answers a runner with (decision 71). Private fields and
+/// no `Debug`, as [`PairingAnswer`].
+#[derive(Deserialize)]
+pub struct GitTokenAnswer {
+    token: String,
+    expires_at: u64,
+}
+
+impl GitTokenAnswer {
+    /// The token, and when it expires in unix seconds by the Hub's clock.
+    pub fn into_parts(self) -> (SecretString, u64) {
+        (SecretString(self.token), self.expires_at)
+    }
+}
+
 /// The `application/x-www-form-urlencoded` body of the code redemption.
 /// Encoded by hand because reqwest's `form` feature is not enabled.
 pub fn token_form_body(code: &str, verifier: &str, redirect_uri: &str) -> String {
@@ -159,7 +178,7 @@ pub fn refresh_form_body(refresh_token: &str) -> String {
 }
 
 /// Every byte outside RFC 3986's unreserved set as `%XX`.
-fn percent_encode(value: &str) -> String {
+pub(super) fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {

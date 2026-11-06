@@ -454,12 +454,26 @@ jobs:
           bao write -f transit/keys/demeteo-hub
           bao write -f transit/keys/demeteo-hub-signing type=ed25519
 
+          # A throwaway stands in for GitHub's App key download, imported by
+          # the README's "A GitHub App for runner runs" commands. Only its
+          # public half stays, for the RS256 round trip to verify against.
+          key_dir=$(mktemp -d)
+          openssl genrsa -traditional -out "$key_dir/app.private-key.pem" 2048
+          openssl rsa -in "$key_dir/app.private-key.pem" -pubout -out "$RUNNER_TEMP/app.public-key.pem"
+          openssl pkcs8 -topk8 -nocrypt -in "$key_dir/app.private-key.pem" -outform DER | base64 -w0 > "$key_dir/app.key.b64"
+          docker compose cp "$key_dir/app.key.b64" openbao:/tmp/app.key.b64
+          bao transit import transit/keys/demeteo-hub-github-app @/tmp/app.key.b64 type=rsa-2048
+          docker compose exec -T openbao rm /tmp/app.key.b64
+          rm -r "$key_dir"
+          echo "DEMETEO_HUB_TEST_APP_PUBLIC_KEY=$RUNNER_TEMP/app.public-key.pem" >> "$GITHUB_ENV"
+
           bao policy write demeteo-hub - <<'EOF'
           path "transit/encrypt/demeteo-hub"          { capabilities = ["update"] }
           path "transit/decrypt/demeteo-hub"          { capabilities = ["update"] }
           path "transit/datakey/plaintext/demeteo-hub" { capabilities = ["update"] }
           path "transit/keys/demeteo-hub-signing"      { capabilities = ["read"] }
           path "transit/sign/demeteo-hub-signing"      { capabilities = ["update"] }
+          path "transit/sign/demeteo-hub-github-app/sha2-256" { capabilities = ["update"] }
           EOF
 
           hub_token=$(bao token create -policy=demeteo-hub -period=720h -format=json | jq -er '.auth.client_token')

@@ -1,6 +1,7 @@
-//! What desktop pairing with the Demeteo Hub, and the requests it relays,
-//! need from the outside world: the OS keyring, SQLite, the Hub's `/token`,
-//! `/socket` and `/attachments`, and a browser.
+//! What pairing with the Demeteo Hub, and the requests it relays, need from
+//! the outside world: the OS keyring (or a runner's sealed store), SQLite,
+//! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`
+//! and `/git-token`, and a browser.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
@@ -9,6 +10,7 @@
 use async_trait::async_trait;
 use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 
+use crate::domain::hub_pairing::device::{DeviceAuthorization, DeviceGrantEnd};
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
@@ -19,8 +21,8 @@ use crate::domain::hub_request::{
 use crate::domain::hub_socket::RefreshEnd;
 use crate::error::AppError;
 
-/// The OS keyring, addressed by the account names in
-/// [`crate::domain::hub_pairing::keyring_names`].
+/// The OS keyring on a desktop, the sealed store on a runner; addressed by
+/// the account names in [`crate::domain::hub_pairing::keyring_names`].
 ///
 /// The stored refresh token has a **single writer**. The Hub rotates it on
 /// every use and treats a replayed one as theft: two concurrent refreshes, or
@@ -34,6 +36,23 @@ pub trait HubSecretStore: Send + Sync {
     fn set(&self, account: &str, value: &str) -> Result<(), AppError>;
     /// Deleting a missing entry is `Ok(())`.
     fn delete(&self, account: &str) -> Result<(), AppError>;
+}
+
+/// One value as [`crate::adapters::hub::sealed_store::SealedSecretStore`]
+/// seals it: AES-256-GCM, with the account name as associated data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedSecret {
+    pub nonce: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+}
+
+/// The `hub_sealed_secrets` table (V68). It holds ciphertext only, and only a
+/// `demeteo-runner` writes it; a desktop's secrets are in the OS keyring.
+pub trait HubSealedSecretRepository: Send + Sync {
+    fn load_sealed(&self, account: &str) -> Result<Option<SealedSecret>, AppError>;
+    fn store_sealed(&self, account: &str, sealed: &SealedSecret) -> Result<(), AppError>;
+    /// Deleting a missing row is `Ok(())`.
+    fn delete_sealed(&self, account: &str) -> Result<(), AppError>;
 }
 
 /// The `hub_install`, `hub_pairing` and `hub_pinned_passkeys` tables (V64).
@@ -120,6 +139,9 @@ pub trait HubRequestRepository: Send + Sync {
     fn append_log(&self, entry: &HubRequestLogEntry) -> Result<(), AppError>;
     /// Newest first.
     fn list_log(&self, limit: usize) -> Result<Vec<HubRequestLogRow>, AppError>;
+    /// The id of the start this instance accepted as `feature_id`, newest
+    /// first if it was logged more than once.
+    fn accepted_start_of(&self, feature_id: &str) -> Result<Option<String>, AppError>;
 }
 
 /// The `hub_local_policy` row (V65), read side only. This is what the request
@@ -165,6 +187,31 @@ pub trait HubRefreshEndpoint: Send + Sync {
         form_body: String,
         dpop: String,
     ) -> Result<RefreshAnswer, RefreshEnd>;
+}
+
+/// The device authorization grant: `POST /device_authorization` and the
+/// device-code `/token` poll (docs/HUB.md §4 *Pairing a runner by device
+/// code*). A trait of its own, so a double of [`HubTokenEndpoint`] is not
+/// obliged to answer it.
+#[async_trait]
+pub trait HubDeviceEndpoint: Send + Sync {
+    /// POST `form_body` with exactly one DPoP header. Never retried: each
+    /// call starts a pairing the Hub holds until it expires.
+    async fn authorize_device(
+        &self,
+        url: &str,
+        form_body: String,
+        dpop: String,
+    ) -> Result<DeviceAuthorization, HubPairingError>;
+
+    /// One poll, never retried here: when to poll again is
+    /// [`crate::domain::hub_pairing::device::after_device_poll`]'s.
+    async fn poll_device(
+        &self,
+        token_url: &str,
+        form_body: String,
+        dpop: String,
+    ) -> Result<PairingAnswer, DeviceGrantEnd>;
 }
 
 /// What a dial of the Hub's `GET /socket` presents. `Debug` prints the
@@ -253,6 +300,41 @@ pub trait HubAttachmentFetcher: Send + Sync {
     async fn fetch(&self, attachment: &AttachmentRef) -> Result<Vec<u8>, AttachmentFetchError>;
 }
 
+/// A Hub-started run's GitHub App installation token, as `/git-token`
+/// minted it (decision 71). `Debug` prints the token `<redacted>`.
+#[derive(Debug, Clone)]
+pub struct HubGitToken {
+    pub token: SecretString,
+    /// Unix seconds, by the Hub's clock.
+    pub expires_at: u64,
+}
+
+/// Why [`HubGitTokenFetcher::fetch`] returned no token. No variant carries
+/// the token, a URL or a response body.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum GitTokenFetchError {
+    /// The Hub answered with a non-2xx status, after the one access-token
+    /// refresh a `401` earns.
+    #[error("the Hub refused the git token with HTTP {status}")]
+    Refused { status: u16 },
+    /// No answer, an unreadable one, or no access token or device key to
+    /// ask with.
+    #[error("the git token could not be fetched: {0}")]
+    Unavailable(String),
+}
+
+/// The Hub's `POST /git-token`: a fresh token for the run a runner accepted
+/// `request_id` as, under `feature_id`. Each call mints anew, so a caller
+/// asks only when it needs one.
+#[async_trait]
+pub trait HubGitTokenFetcher: Send + Sync {
+    async fn fetch(
+        &self,
+        request_id: &str,
+        feature_id: &str,
+    ) -> Result<HubGitToken, GitTokenFetchError>;
+}
+
 /// What the instance socket hands each request frame to. A port rather than
 /// [`crate::application::hub_requests::HubRequests`] itself so the socket
 /// adapter does not depend on `application/`.
@@ -271,6 +353,80 @@ pub trait HubRequestHandler: Send + Sync {
     async fn handle(&self, text: &str) -> Option<RequestResult>;
 }
 
+pub use crate::domain::hub_request::StartSupport;
+/// The protocol types [`HubRunControl`] is written in, so an implementor
+/// does not need a dependency of its own on `demeteo-hub-protocol`.
+pub use demeteo_hub_protocol::{RefusalReason, RunnerStart, StartFeature};
+
+/// A start that passed every check, its attachments fetched.
+#[derive(Debug, Clone)]
+pub struct HubLaunch {
+    /// The signed request's id, which a runner presents to `/git-token`
+    /// for the run's credential.
+    pub request_id: String,
+    /// The request as signed. A runner builds its run from this and its
+    /// [`RunnerStart`], through
+    /// [`crate::domain::hub_request::runner_run_spec`]; the wall clock and
+    /// the cap in cents are only here.
+    pub start: StartFeature,
+    /// The same start as the launch button would hand it over, attachments
+    /// as fetched bytes with their sniffed type and no `source_path`.
+    pub launch: crate::ports::step_executor::FeatureLaunch,
+}
+
+/// What a launch started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubLaunched {
+    pub feature_id: crate::domain::ids::FeatureId,
+    /// Logged with the accepted start: what of it this instance did not
+    /// honour, such as a wall clock a desktop has no way to cap.
+    pub note: Option<String>,
+}
+
+/// What a Hub start and a Hub cancel land in on this instance: the calls its
+/// own control surface makes (decision 64, read per instance). A desktop's
+/// is its launch and stop buttons; a runner's is its control socket's
+/// cancel, which also ends the run's row and drops its credential, and its
+/// submit for the starts it launches.
+///
+/// What differs between instances is here and nowhere in the handler: where
+/// Hub-started runs are counted, what a start must name to be launched, and
+/// what of it is honoured. The policy each answers with lives in
+/// [`crate::domain::hub_request`].
+///
+/// Assignment and gate decisions are not here: they already reach the same
+/// call on every instance, [`crate::application::step_control`] and the
+/// presenter's `gate_decide`.
+#[async_trait]
+pub trait HubRunControl: Send + Sync {
+    /// Read before the committed total is loaded or any attachment fetched:
+    /// a fetch deletes the Hub's copy, so a start this instance will refuse
+    /// must be refused first.
+    fn starts(&self) -> StartSupport;
+
+    /// What Hub-started runs accepted at or after `since_ms` (unix ms) have
+    /// committed, in whole cents. Counted where this instance records a Hub
+    /// start from its acceptance on, so a run that fails before it has a
+    /// Feature row still counts. Never called when [`Self::starts`] is
+    /// [`StartSupport::Refused`].
+    fn committed_cents_since(&self, since_ms: i64) -> Result<u64, String>;
+
+    /// Whether this instance can launch what `start` names, judged after the
+    /// ceilings and before any attachment is fetched. A desktop looks the
+    /// project and workflow up in its own database; a runner, which has
+    /// neither, reads the signed `runner` part instead. Never called when
+    /// [`Self::starts`] is [`StartSupport::Refused`].
+    fn resolve(&self, start: &StartFeature) -> Result<(), RefusalReason>;
+
+    /// Never called when [`Self::starts`] is [`StartSupport::Refused`], nor
+    /// for a start [`Self::resolve`] refused. An `Err` is answered
+    /// `malformed_body`, its detail kept to this instance's log.
+    async fn launch(&self, launch: HubLaunch) -> Result<HubLaunched, AppError>;
+
+    /// Stop the run of `feature_id`, wherever it executes.
+    async fn cancel(&self, feature_id: &crate::domain::ids::FeatureId) -> Result<(), AppError>;
+}
+
 pub trait BrowserLauncher: Send + Sync {
     fn open(&self, url: &str) -> Result<(), String>;
 }
@@ -280,4 +436,15 @@ pub trait BrowserLauncher: Send + Sync {
 /// the async runtime runs it inside `spawn_blocking`.
 pub trait HubSnapshotSource: Send + Sync {
     fn snapshot(&self) -> Result<Snapshot, String>;
+}
+
+/// The Feature id each run-log key, or snapshot Feature id, is reported to
+/// the Hub under; a key absent from the answer is not reported at all. The
+/// rule is [`crate::domain::hub_socket::reported_feature_id`]: this only
+/// reads what it needs. Synchronous for [`HubSnapshotSource`]'s reason.
+pub trait HubRunKeys: Send + Sync {
+    fn reported_ids(
+        &self,
+        keys: &std::collections::BTreeSet<String>,
+    ) -> Result<std::collections::HashMap<String, String>, String>;
 }

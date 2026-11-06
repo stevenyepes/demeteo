@@ -195,24 +195,40 @@ fn harnesses(kinds: &[String]) -> Vec<String> {
 }
 
 fn project(input: &ProjectInput, providers: &[ProviderInstance]) -> Option<ProjectSnapshot> {
+    let remote = remote(input.repositories.first(), providers);
+    let (remote_url, provider_kind) = remote.map_or((None, None), |(url, kind)| (Some(url), kind));
     let out = ProjectSnapshot {
         id: input.project.id.as_str().to_owned(),
         name: input.project.name.clone(),
-        remote_url: remote_url(input.repositories.first(), providers),
+        remote_url,
+        provider_kind,
     };
     let strings = [Some(&out.id), Some(&out.name), out.remote_url.as_ref()];
     no_nul(strings).then_some(out)
 }
 
-/// Derived from the provider's host and the repo path, never asked of git.
-/// Only the first repository is reported, as `resolve_target_repo` picks it,
-/// because `ProjectSnapshot` has one `remote_url`. `ProviderInstance.username`
-/// is never read: it is an account name, not part of the remote.
+/// The kinds a [`ProviderInstance`] is stored with. Any other value is
+/// reported as no kind rather than passed on: a Hub reads it to choose how a
+/// runner clones, and a kind it does not know starts nothing.
+const PROVIDER_KINDS: [&str; 2] = ["github", "gitlab"];
+
+/// The remote URL, and the kind of the provider that serves it.
+///
+/// The URL is derived from the provider's host and the repo path, never
+/// asked of git. Only the first repository is reported, as
+/// `resolve_target_repo` picks it, because `ProjectSnapshot` has one
+/// `remote_url`. `ProviderInstance.username` is never read: it is an account
+/// name, not part of the remote. The kind is the same provider's stored
+/// kind, and only ever reported beside the URL it describes: a kind for a
+/// remote that was withheld would name a repository the Hub cannot see.
 ///
 /// Fails closed. A host that smuggles userinfo `HttpRemote::parse` cannot
 /// see whole — a password with an unencoded `/` ends the authority early —
 /// leaves an `@` behind, and that is `None` rather than a guess.
-fn remote_url(repo: Option<&Repository>, providers: &[ProviderInstance]) -> Option<String> {
+fn remote(
+    repo: Option<&Repository>,
+    providers: &[ProviderInstance],
+) -> Option<(String, Option<String>)> {
     let repo = repo?;
     if repo.repo_path.is_empty() {
         return None;
@@ -220,7 +236,13 @@ fn remote_url(repo: Option<&Repository>, providers: &[ProviderInstance]) -> Opti
     let provider = providers.iter().find(|p| p.id == repo.provider_id)?;
     let url = without_userinfo(&format!("https://{}/{}", provider.host, repo.repo_path))?;
     let doubtful = |c: char| c == '@' || c.is_whitespace() || c.is_control();
-    (!url.contains(doubtful)).then_some(url)
+    if url.contains(doubtful) {
+        return None;
+    }
+    let kind = PROVIDER_KINDS
+        .contains(&provider.kind.as_str())
+        .then(|| provider.kind.clone());
+    Some((url, kind))
 }
 
 /// `None` when either document does not parse: a version the Hub cannot

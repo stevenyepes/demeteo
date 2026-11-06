@@ -6,16 +6,21 @@
 //! The harness kinds are the agent registry's, fixed at construction: the
 //! registry is built once per process, and nothing about a harness beyond
 //! its kind is read here or anywhere on the way to the Hub.
+//!
+//! A Feature is listed under the id its [`HubRunKeys`] reports it under,
+//! the one the run log's rows go out under, or left out with them.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use demeteo_hub_protocol::Snapshot;
 
+use super::run_keys::ReportedAsIs;
 use crate::domain::hub_socket::{snapshot, FeatureInput, ProjectInput, SnapshotInput};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, ProjectRepository, WorkflowRepository,
 };
-use crate::ports::hub::HubSnapshotSource;
+use crate::ports::hub::{HubRunKeys, HubSnapshotSource};
 
 pub struct RepoSnapshotSource {
     projects: Arc<dyn ProjectRepository>,
@@ -23,6 +28,7 @@ pub struct RepoSnapshotSource {
     settings: Arc<dyn AppSettingsRepository>,
     features: Arc<dyn FeatureRepository>,
     harnesses: Vec<String>,
+    run_keys: Arc<dyn HubRunKeys>,
 }
 
 impl RepoSnapshotSource {
@@ -39,21 +45,36 @@ impl RepoSnapshotSource {
             settings,
             features,
             harnesses,
+            run_keys: Arc::new(ReportedAsIs),
         }
     }
 
-    /// Every active Feature of every Project, archived and deleted ones
-    /// left out, with the version each pins.
+    /// Every Feature is listed as itself until this says otherwise.
+    pub fn with_run_keys(mut self, run_keys: Arc<dyn HubRunKeys>) -> Self {
+        self.run_keys = run_keys;
+        self
+    }
+
+    /// Every active Feature of every Project this instance reports,
+    /// archived and deleted ones left out, with the version each pins.
     fn features(&self, projects: &[ProjectInput]) -> Result<Vec<FeatureInput>, String> {
-        let mut out = Vec::new();
+        let mut active = Vec::new();
         for project in projects {
-            for feature in self.features.get_active(&project.project.id)? {
-                let pinned = match &feature.workflow_version_id {
-                    Some(id) => self.workflows.version_get(id)?,
-                    None => None,
-                };
-                out.push(FeatureInput { feature, pinned });
-            }
+            active.extend(self.features.get_active(&project.project.id)?);
+        }
+        let keys: BTreeSet<String> = active.iter().map(|f| f.id.as_str().to_owned()).collect();
+        let ids = self.run_keys.reported_ids(&keys)?;
+        let mut out = Vec::new();
+        for mut feature in active {
+            let Some(id) = ids.get(feature.id.as_str()) else {
+                continue;
+            };
+            feature.id = id.as_str().into();
+            let pinned = match &feature.workflow_version_id {
+                Some(id) => self.workflows.version_get(id)?,
+                None => None,
+            };
+            out.push(FeatureInput { feature, pinned });
         }
         Ok(out)
     }

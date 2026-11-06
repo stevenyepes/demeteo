@@ -5,26 +5,35 @@
 //! this file needs `demeteo-hub`, which is a Linux-only dev-dependency, so it
 //! stays `cfg`-free and runs on every target.
 
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
 use demeteo_core::adapters::database::SqliteAdapter;
+use demeteo_core::adapters::hub::run_keys::{DesktopRunKeys, RunnerRunKeys};
 use demeteo_core::adapters::hub::snapshot_source::RepoSnapshotSource;
 use demeteo_core::adapters::hub::socket::snapshot_wake::{WakingProjects, WakingWorkflows};
 use demeteo_core::adapters::hub::testing::ScriptedSnapshotSource;
 use demeteo_core::domain::git_push::without_userinfo;
+use demeteo_core::domain::hub_pairing::HubPins;
+use demeteo_core::domain::hub_socket::RunnerHubState;
 use demeteo_core::domain::hub_socket::{
     snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
     MAX_REPORTED_FEATURES, MAX_TITLE_CHARS,
 };
+use demeteo_core::domain::ids::MachineId;
+use demeteo_core::domain::models::Machine;
 use demeteo_core::domain::models::{
     EffortLevel, Feature, Project, ProjectSettings, ProviderInstance, Repository, Workflow,
     WorkflowVersion,
 };
 use demeteo_core::ports::db::{
-    AppSettingsRepository, FeatureRepository, ProjectRepository, WorkflowRepository,
+    AppSettingsRepository, FeatureRepository, MachineHubStateRepository, MachineRepository,
+    ProjectRepository, WorkflowRepository,
 };
-use demeteo_core::ports::hub::HubSnapshotSource;
+use demeteo_core::ports::hub::{HubPinRepository, HubRunKeys, HubSnapshotSource};
+use demeteo_core::ports::remote_run_mirror::RemoteRunMirrorPort;
+use demeteo_core::ports::runner_run::RunnerRunPort;
 use tokio::sync::Notify;
 
 #[test]
@@ -233,6 +242,41 @@ fn the_first_repository_is_the_one_reported() {
         snapshot(&input).projects[0].remote_url.as_deref(),
         Some("https://gitlab.com/acme/first")
     );
+}
+
+/// The kind is the stored kind of the provider the reported remote is on,
+/// never read off its host: a GitLab on a host named `github.example` is
+/// still GitLab.
+#[test]
+fn the_reported_remote_carries_its_providers_kind() {
+    let mut gitlab = one_project_on("github.example");
+    gitlab.providers[0].kind = "gitlab".to_owned();
+    let shot = snapshot(&gitlab);
+    assert_eq!(shot.projects[0].provider_kind.as_deref(), Some("gitlab"));
+    assert_eq!(
+        shot.projects[0].remote_url.as_deref(),
+        Some("https://github.example/acme/app")
+    );
+
+    let shot = snapshot(&one_project_on("github.com"));
+    assert_eq!(shot.projects[0].provider_kind.as_deref(), Some("github"));
+}
+
+#[test]
+fn a_kind_is_reported_only_beside_a_remote_and_only_when_known() {
+    let mut unknown = one_project_on("github.com");
+    unknown.providers[0].kind = "bitbucket".to_owned();
+    let shot = snapshot(&unknown);
+    assert_eq!(shot.projects[0].provider_kind, None);
+    assert!(shot.projects[0].remote_url.is_some());
+
+    let withheld = snapshot(&one_project_on("u:p/ss@github.com"));
+    assert_eq!(withheld.projects[0].remote_url, None);
+    assert_eq!(withheld.projects[0].provider_kind, None);
+
+    let mut no_provider = one_project_on("github.com");
+    no_provider.providers.clear();
+    assert_eq!(snapshot(&no_provider).projects[0].provider_kind, None);
 }
 
 #[test]
@@ -643,6 +687,7 @@ fn the_repository_source_reports_a_bare_remote_and_only_the_latest_version() {
         shot.projects[0].remote_url.as_deref(),
         Some("https://github.com/acme/app")
     );
+    assert_eq!(shot.projects[0].provider_kind.as_deref(), Some("github"));
     assert_eq!(shot.run_shape.len(), 1, "{shot:?}");
     assert_eq!(shot.run_shape[0].default_model.as_deref(), Some("opus"));
     let versions: Vec<(&str, u32)> = shot
@@ -958,4 +1003,154 @@ fn the_repository_source_reports_active_features_with_their_pinned_version() {
     let versions: Vec<u32> = shot.workflows.iter().map(|w| w.version).collect();
     assert_eq!(versions, [1, 2]);
     assert_eq!(shot.harnesses, Some(vec!["opencode".to_owned()]));
+}
+
+const OWN_HUB: &str = "https://hub.example.com";
+
+fn machine(id: &str) -> Machine {
+    Machine {
+        id: MachineId::from(id),
+        name: id.to_owned(),
+        host: format!("{id}.invalid"),
+        port: 22,
+        username: "run".to_owned(),
+        auth_type: "agent".to_owned(),
+        key_path: None,
+        agents: None,
+        auto_approved_rules: None,
+        use_login_shell: None,
+        setup_commands: None,
+        notify_webhook_url: None,
+    }
+}
+
+fn runner_state(hub_url: &str) -> RunnerHubState {
+    RunnerHubState {
+        paired: true,
+        hub_url: Some(hub_url.to_owned()),
+        instance_id: Some("inst-runner".to_owned()),
+        checked_at: 1,
+    }
+}
+
+/// A desktop paired with [`OWN_HUB`], with one local Feature and a shadow
+/// of a run on each of three runners: one paired with the same Hub, one
+/// with another, and one never asked.
+fn desktop_with_shadows() -> Arc<SqliteAdapter> {
+    let db = scratch_db();
+    HubPinRepository::save(
+        &*db,
+        &HubPins {
+            hub_origin: OWN_HUB.to_owned(),
+            instance_id: "inst-desktop".to_owned(),
+            request_signing_key: "key".to_owned(),
+            rp_id: "hub.example.com".to_owned(),
+            scopes: vec!["read".to_owned()],
+            device_jkt: "jkt".to_owned(),
+            paired_at: 1,
+            passkeys: Vec::new(),
+        },
+    )
+    .expect("pins saved");
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
+    FeatureRepository::add(&*db, feature("f-local", "p1", "Local", 1)).expect("feature saved");
+    for (n, (machine_id, state)) in [
+        ("m-same", Some(runner_state("https://HUB.example.com/"))),
+        ("m-else", Some(runner_state("https://other.example.com"))),
+        ("m-never", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let feature_id = format!("f-{machine_id}");
+        MachineRepository::add(&*db, machine(machine_id)).expect("machine saved");
+        if let Some(state) = state {
+            MachineHubStateRepository::put(&*db, machine_id, &state).expect("state saved");
+        }
+        FeatureRepository::add(&*db, feature(&feature_id, "p1", "Shadow", 2 + n as i64))
+            .expect("shadow saved");
+        db.upsert_submitted(
+            machine_id,
+            &format!("run-{machine_id}"),
+            Some("p1"),
+            Some(&feature_id),
+            "Shadow",
+            1,
+        )
+        .expect("mirror saved");
+    }
+    db
+}
+
+fn desktop_keys(db: &Arc<SqliteAdapter>) -> Arc<DesktopRunKeys> {
+    Arc::new(DesktopRunKeys::new(db.clone(), db.clone(), db.clone()))
+}
+
+#[test]
+fn a_desktop_leaves_out_only_the_shadow_of_a_runner_reporting_to_its_own_hub() {
+    let db = desktop_with_shadows();
+
+    let shot = RepoSnapshotSource::new(db.clone(), db.clone(), db.clone(), db.clone(), Vec::new())
+        .with_run_keys(desktop_keys(&db))
+        .snapshot()
+        .expect("snapshot built");
+
+    let mut ids: Vec<&str> = shot.features.iter().map(|f| f.id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["f-local", "f-m-else", "f-m-never"]);
+}
+
+#[test]
+fn a_desktop_reports_a_deleted_features_rows_as_its_own() {
+    let db = desktop_with_shadows();
+    let keys: BTreeSet<String> = ["f-local", "f-m-same", "f-deleted"]
+        .map(str::to_owned)
+        .into();
+
+    let ids = desktop_keys(&db).reported_ids(&keys).expect("resolved");
+
+    assert_eq!(
+        ids,
+        HashMap::from([
+            ("f-local".to_owned(), "f-local".to_owned()),
+            ("f-deleted".to_owned(), "f-deleted".to_owned()),
+        ])
+    );
+}
+
+#[test]
+fn a_runner_reports_a_run_under_its_feature_and_drops_what_names_neither() {
+    let db = scratch_db();
+    ProjectRepository::add(&*db, project("p1", "App")).expect("project saved");
+    FeatureRepository::add(&*db, feature("f-1", "p1", "Run", 1)).expect("feature saved");
+    for run_id in ["run-1", "run-2"] {
+        db.get_or_create(run_id, "{}", "client-a", 1)
+            .expect("run saved");
+    }
+    RunnerRunPort::update_status(
+        &*db,
+        "run-1",
+        "running",
+        Some("p1"),
+        Some("f-1"),
+        None,
+        None,
+        2,
+    )
+    .expect("run bootstrapped");
+    let keys: BTreeSet<String> = ["run-1", "run-2", "f-1", "neither"]
+        .map(str::to_owned)
+        .into();
+
+    let ids = RunnerRunKeys::new(db.clone(), db)
+        .reported_ids(&keys)
+        .expect("resolved");
+
+    assert_eq!(
+        ids,
+        HashMap::from([
+            ("run-1".to_owned(), "f-1".to_owned()),
+            ("f-1".to_owned(), "f-1".to_owned()),
+        ])
+    );
 }

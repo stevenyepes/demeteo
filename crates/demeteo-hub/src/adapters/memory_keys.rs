@@ -1,7 +1,9 @@
-use crate::ports::{DataKey, KeyService, KeyServiceError};
+use crate::ports::{DataKey, KeyService, KeyServiceError, RsaSigner};
 use async_trait::async_trait;
 use aws_lc_rs::error::Unspecified;
-use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::rsa::KeySize;
+use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair, RsaKeyPair, RSA_PKCS1_SHA256};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::collections::BTreeMap;
@@ -26,6 +28,9 @@ const DATA_KEY_LEN: usize = 32;
 /// given there.
 pub struct MemoryKeys {
     keys: BTreeMap<String, Ed25519KeyPair>,
+    /// Apart from `keys`: a name is one type of key, as in Transit, so an
+    /// RS256 signature asked of an Ed25519 name is `UnknownKey`.
+    rsa: BTreeMap<String, RsaKeyPair>,
     sealed: bool,
     counter: AtomicU64,
 }
@@ -41,9 +46,25 @@ impl MemoryKeys {
                 .into_iter()
                 .map(|name| (name.into(), generated_key_pair()))
                 .collect(),
+            rsa: BTreeMap::new(),
             sealed: false,
             counter: AtomicU64::new(0),
         }
+    }
+
+    /// Adds a 2048-bit RSA key under `name`, as a GitHub App key is.
+    pub fn with_rsa_key(mut self, name: impl Into<String>) -> Self {
+        self.rsa.insert(name.into(), generated_rsa_key_pair());
+        self
+    }
+
+    /// The PKCS#1 `RSAPublicKey` DER of the RSA key `name`, which a test
+    /// verifies an RS256 signature under. Transit would answer it as PEM; the
+    /// Hub never asks, so the port has no method for it.
+    pub fn rsa_public_key(&self, name: &str) -> Option<Vec<u8>> {
+        self.rsa
+            .get(name)
+            .map(|key| key.public_key().as_ref().to_vec())
     }
 
     /// A key service nobody has unsealed: every call answers `Sealed`, whatever
@@ -51,6 +72,7 @@ impl MemoryKeys {
     pub fn sealed() -> Self {
         Self {
             keys: BTreeMap::new(),
+            rsa: BTreeMap::new(),
             sealed: true,
             counter: AtomicU64::new(0),
         }
@@ -110,6 +132,35 @@ impl KeyService for MemoryKeys {
 
     async fn sign(&self, key: &str, message: &[u8]) -> Result<[u8; 64], KeyServiceError> {
         fixed(self.require(key)?.sign(message).as_ref())
+    }
+}
+
+#[async_trait]
+impl RsaSigner for MemoryKeys {
+    async fn sign_rs256(&self, key: &str, message: &[u8]) -> Result<Vec<u8>, KeyServiceError> {
+        if self.sealed {
+            return Err(KeyServiceError::Sealed);
+        }
+        let pair = self
+            .rsa
+            .get(key)
+            .ok_or_else(|| KeyServiceError::UnknownKey(key.to_owned()))?;
+        let mut signature = vec![0; pair.public_modulus_len()];
+        pair.sign(
+            &RSA_PKCS1_SHA256,
+            &SystemRandom::new(),
+            message,
+            &mut signature,
+        )
+        .map_err(|Unspecified| KeyServiceError::Malformed("RSA signing failed".into()))?;
+        Ok(signature)
+    }
+}
+
+fn generated_rsa_key_pair() -> RsaKeyPair {
+    match RsaKeyPair::generate(KeySize::Rsa2048) {
+        Ok(key_pair) => key_pair,
+        Err(Unspecified) => panic!("memory keys: could not generate an RSA key pair"),
     }
 }
 
@@ -178,6 +229,35 @@ mod tests {
         assert!(!verifies(&own, b"POST /v1/other", &signature));
         assert_eq!(own, keys.verifying_key(KNOWN).await.unwrap());
         assert_ne!(own, other);
+    }
+
+    #[tokio::test]
+    async fn an_rs256_signature_verifies_under_its_own_rsa_key_only() {
+        use aws_lc_rs::signature::RSA_PKCS1_2048_8192_SHA256;
+        let keys = MemoryKeys::with_keys([KNOWN])
+            .with_rsa_key("app")
+            .with_rsa_key(OTHER);
+        let signature = keys.sign_rs256("app", b"a.b").await.unwrap();
+        let verifies = |name: &str, message: &[u8]| {
+            UnparsedPublicKey::new(
+                &RSA_PKCS1_2048_8192_SHA256,
+                keys.rsa_public_key(name).unwrap(),
+            )
+            .verify(message, &signature)
+            .is_ok()
+        };
+
+        assert_eq!(signature.len(), 256);
+        assert!(verifies("app", b"a.b"));
+        assert!(!verifies("app", b"a.c"));
+        assert!(!verifies(OTHER, b"a.b"));
+        assert!(matches!(
+            keys.sign_rs256(KNOWN, b"a.b").await,
+            Err(KeyServiceError::UnknownKey(name)) if name == KNOWN
+        ));
+        assert!(is_sealed(
+            MemoryKeys::sealed().sign_rs256("app", b"x").await
+        ));
     }
 
     #[tokio::test]

@@ -146,6 +146,12 @@ pub(super) fn definition_of(
     Some((name, graph(definition)))
 }
 
+/// The version's name by the rule [`workflow`] applies, read whether or not
+/// its definition carries a graph.
+pub(super) fn version_name(version: &WorkflowVersionSnapshot) -> String {
+    name_of(parsed(version).as_ref(), version)
+}
+
 fn parsed(version: &WorkflowVersionSnapshot) -> Option<Definition> {
     version
         .definition_json

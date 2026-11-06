@@ -21,16 +21,19 @@ use crate::domain::run_control::{out_of_band_refusal, RunAction};
 use crate::domain::step_assignment::{
     assignment_refusal, harness_refusal, identifier_refusal, kind_refusal, StepAssignment,
 };
+use crate::error::AppError;
 
 pub mod assertion;
 pub mod ceiling;
 pub mod cose;
 pub mod log;
 pub mod passkeys;
+pub mod runner_spec;
 pub mod verify;
 
 pub use ceiling::spend_verdict;
 pub use log::{HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome};
+pub use runner_spec::{runner_run_spec, runner_start_refusal};
 pub use verify::verify_signature;
 
 /// The desktop's own word on what the Hub may do here. Written only from
@@ -200,22 +203,44 @@ pub fn precheck(
     Precheck::Consume
 }
 
+/// Whether this instance launches the runs a Hub start asks for. A desktop
+/// does. A `demeteo-runner` does not: a run there is submitted by the
+/// desktop that owns it, and a Hub start has no desktop to own it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartSupport {
+    Launches,
+    Refused,
+}
+
+/// Whether judging `payload` reads the 24-hour committed total. Only a start
+/// does, and not one this instance refuses outright: [`decide`] refuses that
+/// one before any ceiling, so a total that fails to load must not defer it.
+pub fn needs_committed_total(payload: &RequestPayload, starts: StartSupport) -> bool {
+    matches!(payload, RequestPayload::StartFeature(_)) && starts == StartSupport::Launches
+}
+
 /// Replay, then the kind-specific spend check, for a request [`precheck`]
 /// said to consume.
 ///
 /// `committed_cents` is the 24-hour committed total of Hub launches and is
 /// read only for a start. `None` for a start refuses: a total the caller did
-/// not load is not zero.
+/// not load is not zero. A start reaching an instance whose `starts` is
+/// [`StartSupport::Refused`] is `UnknownKind`, before any ceiling: the id is
+/// spent, so its redelivery reads `Replayed`, and nothing it names is read.
 pub fn decide<'a>(
     payload: &'a RequestPayload,
     consumption: Consumption,
     committed_cents: Option<u64>,
     policy: &HubLocalPolicy,
+    starts: StartSupport,
 ) -> Verdict<'a> {
     if consumption == Consumption::AlreadyConsumed {
         return Verdict::Refuse(RefusalReason::Replayed);
     }
     match payload {
+        RequestPayload::StartFeature(_) if starts == StartSupport::Refused => {
+            Verdict::Refuse(RefusalReason::UnknownKind)
+        }
         RequestPayload::StartFeature(start) => {
             let Some(committed) = committed_cents else {
                 return Verdict::Refuse(RefusalReason::OverRollingCeiling);
@@ -365,6 +390,18 @@ pub fn start_refusal(start: &StartFeature, registered: &[&str]) -> Option<Refusa
         .map(|_| RefusalReason::MalformedBody)
 }
 
+/// A start a desktop refuses before its lookups: one carrying a
+/// [`RunnerStart`](demeteo_hub_protocol::RunnerStart) was resolved for a
+/// runner, and a desktop launching it would run what its own database holds
+/// under the same ids, not what the Hub signed. It is `MalformedBody` because
+/// a Hub that sends one has addressed the wrong kind of instance.
+pub fn desktop_start_refusal(start: &StartFeature) -> Option<RefusalReason> {
+    start
+        .runner
+        .is_some()
+        .then_some(RefusalReason::MalformedBody)
+}
+
 /// The bounds the bootstrap holds a Feature's attachments to, passed in
 /// because they are `application::attachments`' constants and `domain/` does
 /// not import `application/`.
@@ -396,5 +433,100 @@ pub fn attachment_refusal(
     match total {
         Some(total) if total <= limits.max_total_bytes => None,
         _ => Some(RefusalReason::AttachmentMismatch),
+    }
+}
+
+/// The reason a cancel of a Feature this instance holds is refused when its
+/// call fails.
+///
+/// `NotFound` is the instance holding the Feature but no run of it to stop, as
+/// a runner answers for a Feature row with no `runner_runs` row under it. The
+/// Hub names a run only by its Feature, so that is the Feature's run being
+/// unknown here, the reason a desktop gives for a Feature it does not hold. Every other failure is the instance's own,
+/// and `RefusalReason` has no generic failure (docs/HUB.md §6.1).
+pub fn cancel_refusal(error: &AppError) -> RefusalReason {
+    match error {
+        AppError::NotFound { .. } => RefusalReason::UnknownFeature,
+        _ => RefusalReason::MalformedBody,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn start() -> RequestPayload {
+        RequestPayload::StartFeature(StartFeature {
+            project_id: "p-1".into(),
+            workflow_id: "w-1".into(),
+            title: "t".into(),
+            description: "d".into(),
+            agent_kind: None,
+            model: None,
+            effort: None,
+            step_overrides: Vec::new(),
+            max_budget_cents: Some(1),
+            max_wall_clock_secs: None,
+            attachments: Vec::new(),
+            runner: None,
+        })
+    }
+
+    /// The total is loaded only for a start this instance would launch, so a
+    /// runner never defers a start it is going to refuse because a total it
+    /// does not need failed to load.
+    #[test]
+    fn only_a_launched_start_needs_the_committed_total() {
+        let cancel = RequestPayload::CancelFeature(CancelFeature {
+            feature_id: "f-1".into(),
+        });
+        let rows = [
+            (start(), StartSupport::Launches, true),
+            (start(), StartSupport::Refused, false),
+            (cancel.clone(), StartSupport::Launches, false),
+            (cancel, StartSupport::Refused, false),
+        ];
+        for (payload, starts, expected) in rows {
+            assert_eq!(
+                needs_committed_total(&payload, starts),
+                expected,
+                "{payload:?} with {starts:?}"
+            );
+        }
+    }
+
+    /// Refused without the total: `None` would otherwise read as an
+    /// unloaded total and refuse `OverRollingCeiling`.
+    #[test]
+    fn a_refused_start_is_unknown_kind_without_a_total() {
+        assert_eq!(
+            decide(
+                &start(),
+                Consumption::Fresh,
+                None,
+                &HubLocalPolicy::default(),
+                StartSupport::Refused
+            ),
+            Verdict::Refuse(RefusalReason::UnknownKind)
+        );
+    }
+
+    #[test]
+    fn a_cancel_with_no_run_to_stop_is_an_unknown_feature() {
+        assert_eq!(
+            cancel_refusal(&AppError::not_found("no run of feature f-1")),
+            RefusalReason::UnknownFeature
+        );
+        for failed in [
+            AppError::internal("run vanished during cancel"),
+            AppError::database("database query failed"),
+            AppError::transport("ssh error: -7"),
+        ] {
+            assert_eq!(
+                cancel_refusal(&failed),
+                RefusalReason::MalformedBody,
+                "{failed}"
+            );
+        }
     }
 }

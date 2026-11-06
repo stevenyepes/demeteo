@@ -23,6 +23,7 @@ const INSTANCE: InstanceDetail = {
   arch: 'x86_64',
   version: '1.0.0',
   scopes: ['read', 'spend'],
+  kind: 'desktop',
   readGranted: true,
   projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: null }],
   liveRuns: [],

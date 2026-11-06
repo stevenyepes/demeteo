@@ -1,6 +1,7 @@
-//! `POST /token`, and the two grants behind it: an authorization code
-//! redeemed for the first token pair of an instance and the three values it
-//! pins, and a refresh token rotated for the next pair.
+//! `POST /token`, and the grants behind it: an authorization code redeemed
+//! for the first token pair of an instance and the three values it pins, a
+//! refresh token rotated for the next pair, and a runner's device code
+//! polled for (`super::device`).
 //!
 //! [`token`] is the route. It reads the form and the `DPoP` header, and hands
 //! both to the grant the form names. [`redeemed`] is the pairing grant past
@@ -15,6 +16,9 @@
 //!    service that cannot answer therefore leaves no instance and no token
 //!    behind: there would be no response to hand them over in.
 //!
+//! The third step, and what follows it, is [`issued`], which the device-code
+//! grant shares: both pairing grants end in the one issuance.
+//!
 //! [`refreshed`] is the rotation, and it begins with the same first step. It
 //! never asks the key service for anything: its answer carries none of the
 //! pinned values, so a sealed key service does not stop a paired instance
@@ -26,8 +30,10 @@
 //! has a wildcard arm: a variant added to a refusal has to be given its
 //! answer here before the crate compiles.
 
+use super::device::polled;
 use crate::auth::challenge::RandomSourceFailed;
 use crate::auth::handlers::{store_failed, unix_now, ApiError};
+use crate::pairing::authorize::PairingAsk;
 use crate::pairing::dpop::{self, Expected, ProofError, VerifiedProof};
 use crate::pairing::grant::{
     self, AuthorizationCode, ExpiryOutOfRange, FamilyChange, FreshPair, PairingResponse,
@@ -37,7 +43,7 @@ use crate::pairing::pending::{ApprovedPairing, RememberRefusal};
 use crate::ports::KeyServiceError;
 use crate::routes::AppState;
 use crate::store::device_keys::NewDeviceKey;
-use crate::store::instances::{pair_instance, NewInstanceLabels, NewPairing, Paired};
+use crate::store::instances::{pair_instance, InstanceKind, NewInstanceLabels, NewPairing, Paired};
 use crate::store::tokens::{rotate_family, FamilyWritten, TokenHash, TokenRecord};
 use crate::store::{StoreError, UserId};
 use axum::extract::{Form, FromRequest, Request, State};
@@ -45,6 +51,7 @@ use axum::http::header::CACHE_CONTROL;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use demeteo_hub_protocol::Scope;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::future::Future;
@@ -73,6 +80,21 @@ pub struct TokenRefresh {
     refresh_token: String,
 }
 
+/// What a device-code poll carries beside its grant type. Not `Debug`:
+/// `device_code` is what the tokens are polled for with.
+#[derive(Deserialize)]
+pub struct DevicePoll {
+    pub(super) device_code: String,
+}
+
+impl DevicePoll {
+    pub fn new(device_code: &str) -> Self {
+        Self {
+            device_code: device_code.to_owned(),
+        }
+    }
+}
+
 /// A token request, told apart by its `grant_type`. A form without one, or
 /// with one sent twice, is not a `Grant` at all and is refused as any other
 /// unreadable form is; one whose `grant_type` names nothing below is
@@ -82,6 +104,9 @@ pub struct TokenRefresh {
 pub enum Grant {
     AuthorizationCode(CodeRedemption),
     RefreshToken(TokenRefresh),
+    /// RFC 8628 §3.4's grant type, which no case rule spells.
+    #[serde(rename = "urn:ietf:params:oauth:grant-type:device_code")]
+    DeviceCode(DevicePoll),
     #[serde(other)]
     Unsupported,
 }
@@ -207,16 +232,26 @@ fn rows_not_built(error: ExpiryOutOfRange) -> ApiError {
 }
 
 /// The proof a request to the token endpoint carried, verified and spent.
-///
-/// `htu` is built from the configured origin. A proof made for the name a
-/// request's `Host` gave would verify at whatever name the caller chose.
 fn spent_proof(
     state: &AppState,
     proof_header: Option<&str>,
     now: u64,
 ) -> Result<VerifiedProof, ApiError> {
+    spent_proof_for(state, TOKEN_PATH, proof_header, now)
+}
+
+/// The proof a `POST` to `path` carried, verified and spent.
+///
+/// `htu` is built from the configured origin. A proof made for the name a
+/// request's `Host` gave would verify at whatever name the caller chose.
+pub(super) fn spent_proof_for(
+    state: &AppState,
+    path: &str,
+    proof_header: Option<&str>,
+    now: u64,
+) -> Result<VerifiedProof, ApiError> {
     let presented = proof_header.ok_or(ApiError::INVALID_DPOP_PROOF)?;
-    let htu = format!("{}{TOKEN_PATH}", state.rp().origin);
+    let htu = format!("{}{path}", state.rp().origin);
     let expected = Expected {
         htm: TOKEN_METHOD,
         htu: &htu,
@@ -232,33 +267,42 @@ fn taken_code(state: &AppState, presented: &str, now: u64) -> Result<ApprovedPai
         .ok_or(ApiError::INVALID_GRANT)
 }
 
-/// What the store is handed for `approved`, redeemed with `proof`.
+/// What a human approved, whichever grant asked for it: the tenant, the
+/// key and labels asked about, and the scopes left checked. `ask.scopes` is
+/// what was asked for, before the user narrowed it, and is never granted.
+pub struct Granted<'a> {
+    pub user: UserId,
+    pub ask: &'a PairingAsk,
+    pub scopes: &'a [Scope],
+    pub kind: InstanceKind,
+}
+
+/// What the store is handed for `granted`, redeemed with `proof`.
 ///
 /// The key is the proof's, rebuilt from the point it decoded to, and by the
-/// time this is called [`grant::redeem`] has said it is the one the user
-/// approved. The scopes are `approved.scopes`: `approved.request.scopes` is
-/// what the desktop asked for, before the user narrowed it.
+/// time this is called the grant has said it is the one the user approved.
 fn new_pairing(
-    approved: &ApprovedPairing,
+    granted: &Granted<'_>,
     proof: &VerifiedProof,
     fresh: &FreshPair,
     family_id: Uuid,
     now: u64,
 ) -> Result<NewPairing, ExpiryOutOfRange> {
-    let request = &approved.request;
+    let ask = granted.ask;
     let rows = fresh.rows(family_id, &proof.jkt, now)?;
     Ok(NewPairing {
+        kind: granted.kind,
         instance: NewInstanceLabels {
-            name: request.instance_name.clone(),
-            os: request.os.clone(),
-            arch: request.arch.clone(),
-            version: request.app_version.clone(),
+            name: ask.instance_name.clone(),
+            os: ask.os.clone(),
+            arch: ask.arch.clone(),
+            version: ask.app_version.clone(),
         },
         device_key: NewDeviceKey {
             public_jwk: proof.jwk.canonical_json(),
             jkt: proof.jkt.clone(),
         },
-        scopes: approved.scopes.clone(),
+        scopes: granted.scopes.to_vec(),
         family_id,
         access: rows.access,
         refresh: rows.refresh,
@@ -293,18 +337,39 @@ where
         &proof.jkt,
         now,
     )?;
+    let granted = Granted {
+        user: approved.user,
+        ask: &approved.request.ask,
+        scopes: &approved.scopes,
+        kind: InstanceKind::Desktop,
+    };
+    issued(state, &granted, &proof, now, pair).await
+}
+
+/// The first token pair of an instance, and the three values it pins, for a
+/// grant that has already said `proof` is by the key `granted` names.
+pub(super) async fn issued<P, F>(
+    state: &AppState,
+    granted: &Granted<'_>,
+    proof: &VerifiedProof,
+    now: u64,
+    pair: P,
+) -> Result<PairingResponse, ApiError>
+where
+    P: FnOnce(UserId, NewPairing) -> F,
+    F: Future<Output = Result<Paired, StoreError>>,
+{
     let signing_key = state
         .signing_key()
         .public_key(state.keys())
         .await
         .map_err(signing_key_not_read)?;
     let fresh = FreshPair::generate().map_err(pair_not_minted)?;
-    let new =
-        new_pairing(&approved, &proof, &fresh, Uuid::new_v4(), now).map_err(rows_not_built)?;
-    let paired = pair(approved.user, new).await.map_err(store_failed)?;
+    let new = new_pairing(granted, proof, &fresh, Uuid::new_v4(), now).map_err(rows_not_built)?;
+    let paired = pair(granted.user, new).await.map_err(store_failed)?;
     Ok(grant::pairing_response(
         fresh,
-        &approved.scopes,
+        granted.scopes,
         &paired,
         &signing_key,
         &state.rp().rp_id,
@@ -386,6 +451,11 @@ async fn granted(
             let response = refreshed(state, form, proof, unix_now(), rotate).await?;
             Ok(Json(response).into_response())
         }
+        Grant::DeviceCode(form) => {
+            let pair = |user, new: NewPairing| async move { pair_instance(user, db, &new).await };
+            let response = polled(state, form, proof, unix_now(), pair).await?;
+            Ok(Json(response).into_response())
+        }
         Grant::Unsupported => Err(ApiError::UNSUPPORTED_GRANT_TYPE),
     }
 }
@@ -412,7 +482,7 @@ mod tests {
     use crate::adapters::memory_keys::MemoryKeys;
     use crate::auth::testing::lazy_state_with_keys;
     use crate::auth::RelyingParty;
-    use crate::pairing::authorize::AuthorizeRequest;
+    use crate::pairing::authorize::{AuthorizeRequest, PairingAsk};
     use crate::pairing::testing::{MemoryFamily, SoftDeviceKey};
     use crate::store::tokens::TokenKind;
     use crate::store::InstanceId;
@@ -455,6 +525,7 @@ mod tests {
                 Some(vec![form.code, form.code_verifier, form.redirect_uri])
             }
             Grant::RefreshToken(form) => Some(vec![form.refresh_token]),
+            Grant::DeviceCode(form) => Some(vec![form.device_code]),
             Grant::Unsupported => None,
         })
     }
@@ -485,6 +556,25 @@ mod tests {
             let read = read(FORM, &unreadable).await;
             assert_eq!(read, Err(INVALID_REQUEST), "{unreadable:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_device_code_poll_is_read_under_its_urn_and_no_other_spelling() {
+        let poll =
+            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=abc";
+
+        assert_eq!(read(FORM, poll).await, Ok(Some(vec!["abc".to_owned()])));
+        for unserved in [
+            "device_code",
+            "urn:ietf:params:oauth:grant-type:Device_Code",
+        ] {
+            let form = format!("grant_type={unserved}&device_code=abc");
+            assert_eq!(read(FORM, &form).await, Ok(None), "{unserved:?}");
+        }
+        assert_eq!(
+            read(FORM, &format!("{poll}&device_code=abc")).await,
+            Err(INVALID_REQUEST)
+        );
     }
 
     #[tokio::test]
@@ -574,13 +664,15 @@ mod tests {
             request: AuthorizeRequest {
                 code_challenge: CHALLENGE.to_owned(),
                 redirect_uri: REDIRECT.to_owned(),
-                dpop_jkt: key.thumbprint(),
-                scopes: vec![Scope::Read, Scope::Gates],
                 state: "xyz-123".to_owned(),
-                instance_name: "Workstation".to_owned(),
-                os: "linux".to_owned(),
-                arch: "x86_64".to_owned(),
-                app_version: "1.4.0".to_owned(),
+                ask: PairingAsk {
+                    dpop_jkt: key.thumbprint(),
+                    scopes: vec![Scope::Read, Scope::Gates],
+                    instance_name: "Workstation".to_owned(),
+                    os: "linux".to_owned(),
+                    arch: "x86_64".to_owned(),
+                    app_version: "1.4.0".to_owned(),
+                },
             },
             scopes: vec![Scope::Gates],
             approved_at: NOW,
@@ -719,7 +811,14 @@ mod tests {
         let fresh = FreshPair::generate().unwrap();
         let family_id = Uuid::from_u128(7);
 
-        let new = new_pairing(&approval(&key), &proof, &fresh, family_id, NOW).unwrap();
+        let approved = approval(&key);
+        let granted = Granted {
+            user: approved.user,
+            ask: &approved.request.ask,
+            scopes: &approved.scopes,
+            kind: InstanceKind::Desktop,
+        };
+        let new = new_pairing(&granted, &proof, &fresh, family_id, NOW).unwrap();
 
         assert_eq!(
             new.instance,
@@ -738,6 +837,7 @@ mod tests {
             }
         );
         assert_eq!(new.scopes, [Scope::Gates]);
+        assert_eq!(new.kind, InstanceKind::Desktop);
         assert_eq!(new.family_id, family_id);
         assert_eq!(new.access.kind, TokenKind::Access);
         assert_eq!(new.access.hash, fresh.access.hash());

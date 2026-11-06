@@ -14,7 +14,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use demeteo_hub_protocol::{Decision, EncodeError};
+use demeteo_hub_protocol::{Decision, EncodeError, Scope};
 use sha2::{Digest, Sha256};
 
 use crate::store::requests::RequestId;
@@ -130,6 +130,23 @@ pub fn gate_challenge_digest(
         decision,
         request_id,
         expires_at,
+    )
+    .map(|pre_image| digest(&pre_image))
+}
+
+/// The challenge a passkey signs to approve a runner's pairing: its key and
+/// the scopes the user left checked, under `binding`'s request id and
+/// expiry. Its `instance_id` is not read, since no instance exists yet.
+pub fn device_approval_challenge(
+    binding: &ChallengeBinding,
+    dpop_jkt: &str,
+    scopes: &[Scope],
+) -> Result<[u8; 32], EncodeError> {
+    demeteo_hub_protocol::device_approval_challenge(
+        dpop_jkt,
+        scopes,
+        &binding.request_id,
+        binding.expires_at,
     )
     .map(|pre_image| digest(&pre_image))
 }

@@ -22,7 +22,7 @@ use crate::socket::port::SocketStore;
 use crate::socket::requests::OutcomeChange;
 use crate::socket::testing::{MemoryHub, MemoryStore, RequestView};
 use crate::store::attachments::{AttachmentMeta, NewAttachment, StagedAttachment, WrappedKey};
-use crate::store::instances::{Instance, NewInstanceLabels};
+use crate::store::instances::{Instance, InstanceKind, NewInstanceLabels};
 use crate::store::requests::{NewRequest, QueuedRequest, RequestId, RequestRecord, RequestState};
 use crate::store::run_mirror::MirrorRecord;
 use crate::store::{InstanceId, StoreError, UserId};
@@ -48,6 +48,7 @@ pub fn paired_labels() -> NewInstanceLabels {
 
 struct Held {
     hub: MemoryHub,
+    kind: InstanceKind,
     labels: NewInstanceLabels,
     /// Postgres's clock at the insert, which is the wall clock here too.
     created_at: OffsetDateTime,
@@ -79,10 +80,16 @@ impl MemoryFleet {
     /// An instance of `user` as its pairing left it, labelled with
     /// [`paired_labels`].
     pub fn paired(&self, user: UserId, scopes: &[Scope]) -> InstanceId {
+        self.paired_as(user, InstanceKind::Desktop, scopes)
+    }
+
+    /// [`paired`](Self::paired), as an instance of `kind`.
+    pub fn paired_as(&self, user: UserId, kind: InstanceKind, scopes: &[Scope]) -> InstanceId {
         let hub = MemoryHub::paired_to(user, scopes);
         let instance = hub.instance_id();
         self.fleet().held.push(Held {
             hub,
+            kind,
             labels: paired_labels(),
             created_at: OffsetDateTime::now_utc(),
         });
@@ -401,6 +408,7 @@ fn instance_row(held: &Held) -> Instance {
     Instance {
         id: held.hub.instance_id(),
         user_id: held.hub.user_id(),
+        kind: held.kind.as_str().to_owned(),
         name: held.labels.name.clone(),
         os: view.os.unwrap_or_else(|| held.labels.os.clone()),
         arch: view.arch.unwrap_or_else(|| held.labels.arch.clone()),

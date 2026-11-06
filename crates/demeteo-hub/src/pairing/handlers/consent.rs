@@ -118,14 +118,15 @@ pub fn started_pairing(
         .pairings()
         .park_consent(user, request.clone(), now)
         .map_err(consent_not_parked)?;
+    let ask = request.ask;
     Ok(PairingPrompt {
         pairing_id: parked.pairing_id,
-        fingerprint: fingerprint(&request.dpop_jkt),
-        instance_name: request.instance_name,
-        os: request.os,
-        arch: request.arch,
-        app_version: request.app_version,
-        scopes: request.scopes,
+        fingerprint: fingerprint(&ask.dpop_jkt),
+        instance_name: ask.instance_name,
+        os: ask.os,
+        arch: ask.arch,
+        app_version: ask.app_version,
+        scopes: ask.scopes,
         expires_at: parked.expires_at,
     })
 }
@@ -143,7 +144,7 @@ pub fn approved_pairing(
     let request = pairings
         .take_consent(user, &approval.pairing_id, now)
         .ok_or(ApiError::PAIRING_EXPIRED)?;
-    if !narrows(&request.scopes, &approval.scopes) {
+    if !narrows(&request.ask.scopes, &approval.scopes) {
         return Err(ApiError::INVALID_SCOPE);
     }
     let code = AuthorizationCode::generate().map_err(code_not_minted)?;
@@ -204,6 +205,7 @@ mod tests {
     use super::*;
     use crate::auth::testing::lazy_state;
     use crate::auth::RelyingParty;
+    use crate::pairing::authorize::PairingAsk;
     use crate::pairing::pending::TooManyPending;
     use crate::pairing::MAX_PENDING_PER_USER;
     use axum::http::StatusCode;
@@ -215,13 +217,15 @@ mod tests {
         AuthorizeRequest {
             code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".to_owned(),
             redirect_uri: "http://127.0.0.1:49152/callback".to_owned(),
-            dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I".to_owned(),
-            scopes: vec![Read, Gates],
             state: "xyz-123".to_owned(),
-            instance_name: "Workstation".to_owned(),
-            os: "linux".to_owned(),
-            arch: "x86_64".to_owned(),
-            app_version: "1.4.0".to_owned(),
+            ask: PairingAsk {
+                dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I".to_owned(),
+                scopes: vec![Read, Gates],
+                instance_name: "Workstation".to_owned(),
+                os: "linux".to_owned(),
+                arch: "x86_64".to_owned(),
+                app_version: "1.4.0".to_owned(),
+            },
         }
     }
 
@@ -289,10 +293,8 @@ mod tests {
     async fn a_segment_that_is_not_a_valid_request_starts_nothing() {
         let state = state();
         let user = UserId::generate();
-        let unscoped = AuthorizeRequest {
-            scopes: Vec::new(),
-            ..request()
-        };
+        let mut unscoped = request();
+        unscoped.ask.scopes = Vec::new();
         for segment in [String::new(), "!".to_owned(), authorize::encode(&unscoped)] {
             let start = PairingRequest { request: segment };
             let refused = started_pairing(&state, user, start, NOW).err();

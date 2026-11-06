@@ -42,6 +42,7 @@ pub mod postgres;
 pub mod request_status;
 pub mod run_labels;
 pub mod run_state;
+pub mod runner_start;
 pub mod runs;
 pub mod scope;
 pub mod snapshot_view;

@@ -12,7 +12,7 @@ mod register;
 mod sign_in;
 
 pub use add_passkey::{finish_addition, start_addition, stored_addition};
-pub(crate) use passkeys::public_key_options;
+pub(crate) use passkeys::{assertion_options, public_key_options};
 pub use passkeys::{
     finish_endorsement, finish_revocation, list_passkeys, start_endorsement, start_revocation,
 };
@@ -58,7 +58,8 @@ impl ApiError {
     pub(crate) const INVALID_REQUEST: Self = Self::new(StatusCode::BAD_REQUEST, "invalid_request");
     pub(crate) const CEREMONY_EXPIRED: Self =
         Self::new(StatusCode::BAD_REQUEST, "ceremony_expired");
-    const ASSERTION_INVALID: Self = Self::new(StatusCode::FORBIDDEN, "assertion_invalid");
+    pub(crate) const ASSERTION_INVALID: Self =
+        Self::new(StatusCode::FORBIDDEN, "assertion_invalid");
     const TOO_MANY_CEREMONIES: Self =
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_ceremonies");
     const UNSUPPORTED_ALGORITHM: Self =
@@ -77,6 +78,13 @@ impl ApiError {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "key_service_unavailable");
     pub(crate) const TOO_MANY_REQUESTS: Self =
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_requests");
+    pub(crate) const AUTHORIZATION_PENDING: Self =
+        Self::new(StatusCode::BAD_REQUEST, "authorization_pending");
+    pub(crate) const SLOW_DOWN: Self = Self::new(StatusCode::BAD_REQUEST, "slow_down");
+    pub(crate) const ACCESS_DENIED: Self = Self::new(StatusCode::BAD_REQUEST, "access_denied");
+    pub(crate) const EXPIRED_TOKEN: Self = Self::new(StatusCode::BAD_REQUEST, "expired_token");
+    pub(crate) const TOO_MANY_LOOKUPS: Self =
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "too_many_lookups");
     pub(crate) const INVALID_TOKEN: Self = Self::new(StatusCode::UNAUTHORIZED, "invalid_token");
     pub(crate) const TOO_MANY_CONNECTIONS: Self =
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_connections");

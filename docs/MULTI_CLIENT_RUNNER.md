@@ -96,6 +96,18 @@ honest clients from accidental cross-talk and bugs, not against a *malicious*
 co-tenant forging an id. That is the right cost/benefit for the target scenario
 (your own machines / one team). MC-D5 leaves the seam for hardening.
 
+**The Hub is not a client.** `require_owner` guards the control socket, which
+desktops reach over SSH. A Hub request reaches a paired runner over its own
+socket and skips it: a Hub cancel, assignment or gate decision acts on any run
+the runner holds, whichever `client_id` submitted it, because the Hub is the
+single tenant's control plane rather than another co-tenant (decision 64,
+decided 2026-11-03; [`HUB.md`](HUB.md) §6.1 *On a runner*). The cancel body the
+two share is `crates/demeteo-runner/src/control.rs`, with the owner check left
+to the socket's caller. A run the Hub starts is owned by the reserved
+client id `HUB_CLIENT_ID` (`crates/demeteo-runner/src/hub/runs.rs`), and the
+control socket refuses any request naming it, so no desktop lists such a run or
+acts on it over SSH, and none can claim the Hub's identity to reach the others.
+
 ### MC-D3 — Thread `client_id` without touching the port trait
 `control_rpc(machine_id, method, params)` **does not change signature.** The
 `client_id` rides **inside `params`**, stamped centrally by a single

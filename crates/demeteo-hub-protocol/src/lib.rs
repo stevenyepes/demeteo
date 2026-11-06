@@ -26,15 +26,18 @@ mod request;
 mod scope;
 mod snapshot;
 
-pub use canonical::{endorsement_challenge, gate_challenge, revocation_challenge, EncodeError};
+pub use canonical::{
+    device_approval_challenge, endorsement_challenge, gate_challenge, revocation_challenge,
+    EncodeError,
+};
 pub use message::{
     CursorAck, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult, RunEvent,
     RunEventKind, RunEventPayload,
 };
 pub use request::{
     AttachmentRef, CancelFeature, GateDecision, PasskeyEndorsement, PasskeyRevocation,
-    RequestPayload, SetStepAssignment, SignedRequest, StartFeature, StepOverride,
-    WebAuthnAssertion,
+    RequestPayload, RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment,
+    SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
 };
 pub use scope::{Decision, Effort, Scope};
 pub use snapshot::{

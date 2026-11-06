@@ -15,11 +15,15 @@
 mod branch;
 mod credentials;
 mod gates;
+mod hub;
 mod lifecycle;
 mod ownership;
 mod publish;
 mod reads;
 
+pub(crate) use lifecycle::submit;
+
+use crate::hub::{HubControl, HUB_CLIENT_ID};
 use crate::services::RunnerServices;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -73,7 +77,14 @@ fn health_info() -> HealthInfo {
 /// Removes a stale socket file from a previous (crashed) run before
 /// binding — `UnixListener::bind` fails with `AddrInUse` on an existing
 /// path even if nothing is listening on it anymore.
-pub async fn serve(svc: Arc<RunnerServices>, path: PathBuf) -> std::io::Result<()> {
+///
+/// `hub` is a parameter beside `svc`, not part of it, for the reason
+/// [`HubControl`] gives.
+pub async fn serve(
+    svc: Arc<RunnerServices>,
+    hub: Arc<HubControl>,
+    path: PathBuf,
+) -> std::io::Result<()> {
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
@@ -86,15 +97,20 @@ pub async fn serve(svc: Arc<RunnerServices>, path: PathBuf) -> std::io::Result<(
     loop {
         let (stream, _addr) = listener.accept().await?;
         let svc = svc.clone();
+        let hub = hub.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(svc, stream).await {
+            if let Err(e) = handle_connection(svc, hub, stream).await {
                 eprintln!("[demeteo-runner] connection error: {}", e);
             }
         });
     }
 }
 
-async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std::io::Result<()> {
+async fn handle_connection(
+    svc: Arc<RunnerServices>,
+    hub: Arc<HubControl>,
+    stream: UnixStream,
+) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
     while let Some(line) = lines.next_line().await? {
@@ -102,7 +118,7 @@ async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std:
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => dispatch(&svc, req).await,
+            Ok(req) => dispatch(&svc, &hub, req).await,
             Err(e) => Response {
                 id: 0,
                 result: None,
@@ -121,7 +137,7 @@ async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std:
     Ok(())
 }
 
-async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
+async fn dispatch(svc: &Arc<RunnerServices>, hub: &HubControl, req: Request) -> Response {
     // MC-D3: the owning client's `install_id` rides *inside* `params`
     // (not the `control_rpc` port signature), so it is extracted here,
     // generically, once, before method routing — every run-scoped handler
@@ -129,13 +145,14 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
     // `client_id` (an old laptop) reads back as `""`, the single
     // legacy/unknown tenant, which is exactly how pre-V26 rows are stamped
     // — so old-client↔new-runner keeps working unchanged (MC-D6 / P0.6).
-    let client_id = req
-        .params
-        .get("client_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let client_id = match caller(&req.params) {
+        Ok(client_id) => client_id,
+        Err(e) => return respond(req.id, Err(e)),
+    };
     let cid = client_id.as_str();
+    if let Some(result) = hub::dispatch_hub(hub, &req.method, &req.params).await {
+        return respond(req.id, result);
+    }
     let result = match req.method.as_str() {
         "health" => serde_json::to_value(health_info()).map_err(|e| e.to_string()),
         "submit_run" => lifecycle::submit_run(svc, req.params, cid)
@@ -190,14 +207,34 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         other => Err(format!("unknown method: {}", other)),
     };
+    respond(req.id, result)
+}
+
+/// The `client_id` a request names. [`HUB_CLIENT_ID`] is refused whatever
+/// the method: it owns every run the Hub started, so a caller claiming it
+/// would reach all of them.
+fn caller(params: &serde_json::Value) -> Result<String, String> {
+    let client_id = params
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if client_id == HUB_CLIENT_ID {
+        return Err(format!(
+            "client_id {HUB_CLIENT_ID:?} is reserved for the Hub"
+        ));
+    }
+    Ok(client_id.to_owned())
+}
+
+fn respond(id: u64, result: Result<serde_json::Value, String>) -> Response {
     match result {
         Ok(v) => Response {
-            id: req.id,
+            id,
             result: Some(v),
             error: None,
         },
         Err(e) => Response {
-            id: req.id,
+            id,
             result: None,
             error: Some(e),
         },
@@ -207,3 +244,7 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
 #[cfg(test)]
 #[path = "health_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "caller_tests.rs"]
+mod caller_tests;

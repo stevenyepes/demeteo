@@ -36,6 +36,8 @@ fn fixture_covers_the_shapes_the_ticket_names() {
     let s = parsed();
     assert!(s.projects.len() >= 2);
     assert!(s.projects.iter().any(|p| p.remote_url.is_none()));
+    assert!(s.projects.iter().any(|p| p.provider_kind.is_some()));
+    assert!(s.projects.iter().any(|p| p.provider_kind.is_none()));
     assert!(!s.workflows.is_empty());
     let r = &s.run_shape[0];
     assert!(r.default_agent_kind.is_some() && r.default_model.is_some());
@@ -97,12 +99,25 @@ fn serialised_snapshot_has_no_path_like_key_anywhere() {
 }
 
 #[test]
-fn each_project_has_exactly_id_name_remote_url() {
+fn each_project_has_exactly_its_four_keys() {
     let value = serde_json::to_value(parsed()).unwrap();
     for p in value["projects"].as_array().unwrap() {
         let keys: BTreeSet<&str> = p.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(keys, BTreeSet::from(["id", "name", "remote_url"]));
+        assert_eq!(
+            keys,
+            BTreeSet::from(["id", "name", "remote_url", "provider_kind"])
+        );
     }
+}
+
+/// A desktop that predates `provider_kind` still reports its Projects; the
+/// Hub reads the absence as "cannot start a runner on it", never as a guess
+/// from the host.
+#[test]
+fn a_project_without_provider_kind_reads_as_none() {
+    let older = json!({"id": "p", "name": "n", "remote_url": "https://github.com/o/r"});
+    let parsed: ProjectSnapshot = serde_json::from_value(older).unwrap();
+    assert_eq!(parsed.provider_kind, None);
 }
 
 #[test]

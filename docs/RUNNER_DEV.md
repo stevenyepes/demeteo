@@ -124,6 +124,48 @@ local runner build (`npm run build:runner`, which stamps it with that same
 `tauri.conf.json` version, then *Downgrade runner to 1.2.0* on that machine in
 `Settings → Machines`) so the two versions match.
 
+## Pairing a runner with the Hub
+
+Design: [`HUB.md`](HUB.md) §4 *Pairing a runner by device code*, decision 64.
+On the runner host, as the runner's user:
+
+```bash
+demeteo-runner hub seal                   # once; the installers already ran it
+systemctl --user restart demeteo-runner   # so the unit loads the key
+demeteo-runner hub pair https://hub.example.com
+```
+
+`hub pair` prints a code, the Hub's `#/device` URL and this runner's
+fingerprint; approve it on the Hub with a passkey after checking the fingerprint
+matches. Ctrl-C cancels. Then `hub status`, `hub policy` (no flags prints it;
+`--spend on`, `--run-ceiling 500`, `--daily-ceiling off`, …), `hub log [<count>]`
+(what the Hub asked here and how it was answered, newest first) and
+`hub disconnect`. All five are clients of the running `serve` over its control
+socket, so `serve` must be up; the same `hub_*` methods are what a desktop calls
+over SSH. Only `hub seal` works without `serve`.
+
+From a desktop, the runner's Hub panel on its machine card in `Settings →
+Machines` does the same over SSH: pair (it shows the code, the `#/device` URL
+and the fingerprint), status, policy, activity log and disconnect. A runner
+too old for a method is named as such there. Once paired, `serve` answers the
+Hub's cancels, assignments, gate decisions and starts; `hub log` shows each. A
+Hub-started run (`hub-<id>`) gets its GitHub token from the Hub's
+`POST /git-token`, not from a desktop ([`HUB.md`](HUB.md) §6.5), so the Hub
+must be up whenever the run pushes.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `cannot pair: … CREDENTIALS_DIRECTORY is not set` | The unit loads no key: never sealed, or not restarted since | `hub seal`, then restart the unit |
+| `hub seal` fails in `systemd-creds encrypt --user` | systemd older than 256 has no user-scoped credentials | That host cannot pair (decision 64); it still runs work |
+| `hub seal` says a key is sealed already | Re-running it keeps the key, so an upgrade keeps the pairing | `hub seal --force` replaces it and forgets the pairing; pair again |
+| A `hub-…` run stays `needs-credentials` | The token keeper stopped: the journal says `run <id>: no more git tokens from the Hub: <reason>`. A `422` is a GitLab or unknown-host repository; a `503` that never clears is the Hub's App config, its Transit policy, or the App not installed on that repository | Fix the Hub side, then retry the run |
+| After a restart, `no accepted Hub start is logged for it` | The run's accepted start never reached `hub_request_log`, so its keeper cannot be restarted | Cancel and start the run again from the Hub |
+| `cannot reach demeteo-runner serve` | The service is stopped, or `XDG_DATA_HOME` differs from the unit's | `systemctl --user status demeteo-runner` |
+
+The sealed key is `hub-store-key.cred` in the runner's data dir and the drop-in
+is `~/.config/systemd/user/demeteo-runner.service.d/hub-credential.conf`.
+`hub seal` never restarts the unit, because a restart interrupts in-flight runs.
+
 ## Cross-cutting change map
 
 When editing the runner binary location/arch logic, these files move together:
@@ -131,7 +173,7 @@ When editing the runner binary location/arch logic, these files move together:
 | File | What it owns |
 |------|--------------|
 | `crates/demeteo-core/src/infrastructure/runner/binary.rs` | `locate_local`, `RunnerArch::arch()`, `dev_cache_path`, `release_cache_path`, `stale_version_warning`, `probe_version` + 7 unit tests |
-| `crates/demeteo-core/src/infrastructure/runner/install.rs` | `unit_for(machines, machine_id)` — systemd unit template + webhook injection |
+| `crates/demeteo-core/src/infrastructure/runner/install.rs` | `unit_for(machines, machine_id)` — systemd unit template + webhook injection; `hub_seal_command` run by the installer before its restart |
 | `crates/demeteo-core/src/infrastructure/runner/status.rs` | `probe(exec, machine_id)` — remote state probe (binary + service + linger) |
 | `src-tauri/src/adapters/tauri_ui/runner_download.rs` | `download_release`, `cancel`, `reset_cancel` + the two `#[tauri::command]` entry points |
 | `src-tauri/src/commands/remote_install.rs` | Thin Tauri command layer; `reject_non_linux_x86_64` is the only logic here, reuses `RunnerBinary::arch()` (no duplicated parsing) |

@@ -4,12 +4,14 @@
     {
       "id": "p-1790213898404",
       "name": "demeteo",
-      "remote_url": "https://github.com/stvcloud/demeteo.git"
+      "remote_url": "https://github.com/stvcloud/demeteo.git",
+      "provider_kind": "github"
     },
     {
       "id": "p-1790213898999",
       "name": "scratch",
-      "remote_url": null
+      "remote_url": null,
+      "provider_kind": null
     }
   ],
   "workflows": [

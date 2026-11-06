@@ -12,7 +12,7 @@ use crate::paths;
 use crate::ports::db::FeaturePatch;
 use crate::ports::step_executor::{FeatureLaunch, StepExecutor, SyncOutcomeView};
 
-use super::super::DagStepExecutor;
+use super::super::{updates, DagStepExecutor};
 use super::lock_registry;
 
 #[async_trait]
@@ -146,8 +146,16 @@ impl StepExecutor for DagStepExecutor {
         if self.runner_owned_features().contains(feature_id) {
             return Err(shadow_refusal(RunAction::Cancel, feature_id));
         }
-        if let Some(tx) = lock_registry(&self.cancel_senders).get(feature_id) {
-            let _ = tx.send(true);
+        // A live driver records its own `cancelled` once it reads the signal;
+        // writing one here as well would announce the end twice. A sender left
+        // in the map by a driver that is gone signals nothing.
+        let f_id = FeatureId::from(feature_id.to_string());
+        if self.driver_registry.is_live(&f_id) {
+            if let Some(tx) = lock_registry(&self.cancel_senders).get(feature_id) {
+                let _ = tx.send(true);
+            }
+        } else {
+            updates::cancel_without_driver(&*self.features, &*self.notif, &f_id);
         }
         // The out-of-band turns too: a manual sync resolution runs on a feature
         // whose run has already ended, so it never has a driver and its sender

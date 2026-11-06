@@ -18,7 +18,7 @@
 //! and reused for every run.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 const ASKPASS_SCRIPT: &str = "#!/bin/sh\nprintf '%s' \"$DEMETEO_GIT_PAT\"\n";
 const PAT_ENV_VAR: &str = "DEMETEO_GIT_PAT";
@@ -35,6 +35,33 @@ pub fn ensure_askpass_script(data_dir: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// The `git` child [`run_git`] spawns, before its stdio is wired.
+///
+/// `credential.helper=` empties the helper list the host's own gitconfig
+/// accumulated. Git asks every helper before `GIT_ASKPASS`, and after a
+/// successful exchange sends `store` to each of them, so a host whose user
+/// configured `credential.helper store` (or `cache`, a keychain, …) would both
+/// answer the run with the user's identity and write the run's token into
+/// `~/.git-credentials`: a Hub-minted token on disk, which decision 71
+/// forbids. Reset for every call, not only one carrying a token, so a call
+/// without one runs unauthenticated rather than as the host's user — the rule
+/// [`crate::credentials::RunnerCredentialSource`] states for core's git calls.
+pub(crate) fn git_command(askpass_path: &Path, args: &[String], pat: Option<&str>) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(["-c", "credential.helper="]);
+    cmd.args(args);
+    demeteo_core::shared::proc::sanitize_child_env(&mut cmd);
+    if let Some(pat) = pat {
+        cmd.env("GIT_ASKPASS", askpass_path);
+        cmd.env(PAT_ENV_VAR, pat);
+        // Never fall back to an interactive terminal prompt — a
+        // hung `git` waiting on stdin would wedge the run forever
+        // on a headless box.
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+    }
+    cmd
+}
+
 /// Run `git` with the given args. When `pat` is `Some`, `GIT_ASKPASS` is
 /// pointed at the helper script and the PAT rides an env var scoped to
 /// this single child process only — callers should pass `None` for
@@ -49,20 +76,10 @@ pub async fn run_git(
     let args = args.to_vec();
     let pat = pat.map(|s| s.to_string());
     tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let mut cmd = std::process::Command::new("git");
-        cmd.args(&args);
+        let mut cmd = git_command(&askpass_path, &args, pat.as_deref());
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        demeteo_core::shared::proc::sanitize_child_env(&mut cmd);
-        if let Some(pat) = pat.as_deref() {
-            cmd.env("GIT_ASKPASS", &askpass_path);
-            cmd.env(PAT_ENV_VAR, pat);
-            // Never fall back to an interactive terminal prompt — a
-            // hung `git` waiting on stdin would wedge the run forever
-            // on a headless box.
-            cmd.env("GIT_TERMINAL_PROMPT", "0");
-        }
         let output = cmd
             .output()
             .map_err(|e| format!("failed to spawn git: {}", e))?;
@@ -85,3 +102,7 @@ pub async fn run_git(
     .await
     .map_err(|e| format!("blocking task panicked: {}", e))?
 }
+
+#[cfg(test)]
+#[path = "git_askpass_tests.rs"]
+mod tests;

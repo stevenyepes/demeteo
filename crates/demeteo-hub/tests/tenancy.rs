@@ -22,7 +22,8 @@ use demeteo_hub::store::attachments::{
 use demeteo_hub::store::device_keys::{instance_of_key, NewDeviceKey};
 use demeteo_hub::store::instances::{
     find_instance, granted_scopes, insert_instance, list_instances, pair_instance,
-    record_departure, record_hello, Instance, NewInstance, NewInstanceLabels, NewPairing,
+    record_departure, record_hello, Instance, InstanceKind, NewInstance, NewInstanceLabels,
+    NewPairing,
 };
 use demeteo_hub::store::passkeys::{insert_passkey, list_passkeys, NewPasskey};
 use demeteo_hub::store::pool::{create_user, tenants};
@@ -70,6 +71,7 @@ const EXPECTED_TABLES: [&str; 12] = [
 
 fn new_instance(name: &str) -> NewInstance {
     NewInstance {
+        kind: InstanceKind::Desktop,
         id: InstanceId::generate(),
         name: name.to_owned(),
         os: "linux".to_owned(),
@@ -254,6 +256,7 @@ fn new_pairing(key: &NewDeviceKey, named: [&str; 4], scopes: &[Scope]) -> (NewPa
     let pair = FreshPair::generate().unwrap();
     let rows = pair.rows(family_id, &key.jkt, unix_now()).unwrap();
     let new = NewPairing {
+        kind: InstanceKind::Desktop,
         instance: labels(named),
         device_key: key.clone(),
         scopes: scopes.to_vec(),
@@ -1195,6 +1198,54 @@ async fn a_first_pairing_writes_an_instance_its_device_key_and_an_access_and_a_r
         let statuses: Vec<Status> = paired.passkeys.iter().map(|p| p.status).collect();
         assert_eq!(statuses, [Status::Trusted, Status::Pending]);
         assert_eq!(paired.passkeys, list_passkeys(user, &db).await.unwrap());
+    })
+    .await;
+}
+
+/// A runner's grant stores `runner`, and pairing the same key again takes the
+/// kind of the grant that paired it last, either way round.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_instance_has_the_kind_of_the_grant_that_paired_it_last() {
+    in_fresh_schema(|db| async move {
+        let user = create_user(&db).await.unwrap();
+        let key = device_key(&SoftDeviceKey::new());
+        let as_kind = |kind| {
+            let (new, _) = new_pairing(&key, LAPTOP, &[Scope::Read]);
+            NewPairing { kind, ..new }
+        };
+
+        let paired = pair_instance(user, &db, &as_kind(InstanceKind::Runner))
+            .await
+            .unwrap();
+        assert_eq!(
+            instance_of(&db, user, paired.instance_id).await.kind,
+            "runner"
+        );
+
+        pair_instance(user, &db, &as_kind(InstanceKind::Desktop))
+            .await
+            .unwrap();
+        assert_eq!(
+            instance_of(&db, user, paired.instance_id).await.kind,
+            "desktop"
+        );
+
+        pair_instance(user, &db, &as_kind(InstanceKind::Runner))
+            .await
+            .unwrap();
+        let found = find_instance(user, &db, paired.instance_id).await.unwrap();
+        assert_eq!(found.map(|row| row.kind), Some("runner".to_owned()));
+
+        let unnamed = sqlx::query(
+            "INSERT INTO instances (id, user_id, name, os, arch, version, granted_scopes) \
+             VALUES ($1, $2, 'x', 'x', 'x', 'x', '{}')",
+        )
+        .bind(InstanceId::generate())
+        .bind(user)
+        .execute(&db)
+        .await;
+        assert!(unnamed.is_err(), "an insert that names no kind is refused");
     })
     .await;
 }

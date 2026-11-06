@@ -284,3 +284,83 @@ fn request_bodies_reject_an_extra_key() {
         );
     }
 }
+
+fn runner_json() -> Value {
+    json!({
+        "source_instance_id": "inst-desktop",
+        "repository": { "provider_kind": "github", "host": "github.com", "full_name": "o/r" },
+        "workflow": { "workflow_id": "wf", "version": 3, "name": "Feature", "steps_json": "[]" }
+    })
+}
+
+fn start_with_runner(runner: Value) -> Value {
+    let mut value: Value = serde_json::from_str(FIXTURES[0].1).unwrap();
+    value["payload"]["body"]["runner"] = runner;
+    value
+}
+
+#[test]
+fn a_start_without_a_runner_serialises_no_runner_key() {
+    let request: SignedRequest = serde_json::from_str(FIXTURES[0].1).unwrap();
+    let out = serde_json::to_value(&request).unwrap();
+    let RequestPayload::StartFeature(body) = request.payload else {
+        panic!("not a start_feature");
+    };
+    assert_eq!(body.runner, None);
+    assert!(out["payload"]["body"].get("runner").is_none());
+}
+
+#[test]
+fn a_start_with_a_runner_round_trips() {
+    let value = start_with_runner(runner_json());
+    let parsed: SignedRequest = serde_json::from_value(value.clone()).unwrap();
+    let RequestPayload::StartFeature(body) = &parsed.payload else {
+        panic!("not a start_feature");
+    };
+    let runner = body.runner.as_ref().unwrap();
+    assert_eq!(runner.repository.full_name, "o/r");
+    assert_eq!(runner.workflow.version, 3);
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+}
+
+#[test]
+fn a_runner_start_rejects_an_extra_key_at_every_level() {
+    for (at, key) in [
+        ("", "git_token"),
+        ("repository", "clone_dir"),
+        ("workflow", "cwd"),
+    ] {
+        let mut runner = runner_json();
+        let target = if at.is_empty() {
+            &mut runner
+        } else {
+            &mut runner[at]
+        };
+        target[key] = json!("x");
+        assert!(
+            serde_json::from_value::<SignedRequest>(start_with_runner(runner)).is_err(),
+            "{at}.{key}"
+        );
+    }
+}
+
+#[test]
+fn a_runner_start_missing_a_field_does_not_parse() {
+    for (at, key) in [
+        ("", "source_instance_id"),
+        ("repository", "provider_kind"),
+        ("workflow", "version"),
+    ] {
+        let mut runner = runner_json();
+        let target = if at.is_empty() {
+            &mut runner
+        } else {
+            &mut runner[at]
+        };
+        target.as_object_mut().unwrap().remove(key);
+        assert!(
+            serde_json::from_value::<SignedRequest>(start_with_runner(runner)).is_err(),
+            "{at}.{key}"
+        );
+    }
+}
