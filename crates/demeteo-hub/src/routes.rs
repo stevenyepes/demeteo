@@ -11,9 +11,11 @@ use crate::pairing;
 use crate::pairing::pending::Pairings;
 use crate::pairing::signing_key::SigningKey;
 use crate::ports::{GitTokenMinter, KeyService};
+use crate::projects;
 use crate::socket;
 use crate::socket::connections::Connections;
 use crate::store::Db;
+use crate::workflows;
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::header::ORIGIN;
 use axum::http::{Method, StatusCode};
@@ -279,6 +281,19 @@ fn v1(state: AppState) -> Router {
             "/v1/git-hosts/{id}/remove",
             post(git_hosts::handlers::post_remove),
         )
+        .route(
+            "/v1/projects",
+            get(projects::handlers::get_projects).post(projects::handlers::post_project),
+        )
+        .route(
+            "/v1/projects/{id}",
+            post(projects::handlers::post_project_update),
+        )
+        .route(
+            "/v1/projects/{id}/remove",
+            post(projects::handlers::post_project_remove),
+        )
+        .route("/v1/workflows", get(workflows::handlers::get_workflows))
         .route("/v1/fleet", get(api::fleet::get_fleet))
         .route("/v1/instances/{instance_id}", get(api::fleet::get_instance))
         .route("/v1/runs", get(api::runs::get_runs))

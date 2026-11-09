@@ -729,7 +729,7 @@ fn hub_socket_detectors_fire_on_violations() {
     }
 }
 
-const EXPECTED_TABLES: [&str; 13] = [
+const EXPECTED_TABLES: [&str; 14] = [
     "users",
     "passkeys",
     "instances",
@@ -743,6 +743,7 @@ const EXPECTED_TABLES: [&str; 13] = [
     "passkey_endorsements",
     "passkey_revocations",
     "git_hosts",
+    "hub_projects",
 ];
 const FORBIDDEN_TOKEN_COLUMNS: [&str; 4] = ["token", "secret", "plaintext", "private_key"];
 const FORBIDDEN_ATTACHMENT_COLUMNS: [&str; 3] = ["data_key", "plaintext", "key"];

@@ -7,10 +7,12 @@ pub mod git_hosts;
 pub mod git_token;
 pub mod pairing;
 pub mod ports;
+pub mod projects;
 pub mod routes;
 pub mod socket;
 pub mod startup;
 pub mod store;
+pub mod workflows;
 
 /// The wire types, for a crate that depends on the Hub and not on
 /// `demeteo-hub-protocol`. `src-tauri` is one: its tests drive the socket

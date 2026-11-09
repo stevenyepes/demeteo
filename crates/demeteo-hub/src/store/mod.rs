@@ -34,6 +34,7 @@
 pub mod attachments;
 pub mod device_keys;
 pub mod git_hosts;
+pub mod hub_projects;
 pub mod instances;
 pub mod passkey_records;
 pub mod passkeys;
@@ -142,6 +143,15 @@ pub enum StoreError {
     /// bound to another request already, past its expiry, or gone.
     #[error("an attachment is no longer staged for this instance")]
     AttachmentUnavailable,
+    /// The tenant already has a Hub Project on this host and repository.
+    #[error("a project of this tenant already names this repository")]
+    ProjectExists,
+    #[error("unknown effort {0:?}")]
+    UnknownEffort(String),
+    #[error("a budget of {0} cents exceeds the BIGINT column")]
+    BudgetTooLarge(u64),
+    #[error("stored budget {0} is not a count of cents")]
+    BudgetOutOfRange(i64),
 }
 
 /// Refuses rather than saturates: a clamped time would be stored as a moment
