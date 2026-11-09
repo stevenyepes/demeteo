@@ -1,13 +1,15 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { CeremonyError } from '../components/CeremonyError';
 import { DispatchForm } from '../components/DispatchForm';
 import { DispatchTargetList } from '../components/DispatchTargetList';
 import { PageHeader } from '../components/PageHeader';
-import { dispatchBlocker, dispatchSources } from '../lib/dispatchForm';
+import { catalogOf, dispatchBlocker, hubCatalog } from '../lib/dispatchForm';
 import { getInstance, type InstanceDetail } from '../lib/fleet';
 import { useFleet } from '../lib/fleetContext';
+import { type HubProject, listProjects } from '../lib/projects';
 import { routeHref } from '../lib/router';
+import { type HubWorkflow, listWorkflows } from '../lib/workflows';
 
 interface DispatchProps {
   instanceId?: string;
@@ -127,104 +129,55 @@ function Target({ instanceId }: { instanceId: string }) {
       </p>
     );
   }
-  return <DispatchForm instance={detail} spendGranted={blocker !== 'no-spend'} />;
+  return <DispatchForm instance={detail} catalog={catalogOf(detail)} spendGranted={blocker !== 'no-spend'} />;
+}
+
+type HubOffer = { projects: HubProject[]; workflows: HubWorkflow[] };
+
+async function hubOffer(): Promise<HubOffer> {
+  const [projects, workflows] = await Promise.all([listProjects(), listWorkflows()]);
+  return { projects, workflows };
 }
 
 /**
  * A runner holds no Projects or Workflows of its own, so a start to it names
- * the desktop whose snapshot the Hub resolves it from (docs/HUB.md §6.4). One
- * such desktop is chosen for the user; with several, nothing is until they pick.
+ * one of this Hub's projects and one of its embedded starters; the Hub signs
+ * the repository and the steps from those, never from a desktop.
  */
 function RunnerTarget({ runner }: { runner: InstanceDetail }) {
-  const pickerId = useId();
-  const { fleet, failure } = useFleet();
-  const sources = dispatchSources(fleet ?? []);
-  const [pickedId, setPickedId] = useState<string | null>(null);
-  const sourceId = pickedId ?? (sources.length === 1 ? (sources[0]?.id ?? null) : null);
-  const [source, setSource] = useState<Load<InstanceDetail> | null>(null);
+  const [offer, setOffer] = useState<Load<HubOffer>>({ state: 'loading' });
   const latestRead = useRef(0);
 
-  useEffect(() => {
-    if (sourceId === null) {
-      latestRead.current += 1;
-      setSource(null);
-      return undefined;
-    }
-    return settle(getInstance(sourceId), latestRead, setSource);
-  }, [sourceId]);
+  useEffect(() => settle(hubOffer(), latestRead, setOffer), []);
 
-  if (fleet === null) {
-    if (failure === null) return <p className="text-sm text-slate-400">Loading desktops…</p>;
+  if (offer.state === 'loading') return <p className="text-sm text-slate-400">Loading this Hub's projects…</p>;
+  if (offer.state === 'failed') {
     return (
       <div className="flex max-w-xl flex-col gap-2">
-        <p className="text-sm text-slate-400">The fleet could not be loaded, so no desktop can be offered to run from.</p>
-        <CeremonyError error={failure.error} />
+        <p className="text-sm text-slate-400">This Hub's projects and workflows could not be loaded.</p>
+        <CeremonyError error={offer.error} />
       </div>
     );
   }
-  if (sources.length === 0) {
+  const { projects, workflows } = offer.value;
+  if (workflows.length === 0) {
+    return <p className="nested-card px-4 py-3 text-sm text-slate-400">This Hub offers no workflows to run.</p>;
+  }
+  if (projects.length === 0) {
     return (
       <p className="nested-card px-4 py-3 text-sm text-slate-400">
-        A runner runs a project a desktop reported, and no paired desktop is reporting any with read on. Pair a desktop,
-        or turn on read for this Hub on one, to dispatch here.
-      </p>
-    );
-  }
-
-  return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="panel flex flex-col gap-1.5 p-4">
-        <label htmlFor={pickerId} className="text-xs font-medium text-slate-300">
-          Run from
-        </label>
-        <select
-          id={pickerId}
-          value={sourceId ?? ''}
-          onChange={(event) => setPickedId(event.target.value === '' ? null : event.target.value)}
-          aria-describedby={`${pickerId}-hint`}
-          className="input-field"
-        >
-          {sourceId === null && <option value="">Choose a desktop</option>}
-          {sources.map((desktop) => (
-            <option key={desktop.id} value={desktop.id}>
-              {desktop.label ?? desktop.id}
-            </option>
-          ))}
-        </select>
-        <p id={`${pickerId}-hint`} className="text-xs text-slate-400">
-          The runner clones the project and runs the workflow this desktop last reported.
-        </p>
-      </div>
-      <RunnerSource runner={runner} source={source} />
-    </div>
-  );
-}
-
-function RunnerSource({ runner, source }: { runner: InstanceDetail; source: Load<InstanceDetail> | null }) {
-  if (source === null) return null;
-  if (source.state === 'loading') return <p className="text-sm text-slate-400">Loading the desktop's projects…</p>;
-  if (source.state === 'failed') {
-    return (
-      <div className="flex max-w-xl flex-col gap-2">
-        <p className="text-sm text-slate-400">The desktop could not be loaded.</p>
-        <CeremonyError error={source.error} />
-      </div>
-    );
-  }
-  const blocker = dispatchBlocker(source.value);
-  if (blocker === 'no-read' || blocker === 'no-snapshot') {
-    return (
-      <p className="nested-card px-4 py-3 text-sm text-slate-400">
-        This desktop has stopped reporting its projects and workflows to the Hub. Choose another, or turn read back on
-        for this Hub on it.
+        A runner runs one of this Hub's projects, and there are none yet.{' '}
+        <a href={routeHref({ name: 'projects' })} className="text-accent-ink transition-colors hover:text-white">
+          Add a project
+        </a>{' '}
+        to dispatch here.
       </p>
     );
   }
   return (
     <DispatchForm
-      key={source.value.id}
       instance={runner}
-      source={source.value}
+      catalog={hubCatalog(projects, workflows)}
       spendGranted={runner.scopes.includes('spend')}
     />
   );

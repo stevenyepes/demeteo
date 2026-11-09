@@ -7,7 +7,8 @@ import {
 } from '../../../src/lib/effortLevels';
 import type { StepOverride } from '../../../src/types';
 import type { DispatchRequest } from './dispatch';
-import type { FleetInstance, InstanceDetail, ModelChoice, ProjectSummary, WorkflowChoice } from './fleet';
+import type { InstanceDetail, ModelChoice, RunShapeDefaults, WorkflowChoice } from './fleet';
+import type { HubProject } from './projects';
 
 export type FieldResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -28,8 +29,6 @@ export type DispatchForm = {
   overrides: Record<string, StepOverrideDraft>;
   maxBudgetCents: number;
   maxWallClockSecs: number | undefined;
-  /** Set exactly when the target is a runner: the desktop whose snapshot it runs from. */
-  sourceInstanceId?: string;
 };
 
 export type DispatchBlocker = 'no-read' | 'no-spend' | 'no-snapshot';
@@ -44,6 +43,20 @@ export type Prefill = {
 };
 
 export type PrefillField = keyof Prefill;
+
+/** A project the form lists; `problem` says why a run cannot start from it, and is `null` when one can. */
+export type CatalogProject = { id: string; name: string; problem: string | null };
+
+/**
+ * What a dispatch may name and the run-shape defaults it starts from. A
+ * desktop's comes from its own snapshot (`catalogOf`); a runner holds none, so
+ * a dispatch to one names this Hub's own (`hubCatalog`).
+ */
+export type Catalog = {
+  projects: CatalogProject[];
+  workflows: WorkflowChoice[];
+  runShape: RunShapeDefaults[];
+};
 
 /** What a Model field offers for one harness; `source` as `HarnessCatalog.source`. */
 export type ModelChoices = { models: ModelChoice[]; source: string | null };
@@ -103,6 +116,37 @@ export function effortsFor(instance: InstanceDetail, kind: string): readonly Eff
   return entry?.effortLevels ?? supportedEffortsFor(kind);
 }
 
+/** A list the snapshot withholds is empty here; `dispatchBlocker` has already said why. */
+export function catalogOf(detail: InstanceDetail): Catalog {
+  return {
+    projects: (detail.projects ?? []).map((project) => ({ id: project.id, name: project.name, problem: null })),
+    workflows: detail.workflows ?? [],
+    runShape: detail.runShape ?? [],
+  };
+}
+
+export const GITLAB_RUNNER_PROBLEM = 'Runners cannot clone GitLab projects yet';
+
+/** A project the Hub would refuse as `project_not_dispatchable` is listed with that reason and not offered. */
+export function hubCatalog(projects: HubProject[], workflows: WorkflowChoice[]): Catalog {
+  return {
+    projects: projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      problem: project.runnerReady ? null : GITLAB_RUNNER_PROBLEM,
+    })),
+    workflows,
+    runShape: projects.map((project) => ({
+      projectId: project.id,
+      agentKind: project.defaultAgentKind,
+      model: project.defaultModel,
+      effort: project.defaultEffort,
+      workflowId: project.defaultWorkflowId,
+      maxBudgetCents: project.defaultMaxBudgetCents,
+    })),
+  };
+}
+
 /**
  * What the form shows once `projectId` is chosen: each field in `edited`
  * keeps its `held` value, and the rest take the project's run-shape default,
@@ -110,25 +154,25 @@ export function effortsFor(instance: InstanceDetail, kind: string): readonly Eff
  * another's dispatch.
  *
  * A default the form cannot offer is left blank rather than selected: a
- * workflow the instance did not report would be refused as
- * `unknown_workflow`, and an agent `agentChoicesFor(target)` does not offer
+ * workflow the catalog does not list would be refused as `unknown_workflow`,
+ * and an agent `agentChoicesFor(instance)` does not offer
  * would leave the select showing something other than its value. The default
  * model belongs to the default agent, so it is not filled in under an agent
  * the user picked.
  *
- * `instance` holds the projects and their run shape; `target` is the instance
+ * `catalog` holds the projects and their run shape; `instance` is the one
  * the run is sent to, which alone says what agents and efforts there are.
  */
 export function prefillFor(
-  instance: InstanceDetail,
+  catalog: Catalog,
   projectId: string,
   held: Prefill,
   edited: ReadonlySet<PrefillField>,
-  target: InstanceDetail,
+  instance: InstanceDetail,
 ): Prefill {
-  const row = instance.runShape?.find((entry) => entry.projectId === projectId);
-  const workflows = instance.workflows ?? [];
-  const defaultAgent = row?.agentKind && agentChoicesFor(target).includes(row.agentKind) ? row.agentKind : '';
+  const row = catalog.runShape.find((entry) => entry.projectId === projectId);
+  const workflows = catalog.workflows;
+  const defaultAgent = row?.agentKind && agentChoicesFor(instance).includes(row.agentKind) ? row.agentKind : '';
   const agentKind = edited.has('agentKind') ? held.agentKind : defaultAgent;
   const keepModel = edited.has('model') || edited.has('agentKind');
   const workflowId = edited.has('workflowId')
@@ -137,7 +181,7 @@ export function prefillFor(
   return {
     agentKind,
     model: keepModel ? held.model : (row?.model ?? ''),
-    effort: reconcileEffort(edited.has('effort') ? held.effort : (row?.effort ?? ''), effortsFor(target, agentKind)),
+    effort: reconcileEffort(edited.has('effort') ? held.effort : (row?.effort ?? ''), effortsFor(instance, agentKind)),
     workflowId,
     maxCostUsd: edited.has('maxCostUsd') ? held.maxCostUsd : usdOfCents(row?.maxBudgetCents ?? 0),
   };
@@ -216,48 +260,5 @@ export function buildDispatchRequest(form: DispatchForm, attachmentIds: string[]
     max_budget_cents: form.maxBudgetCents,
     ...(form.maxWallClockSecs === undefined ? {} : { max_wall_clock_secs: form.maxWallClockSecs }),
     attachment_ids: attachmentIds,
-    ...(form.sourceInstanceId === undefined ? {} : { source_instance_id: form.sourceInstanceId }),
   };
-}
-
-/**
- * The desktops a runner can be started from: the Hub reads the Project and
- * Workflow from the source's snapshot, so it must be a desktop reporting
- * `read` with something in it (docs/HUB.md §6.4). Its `spend` is not asked:
- * the runner spends, not the source.
- */
-export function dispatchSources(fleet: FleetInstance[]): FleetInstance[] {
-  return fleet.filter(
-    (instance) => instance.kind === 'desktop' && instance.readGranted && (instance.projectCount ?? 0) > 0,
-  );
-}
-
-/**
- * Why a runner cannot start `project`, or `null` when it can. Mirrors
- * `repository` in `crates/demeteo-hub/src/api/runner_start.rs`, which answers
- * every miss but GitLab with `409 project_not_dispatchable`; GitLab passes it
- * and fails later, at the runner's git-token fetch (docs/HUB.md §6.5). A
- * Workflow holding the scrub mask is the one refusal this cannot see: the
- * browser is sent graphs, never `steps_json`.
- */
-export function runnerProjectProblem(project: ProjectSummary): string | null {
-  if (project.providerKind === null || project.providerKind === '') {
-    return 'This project has no Git host, so a runner has nothing to clone.';
-  }
-  if (project.providerKind === 'gitlab') return 'Runners cannot run GitLab projects yet.';
-  if (!isRunnerRemote(project.remoteUrl)) {
-    return "The Hub cannot read this project's remote as https://host/owner/repo.";
-  }
-  return null;
-}
-
-function isRunnerRemote(remoteUrl: string | null): boolean {
-  if (remoteUrl === null || !remoteUrl.startsWith('https://')) return false;
-  const rest = remoteUrl.slice('https://'.length);
-  const slash = rest.indexOf('/');
-  if (slash <= 0) return false;
-  const fullName = rest.slice(slash + 1);
-  const wellFormed = fullName.includes('/') && fullName.split('/').every((segment) => segment !== '');
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: the Hub refuses control characters, so this must too.
-  return wellFormed && !/[@\s\u0000-\u001f\u007f-\u009f]/.test(rest);
 }

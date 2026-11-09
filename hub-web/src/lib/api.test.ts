@@ -207,6 +207,15 @@ describe('postJson', () => {
     expect(error.code).toBeNull();
   });
 
+  it('hands the guard null for a 204, which carries no body', async () => {
+    stubFetch({ '/v1/projects/p-1/remove': new Response(null, { status: 204 }) });
+    const isNull = (value: unknown): value is null => value === null;
+
+    await expect(postJson('/v1/projects/p-1/remove', {}, isNull)).resolves.toBeNull();
+    stubFetch({ '/v1/projects/p-1/remove': new Response(null, { status: 204 }) });
+    expect((await rejectionOf(postJson('/v1/projects/p-1/remove', {}, isFleet))).status).toBe(204);
+  });
+
   it.each(['https://evil.example/x', '//evil.example/x', 'v1/fleet', '/\\evil.example/x'])(
     'rejects the path %j without calling fetch',
     async (path) => {

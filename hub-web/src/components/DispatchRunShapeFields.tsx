@@ -6,7 +6,7 @@ import type { InstanceDetail } from '../lib/fleet';
 import { ModelSelect } from './ModelSelect';
 
 interface DispatchRunShapeFieldsProps {
-  /** The instance the run is sent to: its catalog, never a source desktop's, says what it can run. */
+  /** The instance the run is sent to: its catalog alone says what it can run. */
   instance: InstanceDetail;
   /** Blank inherits the project's default. */
   agentKind: string;

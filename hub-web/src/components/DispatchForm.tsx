@@ -5,17 +5,17 @@ import { HubApiError } from '../lib/api';
 import { dispatchErrorSentence, dispatchFeature, type Enqueued } from '../lib/dispatch';
 import {
   buildDispatchRequest,
+  type Catalog,
   effortsFor,
   parseMaxCostCents,
   type Prefill,
   type PrefillField,
   parseWallClockSecs,
   prefillFor,
-  runnerProjectProblem,
   type StepOverrideDraft,
   toStepOverrides,
 } from '../lib/dispatchForm';
-import type { InstanceDetail, ProjectSummary } from '../lib/fleet';
+import type { InstanceDetail } from '../lib/fleet';
 import { useStagedAttachments } from '../lib/useStagedAttachments';
 import { AttachmentPicker } from './AttachmentPicker';
 import { CeremonyError } from './CeremonyError';
@@ -29,12 +29,8 @@ interface DispatchFormProps {
   /** An instance `dispatchBlocker` passed, or blocked only on `no-spend`. */
   instance: InstanceDetail;
   spendGranted: boolean;
-  /**
-   * Set exactly when `instance` is a runner: the desktop whose snapshot the
-   * Hub resolves the start from, so its projects, workflows and run-shape
-   * defaults are the ones offered (docs/HUB.md §6.4).
-   */
-  source?: InstanceDetail;
+  /** `instance`'s own snapshot for a desktop; this Hub's projects and workflows for a runner. */
+  catalog: Catalog;
 }
 
 type Errors = { title?: string; cost?: string; wallClock?: string };
@@ -49,13 +45,12 @@ const LABEL_CLASS = 'text-xs font-medium text-slate-300';
 const UNFILLED: Prefill = { agentKind: '', model: '', effort: '', workflowId: '', maxCostUsd: '' };
 
 /**
- * Projects and workflows are offered only from a snapshot, never typed: an id
- * the instance does not hold is refused as `unknown_project` /
- * `unknown_workflow` after a round trip through the queue. For a runner that
- * snapshot is the source desktop's, and a project the Hub would refuse to
- * start there is shown but not offered.
+ * Projects and workflows are offered only from `catalog`, never typed: an id
+ * nobody holds is refused as `unknown_project` / `unknown_workflow`. A
+ * project the Hub would refuse to start is shown with its reason but not
+ * offered.
  */
-export function DispatchForm({ instance, spendGranted, source }: DispatchFormProps) {
+export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormProps) {
   const ids = {
     project: useId(),
     workflow: useId(),
@@ -64,11 +59,8 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
     what: useId(),
     how: useId(),
   };
-  const catalog = source ?? instance;
-  const projects = catalog.projects ?? [];
-  const workflows = catalog.workflows ?? [];
-  const problemOf = (project: ProjectSummary) => (source === undefined ? null : runnerProjectProblem(project));
-  const firstProjectId = projects.find((project) => problemOf(project) === null)?.id ?? '';
+  const { projects, workflows } = catalog;
+  const firstProjectId = projects.find((project) => project.problem === null)?.id ?? '';
 
   const [initial] = useState(() => prefillFor(catalog, firstProjectId, UNFILLED, new Set(), instance));
   const [projectId, setProjectId] = useState(firstProjectId);
@@ -87,7 +79,7 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
   const [failure, setFailure] = useState<unknown>(null);
   const attachments = useStagedAttachments();
 
-  const projectAgentKind = catalog.runShape?.find((row) => row.projectId === projectId)?.agentKind ?? '';
+  const projectAgentKind = catalog.runShape.find((row) => row.projectId === projectId)?.agentKind ?? '';
   const workflow = workflows.find((choice) => choice.workflowId === workflowId);
 
   const edit = (field: PrefillField) => setEdited((held) => new Set(held).add(field));
@@ -141,7 +133,6 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
       overrides,
       maxBudgetCents: cost.value,
       maxWallClockSecs: wallClock.value,
-      ...(source === undefined ? {} : { sourceInstanceId: source.id }),
     };
     setSend({ state: 'sending' });
     attachments
@@ -219,14 +210,11 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
                 className={FIELD_CLASS}
               >
                 {projectId === '' && <option value="">No project a runner can start</option>}
-                {projects.map((project) => {
-                  const problem = problemOf(project);
-                  return (
-                    <option key={project.id} value={project.id} disabled={problem !== null}>
-                      {problem === null ? project.name : `${project.name} — ${problem}`}
-                    </option>
-                  );
-                })}
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id} disabled={project.problem !== null}>
+                    {project.problem === null ? project.name : `${project.name} — ${project.problem}`}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="flex flex-col gap-1.5">
@@ -301,7 +289,7 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
         {failure !== null && <DispatchFailure error={failure} />}
         {projectId === '' && (
           <p className="text-sm text-slate-300">
-            None of this desktop's projects can run on a runner: each is listed with the reason.
+            None of these projects can run on a runner: each is listed with the reason.
           </p>
         )}
         {!spendGranted && (

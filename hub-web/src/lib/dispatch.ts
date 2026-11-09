@@ -20,8 +20,6 @@ export type DispatchRequest = {
   max_budget_cents: number;
   max_wall_clock_secs?: number;
   attachment_ids: string[];
-  /** Required for a runner, refused for a desktop: the desktop whose snapshot the runner runs from. */
-  source_instance_id?: string;
 };
 
 export type Enqueued = { requestId: string; expiresAt: number };
@@ -97,21 +95,16 @@ const DISPATCH_ERROR_SENTENCES = new Map<string, string>([
   ['attachment_too_large', "A file is over the Hub's size limit for an attachment, so the Feature was not sent."],
   ['invalid_request', 'The Hub could not accept this request as written.'],
   ['key_service_unavailable', "The Hub's signing key is unavailable right now. Try again shortly."],
-  ['unknown_project', "The source desktop's last snapshot has no such project. Wait for it to report again."],
-  ['unknown_workflow', "The source desktop's last snapshot has no such workflow. Wait for it to report again."],
-  [
-    'project_not_dispatchable',
-    "A runner cannot run this project as the desktop reported it: its Git host or remote is missing, or the workflow holds a secret the desktop masked.",
-  ],
+  ['unknown_project', 'This Hub has no such project. It may have been removed: reload to choose another.'],
+  ['unknown_workflow', 'This Hub offers no such workflow. Reload to choose another.'],
+  ['project_not_dispatchable', 'Runners cannot clone GitLab projects yet, so this project cannot run on a runner.'],
 ]);
 
 /** What the Hub's refusal of a dispatch means, or `null` when there is no sentence for it. */
 export function dispatchErrorSentence(error: HubApiError): string | null {
   if (error.code === null) return null;
   if (error.code === 'scope_not_granted') {
-    if (error.scope === 'spend') return 'Spend is off on this instance.';
-    // A dispatch needs `read` only of a runner's source desktop (docs/HUB.md §6.4).
-    return error.scope === 'read' ? 'Read is off on the source desktop, so the Hub cannot resolve its project.' : null;
+    return error.scope === 'spend' ? 'Spend is off on this instance.' : null;
   }
   return DISPATCH_ERROR_SENTENCES.get(error.code) ?? null;
 }

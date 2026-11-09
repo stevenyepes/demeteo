@@ -112,11 +112,13 @@ async function request<T>(path: string, init: RequestInit | undefined, guard: Gu
     throw new HubApiError(`${path} answered HTTP ${response.status}`, path, response.status, code, scope);
   }
 
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new HubApiError(`${path} did not answer with JSON`, path, response.status);
+  let body: unknown = null;
+  if (response.status !== 204) {
+    try {
+      body = await response.json();
+    } catch {
+      throw new HubApiError(`${path} did not answer with JSON`, path, response.status);
+    }
   }
   if (!guard(body)) {
     throw new HubApiError(`${path} answered with an unexpected shape`, path, response.status);

@@ -13,8 +13,7 @@ interface DispatchTargetListProps {
 
 /**
  * Desktops and runners alike. A runner is offered here whatever its snapshot
- * holds: it runs a project some desktop reported, chosen in the next step
- * (docs/HUB.md §6.4).
+ * holds: it runs one of this Hub's own projects, chosen in the next step.
  *
  * Offline does not disable a row — a request to an absent instance queues
  * until it reconnects. Only a missing `spend` scope does, since the instance

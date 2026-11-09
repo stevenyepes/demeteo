@@ -20,6 +20,7 @@ export type Route =
   | { name: 'sign-up' }
   | { name: 'sign-in' }
   | { name: 'passkeys' }
+  | { name: 'projects' }
   /**
    * `connected` and `failed` are where the Hub sends the browser back from
    * GitHub's App manifest flow: the new host's id, or why it did not connect.
@@ -47,6 +48,7 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
     case 'sign-up':
     case 'sign-in':
     case 'passkeys':
+    case 'projects':
       return [route.name];
     case 'git-hosts':
       if (route.connected !== undefined) return ['git-hosts', 'connected', route.connected];
@@ -89,6 +91,7 @@ function matchSegments(segments: string[] | null): Route | null {
       case 'sign-up':
       case 'sign-in':
       case 'passkeys':
+      case 'projects':
         return { name: head };
       case 'device':
         return { name: 'device' };

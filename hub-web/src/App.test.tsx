@@ -43,6 +43,8 @@ function json(body: unknown, status = 200): Response {
 const SIGNED_IN: Answers = {
   'GET /v1/session': () => json({ csrf_token: 'csrf-1', credential_id: 'cred-1' }),
   'GET /v1/passkeys': () => json({ passkeys: [] }),
+  'GET /v1/projects': () => json({ projects: [] }),
+  'GET /v1/workflows': () => json({ workflows: [] }),
   'GET /v1/fleet': () => json({ instances: [] }),
   'GET /v1/runs': () => json({ runs: [] }),
   'GET /v1/runs?status=running': () => json({ runs: [] }),
@@ -65,7 +67,7 @@ const SIGNED_OUT: Answers = {
 
 const INSTANCE_UUID = '6f1c2b3a-0000-4000-8000-000000000001';
 
-const NAV_HREFS = ['#/fleet', '#/runs', '#/dispatch', '#/add-instance', '#/git-hosts', '#/passkeys'];
+const NAV_HREFS = ['#/fleet', '#/runs', '#/dispatch', '#/projects', '#/add-instance', '#/git-hosts', '#/passkeys'];
 
 const ROUTES: { hash: string; heading: string; activeHref: string }[] = [
   { hash: '#/fleet', heading: 'Fleet', activeHref: '#/fleet' },
@@ -74,6 +76,7 @@ const ROUTES: { hash: string; heading: string; activeHref: string }[] = [
   { hash: '#/instances/inst-7/runs/feat-42', heading: 'Run', activeHref: '#/runs' },
   { hash: '#/dispatch', heading: 'Dispatch', activeHref: '#/dispatch' },
   { hash: '#/instances/inst-7/dispatch', heading: 'Dispatch', activeHref: '#/dispatch' },
+  { hash: '#/projects', heading: 'Projects', activeHref: '#/projects' },
   { hash: '#/add-instance', heading: 'Add instance', activeHref: '#/add-instance' },
   { hash: '#/passkeys', heading: 'Passkeys', activeHref: '#/passkeys' },
   { hash: '#/pair/eyJyZXF1ZXN0IjoiMSJ9', heading: 'Pair instance', activeHref: '#/add-instance' },

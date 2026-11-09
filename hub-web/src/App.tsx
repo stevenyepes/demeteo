@@ -17,6 +17,7 @@ import { GitHosts } from './views/GitHosts';
 import { Instance } from './views/Instance';
 import { NotFound } from './views/NotFound';
 import { Passkeys } from './views/Passkeys';
+import { Projects } from './views/Projects';
 import { Run } from './views/Run';
 import { Runs } from './views/Runs';
 import { SignIn } from './views/SignIn';
@@ -76,6 +77,8 @@ function viewFor(route: Route, onSession: () => void): ReactElement {
       return <SignIn onSession={onSession} />;
     case 'passkeys':
       return <Passkeys />;
+    case 'projects':
+      return <Projects />;
     case 'git-hosts':
       return <GitHosts connected={route.connected} failed={route.failed} />;
     case 'not-found':

@@ -152,7 +152,7 @@ type WireGraphNode = {
 
 type WireGraphEdge = { from: string; to: string };
 
-type WireWorkflow = {
+export type WireWorkflow = {
   workflow_id: string;
   version: number;
   name: string;
@@ -280,7 +280,7 @@ function harnessCatalogOf(wire: WireHarnessCatalog): HarnessCatalog {
   };
 }
 
-function workflowOf(wire: WireWorkflow): WorkflowChoice {
+export function workflowOf(wire: WireWorkflow): WorkflowChoice {
   return {
     workflowId: wire.workflow_id,
     version: wire.version,
@@ -381,7 +381,7 @@ const isWireGraph: Guard<{ nodes: WireGraphNode[]; edges: WireGraphEdge[] }> = (
   return Array.isArray(nodes) && nodes.every(isWireGraphNode) && Array.isArray(edges) && edges.every(isWireGraphEdge);
 };
 
-const isWireWorkflow: Guard<WireWorkflow> = (value): value is WireWorkflow => {
+export const isWireWorkflow: Guard<WireWorkflow> = (value): value is WireWorkflow => {
   const graph = memberOf(value, 'graph');
   return (
     typeof memberOf(value, 'workflow_id') === 'string' &&
