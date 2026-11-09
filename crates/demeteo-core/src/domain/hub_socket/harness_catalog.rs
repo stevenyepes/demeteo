@@ -94,13 +94,16 @@ pub struct CatalogEntry {
     pub kind: String,
     pub models: Vec<ConfigOptionValue>,
     pub effort_levels: Vec<EffortLevel>,
-    pub source: ModelSource,
+    /// `None` for a harness that has never answered a listing: it is held
+    /// with no models rather than left out, and its models are unknown.
+    pub source: Option<ModelSource>,
     pub probed_at_ms: i64,
 }
 
 /// `previous` with `fresh` folded in. A listed harness replaces its entry, an
 /// uninstalled one loses it, and one that did not answer keeps what it last
-/// listed: a host that is briefly unreachable must not read as having nothing
+/// listed, or, having never listed, gets an entry with no models and no
+/// source: a host that is briefly unreachable must not read as having nothing
 /// installed. Kinds `fresh` does not mention are kept as they were.
 pub fn merged(
     previous: &[CatalogEntry],
@@ -116,7 +119,7 @@ pub fn merged(
                     effort_levels: effort_levels(&probe.kind),
                     kind: probe.kind,
                     models,
-                    source,
+                    source: Some(source),
                     probed_at_ms: probe.finished_ms,
                 };
                 match at {
@@ -129,6 +132,13 @@ pub fn merged(
                     out.remove(i);
                 }
             }
+            HarnessProbeOutcome::Unreachable if at.is_none() => out.push(CatalogEntry {
+                effort_levels: effort_levels(&probe.kind),
+                kind: probe.kind,
+                models: Vec::new(),
+                source: None,
+                probed_at_ms: probe.finished_ms,
+            }),
             HarnessProbeOutcome::Unreachable => {}
         }
     }
@@ -169,7 +179,7 @@ fn outbound_entry(entry: &CatalogEntry) -> HarnessCatalogEntry {
         kind: entry.kind.clone(),
         models,
         effort_levels: Some(entry.effort_levels.iter().copied().map(effort).collect()),
-        source: Some(entry.source.as_str().to_owned()),
+        source: entry.source.map(|source| source.as_str().to_owned()),
         probed_at: entry.probed_at_ms.div_euclid(1000),
     }
 }

@@ -87,7 +87,7 @@ async fn a_request_returns_while_its_probe_is_held_and_the_old_entry_stands_mean
     assert_eq!(first[0].kind, "opencode");
     assert_eq!(first[0].models[0].value, "openai/gpt-6-sol");
     assert_eq!(first[0].effort_levels, [EffortLevel::High]);
-    assert_eq!(first[0].source, ModelSource::Probed);
+    assert_eq!(first[0].source, Some(ModelSource::Probed));
 
     NOW.store(
         T0 + 1_000 * HARNESS_PROBE_INTERVAL_SECS as i64,
@@ -165,6 +165,28 @@ async fn a_listing_that_times_out_keeps_the_entry_it_last_listed() {
     woken(&wake).await;
 
     assert_eq!(probed_at(&catalog), Some(vec![T0]));
+}
+
+#[tokio::test]
+async fn a_first_listing_that_times_out_still_reports_the_harness_with_no_models() {
+    static NOW: AtomicI64 = AtomicI64::new(T0);
+    fn clock() -> i64 {
+        NOW.load(Ordering::SeqCst)
+    }
+    let (gate, wake) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let catalog = catalog(opencode(&gate), &wake, clock).with_timeout(SETTLE);
+    catalog.request_probe(ProbeTrigger::Connected);
+    woken(&wake).await;
+
+    let entries = catalog.current().expect("a catalog after the probe");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, "opencode");
+    assert!(entries[0].models.is_empty());
+    assert_eq!(entries[0].source, None);
+
+    let outbound = crate::domain::hub_socket::outbound_catalog(&entries);
+    assert_eq!(outbound[0].kind, "opencode");
+    assert_eq!(outbound[0].source, None);
 }
 
 #[tokio::test]

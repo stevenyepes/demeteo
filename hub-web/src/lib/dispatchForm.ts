@@ -104,10 +104,15 @@ export function agentChoicesFor(instance: InstanceDetail): string[] {
   return reported.filter((kind) => !TEST_RUNTIMES.includes(kind));
 }
 
-/** `null` selects free text: `instance` reports no catalog, or no entry for `kind`. */
+/**
+ * `null` selects free text: `instance` reports no catalog, no entry for `kind`,
+ * or an entry with no models and no source, which is a harness that has not
+ * yet answered a listing.
+ */
 export function modelChoicesFor(instance: InstanceDetail, kind: string): ModelChoices | null {
   const entry = instance.harnessCatalog?.find((candidate) => candidate.kind === kind);
-  return entry === undefined ? null : { models: entry.models, source: entry.source };
+  if (entry === undefined || (entry.source === null && entry.models.length === 0)) return null;
+  return { models: entry.models, source: entry.source };
 }
 
 /** The instance's own answer for `kind` where it gives one, else this build's table. */

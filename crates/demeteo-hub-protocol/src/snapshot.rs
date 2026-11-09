@@ -147,6 +147,7 @@ pub struct HarnessCatalogEntry {
     pub effort_levels: Option<Vec<Effort>>,
     /// Where the list came from (`config`, `probed`, `bundled`). A bundled
     /// list is the instance's built-in guess, not what the harness answered.
+    /// `None` with no models is a harness that has not yet answered a listing.
     #[serde(default)]
     pub source: Option<String>,
     /// Unix seconds.

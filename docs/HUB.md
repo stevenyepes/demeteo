@@ -827,7 +827,9 @@ desktop socket's carried defaults*).
 - **A harness that does not answer keeps its last entry.** One found not
   installed loses it; one that timed out or failed in transport keeps what it
   last listed, so a briefly unreachable machine does not read as having
-  nothing installed.
+  nothing installed. One that has never answered gets an entry with no models
+  and a `null` `source`, so it is still offered, and the browser asks for its
+  model as free text.
 - **What crosses is cut and scrubbed.** Only kinds this build supports, sorted;
   within a kind the listing's order, deduplicated by value, the first kept. A
   value that is empty or holds a NUL is dropped; value and name go through the

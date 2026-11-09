@@ -126,6 +126,12 @@ describe('modelChoicesFor', () => {
     const empty = { ...CATALOGUED, harnessCatalog: [{ ...CODEX, models: [] }] };
     expect(modelChoicesFor(empty, 'codex')).toEqual({ models: [], source: 'bundled' });
   });
+
+  it('is free text for an entry that has not yet answered a listing', () => {
+    const unanswered = { ...CATALOGUED, harnessCatalog: [{ ...CODEX, models: [], source: null }] };
+    expect(modelChoicesFor(unanswered, 'codex')).toBeNull();
+    expect(agentChoicesFor(unanswered)).toEqual(['codex']);
+  });
 });
 
 describe('effortsFor', () => {

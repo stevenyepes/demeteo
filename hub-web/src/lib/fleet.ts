@@ -76,7 +76,8 @@ export type ModelChoice = { value: string; name: string };
 /**
  * One harness the instance found installed on its own machine and the models
  * it lists there. `source` is `config`, `probed` or `bundled`, or `null` from an
- * instance that does not say; a bundled list is the instance's built-in guess,
+ * instance that does not say or a harness that has not yet answered a listing,
+ * whose `models` is then empty; a bundled list is the instance's built-in guess,
  * not the harness's answer. `effortLevels` is `null` when the instance does not
  * say, never "supports none".
  */
