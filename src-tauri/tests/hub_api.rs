@@ -31,10 +31,11 @@ use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::pairing::testing::verifies_ed25519;
 use demeteo_hub::protocol::{
-    CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, ProjectSnapshot, RefusalReason,
-    RequestOutcome, RequestPayload, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings,
-    RunnerRepository, RunnerStart, RunnerWorkflow, Scope, SetStepAssignment, Snapshot,
-    StartFeature, StepOverride, WebAuthnAssertion, WorkflowVersionSnapshot,
+    CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, HarnessCatalogEntry,
+    ModelChoice, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload, RunEvent,
+    RunEventKind, RunEventPayload, RunShapeSettings, RunnerRepository, RunnerStart, RunnerWorkflow,
+    Scope, SetStepAssignment, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
+    WorkflowVersionSnapshot,
 };
 use demeteo_hub::socket::connections::Connections;
 use demeteo_hub::socket::port::SocketStore;
@@ -891,6 +892,109 @@ async fn an_instance_without_read_withholds_its_workflows_and_run_shape() {
 
     assert_eq!(member(&detail, "workflows"), &Value::Null);
     assert_eq!(member(&detail, "run_shape"), &Value::Null);
+}
+
+/// [`two_projects`] with a probed catalog: codex listing two models at two
+/// effort levels, and opencode probed with nothing listed.
+fn with_catalog() -> Snapshot {
+    Snapshot {
+        harness_catalog: Some(vec![
+            HarnessCatalogEntry {
+                kind: "codex".to_owned(),
+                models: vec![
+                    ModelChoice {
+                        value: "gpt-5.5".to_owned(),
+                        name: "GPT-5.5".to_owned(),
+                    },
+                    ModelChoice {
+                        value: "minimax-m2".to_owned(),
+                        name: "MiniMax M2".to_owned(),
+                    },
+                ],
+                effort_levels: Some(vec![Effort::Low, Effort::High]),
+                source: Some("config".to_owned()),
+                probed_at: NOW as i64,
+            },
+            HarnessCatalogEntry {
+                kind: "opencode".to_owned(),
+                models: Vec::new(),
+                effort_levels: None,
+                source: None,
+                probed_at: NOW as i64 + 1,
+            },
+        ]),
+        ..two_projects()
+    }
+}
+
+#[tokio::test]
+async fn an_instance_shows_its_harness_catalog_as_the_instance_reported_it() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    fleet.snapshot_sent(instance, with_catalog()).await;
+    let api = parts.over(&fleet);
+
+    let detail = detail_json(&api, user, &instance.0.to_string()).await;
+
+    assert_eq!(
+        member(&detail, "harness_catalog"),
+        &json!([
+            {"kind": "codex",
+             "models": [
+                 {"value": "gpt-5.5", "name": "GPT-5.5"},
+                 {"value": "minimax-m2", "name": "MiniMax M2"},
+             ],
+             "effort_levels": ["low", "high"],
+             "source": "config",
+             "probed_at": NOW},
+            {"kind": "opencode", "models": [], "effort_levels": null,
+             "source": null, "probed_at": NOW + 1},
+        ])
+    );
+    let listed = &fleet_json(&api, user).await["instances"][0];
+    assert_eq!(
+        listed.get("harness_catalog"),
+        None,
+        "the fleet list is unchanged"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_probed_with_nothing_installed_shows_an_empty_catalog_not_null() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    let api = parts.over(&fleet);
+    let id = instance.0.to_string();
+
+    let unsent = detail_json(&api, user, &id).await;
+    assert_eq!(member(&unsent, "harness_catalog"), &Value::Null);
+    fleet.snapshot_sent(instance, two_projects()).await;
+    let unprobed = detail_json(&api, user, &id).await;
+    assert_eq!(member(&unprobed, "harness_catalog"), &Value::Null);
+    let probed_empty = Snapshot {
+        harness_catalog: Some(Vec::new()),
+        ..two_projects()
+    };
+    fleet.snapshot_sent(instance, probed_empty).await;
+    let probed = detail_json(&api, user, &id).await;
+    assert_eq!(member(&probed, "harness_catalog"), &json!([]));
+}
+
+#[tokio::test]
+async fn an_instance_without_read_withholds_its_harness_catalog() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &[Scope::Spend, Scope::Gates]);
+    fleet.snapshot_sent(instance, with_catalog()).await;
+
+    let detail = detail_json(&parts.over(&fleet), user, &instance.0.to_string()).await;
+
+    assert_eq!(member(&detail, "harness_catalog"), &Value::Null);
 }
 
 #[tokio::test]
