@@ -53,7 +53,12 @@ export function ProjectForm({ project, workflows, busy, onSave, onCancel }: Proj
     effort: useId(),
     cost: useId(),
   };
-  const [draft, setDraft] = useState<ProjectDraft>(() => draftOf(project));
+  const [draft, setDraft] = useState<ProjectDraft>(() =>
+    draftOf(
+      project,
+      workflows.map((workflow) => workflow.workflowId),
+    ),
+  );
   const [errors, setErrors] = useState<ProjectErrors>({});
 
   const set = <K extends keyof ProjectDraft>(field: K, value: ProjectDraft[K]) =>

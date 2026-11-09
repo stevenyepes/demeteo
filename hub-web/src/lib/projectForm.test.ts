@@ -100,7 +100,7 @@ describe('projectVerdict', () => {
 
 describe('draftOf', () => {
   it('is blank for a new project', () => {
-    expect(draftOf(null)).toEqual({
+    expect(draftOf(null, [])).toEqual({
       name: '',
       providerKind: 'github',
       remote: '',
@@ -129,7 +129,7 @@ describe('draftOf', () => {
       createdAt: 1,
       updatedAt: 2,
     };
-    expect(projectVerdict(draftOf(project))).toEqual({
+    expect(projectVerdict(draftOf(project, ['wf-starter-feature']))).toEqual({
       ok: true,
       fields: {
         name: 'widgets',
@@ -143,5 +143,28 @@ describe('draftOf', () => {
         defaultMaxBudgetCents: 1_005,
       },
     });
+  });
+
+  it('blanks a default workflow this build no longer offers, so saving does not send it', () => {
+    const project: HubProject = {
+      id: 'p-1',
+      name: 'widgets',
+      providerKind: 'github',
+      host: 'github.com',
+      fullName: 'acme/widgets',
+      remoteUrl: 'https://github.com/acme/widgets',
+      runnerReady: true,
+      defaultAgentKind: null,
+      defaultModel: null,
+      defaultEffort: null,
+      defaultWorkflowId: 'wf-starter-dropped',
+      defaultMaxBudgetCents: null,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const draft = draftOf(project, ['wf-starter-feature']);
+    expect(draft.workflowId).toBe('');
+    const verdict = projectVerdict(draft);
+    expect(verdict.ok && verdict.fields.defaultWorkflowId).toBeNull();
   });
 });

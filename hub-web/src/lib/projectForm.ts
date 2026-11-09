@@ -44,8 +44,12 @@ export function parseRemote(url: string): { host: string; fullName: string } | n
   return { host: rest.slice(0, slash).toLowerCase(), fullName };
 }
 
-/** A blank form for `null`, else `project` as the form edits it. */
-export function draftOf(project: HubProject | null): ProjectDraft {
+/**
+ * A blank form for `null`, else `project` as the form edits it. A default
+ * workflow none of `workflowIds` names is blank: it reads as unset, and the
+ * Hub would refuse it on save.
+ */
+export function draftOf(project: HubProject | null, workflowIds: readonly string[]): ProjectDraft {
   if (project === null) {
     return { name: '', providerKind: 'github', remote: '', agentKind: '', model: '', effort: '', workflowId: '', maxCostUsd: '' };
   }
@@ -56,7 +60,7 @@ export function draftOf(project: HubProject | null): ProjectDraft {
     agentKind: project.defaultAgentKind ?? '',
     model: project.defaultModel ?? '',
     effort: project.defaultEffort ?? '',
-    workflowId: project.defaultWorkflowId ?? '',
+    workflowId: workflowIds.find((id) => id === project.defaultWorkflowId) ?? '',
     maxCostUsd: usdOfCents(project.defaultMaxBudgetCents ?? 0),
   };
 }
