@@ -265,9 +265,14 @@ if [[ $build_ok -ne 0 ]]; then
 fi
 ok "build succeeded for $TAG (makepkg pkgver=$MAK_PKGVER, original=$PKGVER)"
 
-shopt -s nullglob
-pkgs=( "$AUR_REPO"/*.pkg.tar.* )
-shopt -u nullglob
+# Packages from earlier runs are kept on purpose (see below), so a glob would
+# hand pacman several versions of one pkgname — it rejects that as "duplicate
+# target". Ask makepkg for this PKGBUILD's outputs instead; it must run before
+# the exit trap restores the unpatched PKGBUILD.
+pkgs=()
+while IFS= read -r p; do
+  [[ -f "$p" ]] && pkgs+=( "$p" )
+done < <(cd "$AUR_REPO" && makepkg --packagelist)
 if [[ ${#pkgs[@]} -eq 0 ]]; then
   die "build reported success but no .pkg.tar.* produced"
 fi
