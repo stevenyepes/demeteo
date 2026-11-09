@@ -80,3 +80,72 @@ fn the_subcommand_agents_still_list_one_model_per_line() {
         );
     }
 }
+
+fn registry() -> AgentRegistry {
+    use crate::ports::agent_runtime::AgentRuntime;
+    AgentRegistry::new(vec![
+        std::sync::Arc::new(crate::adapters::agent::opencode::runtime())
+            as std::sync::Arc<dyn AgentRuntime>,
+        std::sync::Arc::new(crate::adapters::agent::claude_code::runtime()),
+        std::sync::Arc::new(crate::adapters::agent::codex::runtime()),
+    ])
+}
+
+fn values(models: &[ConfigOptionValue]) -> Vec<&str> {
+    models.iter().map(|m| m.value.as_str()).collect()
+}
+
+#[tokio::test]
+async fn claude_code_lists_its_bundled_aliases_without_running_anything() {
+    let exec = crate::adapters::step_executor::scripted_exec::ScriptedExec::new(&[]);
+
+    let (models, source) = listed_models(&exec, &registry(), "local", "claude-code").await;
+
+    assert_eq!(source, ModelSource::Bundled);
+    assert_eq!(values(&models), ["opus", "sonnet", "haiku", "fable"]);
+    assert!(exec.calls().is_empty(), "{:?}", exec.calls());
+}
+
+#[tokio::test]
+async fn opencode_lists_what_its_cli_answers() {
+    let exec = crate::adapters::step_executor::scripted_exec::ScriptedExec::new(&[(
+        "opencode models",
+        Ok("minimax/MiniMax-M3\nopenai/gpt-6-sol\n"),
+    )]);
+
+    let (models, source) = listed_models(&exec, &registry(), "local", "opencode").await;
+
+    assert_eq!(source, ModelSource::Probed);
+    assert_eq!(values(&models), ["minimax/MiniMax-M3", "openai/gpt-6-sol"]);
+    assert_eq!(exec.commands(), ["opencode models"]);
+}
+
+#[tokio::test]
+async fn codex_with_a_custom_provider_lists_its_configured_model() {
+    let exec = crate::adapters::step_executor::scripted_exec::ScriptedExec::new(&[(
+        "cat ~/.codex/config.toml 2>/dev/null",
+        Ok("model = \"MiniMax-M3\"\nmodel_provider = \"minimax\"\n"),
+    )]);
+
+    let (models, source) = listed_models(&exec, &registry(), "local", "codex").await;
+
+    assert_eq!(source, ModelSource::Config);
+    assert_eq!(values(&models), ["MiniMax-M3"]);
+    assert_eq!(
+        models[0].description.as_deref(),
+        Some("~/.codex/config.toml (minimax)")
+    );
+}
+
+#[tokio::test]
+async fn codex_without_a_custom_provider_lists_the_bundled_slugs() {
+    let exec = crate::adapters::step_executor::scripted_exec::ScriptedExec::new(&[(
+        "cat ~/.codex/config.toml 2>/dev/null",
+        Ok(""),
+    )]);
+
+    let (models, source) = listed_models(&exec, &registry(), "local", "codex").await;
+
+    assert_eq!(source, ModelSource::Bundled);
+    assert_eq!(values(&models), ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
+}

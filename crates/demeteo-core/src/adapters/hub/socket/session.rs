@@ -14,6 +14,12 @@
 //! a task of its own, and its `RequestResult` comes back to the loop to be
 //! sent: a start can take as long as a launch and an attachment fetch, and
 //! the loop that reads the Hub's pings cannot wait that out.
+//!
+//! A relaying session also asks [`SessionContext::harness_catalog`] for a
+//! probe once the Hub has acked, and again on every tick of
+//! [`SessionContext::harness_probe_interval`]. It never waits for one: the
+//! first snapshot goes out with whatever the catalog held, and a finished
+//! probe reaches the Hub through [`SessionContext::snapshot_wake`].
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -24,17 +30,17 @@ use std::time::Duration;
 use demeteo_hub_protocol::{CursorAck, RequestHeader, RequestResult};
 use serde::Serialize;
 use tokio::sync::{mpsc, watch, Mutex, Notify, OwnedMutexGuard};
-use tokio::time::{sleep_until, timeout, Instant};
+use tokio::time::{interval_at, sleep_until, timeout, Instant, MissedTickBehavior};
 
 use crate::adapters::hub::run_keys::ReportedAsIs;
 use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
-    hello, hub_event, SocketEnd, LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS, PAGE_SIZE,
-    SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
+    hello, hub_event, ProbeTrigger, SocketEnd, HARNESS_PROBE_INTERVAL_SECS, LIVENESS_DEADLINE_SECS,
+    MAX_UNACKED_EVENTS, PAGE_SIZE, SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 use crate::ports::hub::{
-    HubRequestHandler, HubRunKeys, HubSnapshotSource, HubSocketConnection, SocketGone,
-    SocketReceived,
+    HarnessCatalogSource, HubRequestHandler, HubRunKeys, HubSnapshotSource, HubSocketConnection,
+    NoHarnessCatalog, SocketGone, SocketReceived,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::shared::time::now_ms;
@@ -83,6 +89,13 @@ pub struct SessionContext {
     /// How long after a [`Self::snapshot_wake`] the snapshot is sent; see
     /// [`SNAPSHOT_DEBOUNCE_SECS`].
     pub snapshot_debounce: Duration,
+    /// The catalog [`Self::snapshots`] reports, asked to probe by the
+    /// session; it fires [`Self::snapshot_wake`] when a probe finishes.
+    /// [`NoHarnessCatalog`] until [`Self::with_harness_catalog`] says
+    /// otherwise.
+    pub harness_catalog: Arc<dyn HarnessCatalogSource>,
+    /// See [`HARNESS_PROBE_INTERVAL_SECS`].
+    pub harness_probe_interval: Duration,
     /// How long the Hub may say nothing, of any kind, and how long one send
     /// may stay pending.
     pub liveness: Duration,
@@ -146,6 +159,8 @@ impl SessionContext {
             snapshots,
             snapshot_wake,
             snapshot_debounce: Duration::from_secs(SNAPSHOT_DEBOUNCE_SECS),
+            harness_catalog: Arc::new(NoHarnessCatalog),
+            harness_probe_interval: Duration::from_secs(HARNESS_PROBE_INTERVAL_SECS),
             liveness: Duration::from_secs(LIVENESS_DEADLINE_SECS),
             stop_close: Duration::from_secs(STOP_CLOSE_DEADLINE_SECS),
             requests: RequestHandlerSlot::default(),
@@ -161,6 +176,16 @@ impl SessionContext {
 
     pub fn with_run_keys(mut self, run_keys: Arc<dyn HubRunKeys>) -> Self {
         self.run_keys = run_keys;
+        self
+    }
+
+    pub fn with_harness_catalog(mut self, harness_catalog: Arc<dyn HarnessCatalogSource>) -> Self {
+        self.harness_catalog = harness_catalog;
+        self
+    }
+
+    pub fn with_harness_probe_interval(mut self, interval: Duration) -> Self {
+        self.harness_probe_interval = interval;
         self
     }
 
@@ -297,9 +322,13 @@ impl Session {
         // After the first ack, not after `Hello`: the ack proves the Hub took
         // the `Hello`, so nothing is built for a connection it refuses.
         let mut snapshots = SnapshotSend::default();
+        ctx.harness_catalog.request_probe(ProbeTrigger::Connected);
         if let Some(frame) = snapshots.frame(&ctx.snapshots).await {
             self.send(frame, stop).await?;
         }
+        let period = ctx.harness_probe_interval;
+        let mut probe_timer = interval_at(Instant::now() + period, period);
+        probe_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut outbox = Outbox::after(cursor);
         loop {
             self.connection.update(|facts| {
@@ -334,6 +363,7 @@ impl Session {
                         self.send(frame, stop).await?;
                     }
                 }
+                _ = probe_timer.tick() => ctx.harness_catalog.request_probe(ProbeTrigger::Timer),
                 () = ready(()), if sendable => {
                     if let Some((offset, text)) = outbox.pending.pop_front() {
                         self.send(text, stop).await?;

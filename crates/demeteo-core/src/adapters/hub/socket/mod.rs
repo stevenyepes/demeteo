@@ -18,7 +18,8 @@ use crate::domain::hub_socket::{
     StopReason,
 };
 use crate::ports::hub::{
-    DialFailure, HubRunKeys, HubSnapshotSource, HubSocketDialer, SocketUpgrade,
+    DialFailure, HarnessCatalogSource, HubRunKeys, HubSnapshotSource, HubSocketDialer,
+    SocketUpgrade,
 };
 use crate::ports::run_events::RunEventsPort;
 use crate::shared::time::now_secs;
@@ -91,6 +92,9 @@ pub struct SocketConfig {
     /// See [`SessionContext::run_keys`]; the one [`Self::snapshots`] reports
     /// through, so a run is reported under one id or not at all.
     pub run_keys: Arc<dyn HubRunKeys>,
+    /// See [`SessionContext::harness_catalog`]; the one [`Self::snapshots`]
+    /// reads, and it wakes [`Self::snapshot_wake`].
+    pub harness_catalog: Arc<dyn HarnessCatalogSource>,
     /// See [`SessionContext::snapshot_debounce`].
     pub snapshot_debounce: Duration,
     /// Where the socket task is spawned; `start_socket` is synchronous, so
