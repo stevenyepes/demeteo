@@ -108,7 +108,9 @@ fn expected_of(name: &str, text: &str) -> Result<Inbound, FrameError> {
     match name {
         "hello.json" => Ok(Inbound::Hello(as_written::<Hello>(name, text))),
         "run_event.json" => Ok(Inbound::RunEvent(as_written::<RunEvent>(name, text))),
-        "snapshot.json" => Ok(Inbound::Snapshot(as_written::<Snapshot>(name, text))),
+        "snapshot.json" | "snapshot_v1_no_catalog.json" => {
+            Ok(Inbound::Snapshot(as_written::<Snapshot>(name, text)))
+        }
         "request_result_accepted.json" | "request_result_refused.json" => Ok(
             Inbound::RequestResult(as_written::<RequestResult>(name, text)),
         ),

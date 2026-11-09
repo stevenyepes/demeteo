@@ -163,6 +163,7 @@ mod tests {
             run_shape: Vec::new(),
             features: Vec::new(),
             harnesses: None,
+            harness_catalog: None,
         };
         let text = serde_json::to_string(&snapshot).unwrap();
         assert_eq!(

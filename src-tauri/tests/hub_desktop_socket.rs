@@ -1766,6 +1766,7 @@ fn one_project(name: &str) -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 

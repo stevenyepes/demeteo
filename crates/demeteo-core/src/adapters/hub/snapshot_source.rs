@@ -105,6 +105,7 @@ impl RepoSnapshotSource {
             providers: self.settings.get_provider_instances()?,
             features,
             harnesses: self.harnesses.clone(),
+            harness_catalog: None,
             workflow_names,
         })
     }

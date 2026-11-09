@@ -121,6 +121,7 @@ async fn reported(db: &Db, user: UserId, instance: InstanceId) {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     };
     let body = serde_json::to_string(&snapshot).unwrap();
     assert!(

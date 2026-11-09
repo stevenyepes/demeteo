@@ -41,7 +41,8 @@ pub use request::{
 };
 pub use scope::{Decision, Effort, Scope};
 pub use snapshot::{
-    FeatureSnapshot, ProjectSnapshot, RunShapeSettings, Snapshot, WorkflowVersionSnapshot,
+    FeatureSnapshot, HarnessCatalogEntry, ModelChoice, ProjectSnapshot, RunShapeSettings, Snapshot,
+    WorkflowVersionSnapshot,
 };
 
 /// Carried as `v` on every top-level message. Deserialisation never rejects a

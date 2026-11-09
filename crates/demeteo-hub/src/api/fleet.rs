@@ -440,6 +440,7 @@ mod tests {
             run_shape: Vec::new(),
             features: Vec::new(),
             harnesses: None,
+            harness_catalog: None,
         };
         let kinds: Vec<Option<String>> = reported_of(Some(snapshot))
             .projects

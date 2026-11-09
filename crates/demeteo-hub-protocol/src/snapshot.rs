@@ -99,14 +99,17 @@ pub struct FeatureSnapshot {
     pub workflow_version: Option<u32>,
 }
 
-/// Everything the Hub knows about an instance's Projects. A snapshot replaces
-/// the previous one wholesale; the Hub never merges.
+/// What an instance reports of itself: its Projects, their Workflows and run
+/// shape, the Features it may name, and which harnesses it can run with which
+/// models. A snapshot replaces the previous one wholesale; the Hub never
+/// merges.
 ///
-/// `features`, `harnesses` and [`ProjectSnapshot::provider_kind`] were added
-/// after the first Hub shipped and default when absent, so a newer Hub reads
-/// an older desktop's snapshot. The reverse does not hold:
-/// `deny_unknown_fields` makes an older Hub refuse a snapshot carrying any of
-/// them, so the Hub ships first (HUB.md §11 item 8).
+/// `features`, `harnesses`, `harness_catalog` and
+/// [`ProjectSnapshot::provider_kind`] were added after the first Hub shipped
+/// and default when absent, so a newer Hub reads an older instance's
+/// snapshot. The reverse does not hold: `deny_unknown_fields` makes an older
+/// Hub refuse a snapshot carrying any of them, so the Hub ships first
+/// (HUB.md §11 item 8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
@@ -117,9 +120,48 @@ pub struct Snapshot {
     #[serde(default)]
     pub features: Vec<FeatureSnapshot>,
     /// The harness kinds the instance has registered (`claude-code`,
-    /// `opencode`, …) and nothing about any of them: not whether it is
-    /// installed, signed in or on `PATH`. `None` from a desktop that predates
-    /// the field, which is not the same as one with none registered.
+    /// `opencode`, …), whether or not they are installed. What is known
+    /// about each one is [`Snapshot::harness_catalog`]. `None` from an
+    /// instance that predates the field, which is not the same as one with
+    /// none registered.
     #[serde(default)]
     pub harnesses: Option<Vec<String>>,
+    /// The harnesses the instance found installed on its own machine, and
+    /// the models each one lists there. `None` from an instance that
+    /// predates the field or has not finished a probe yet; `Some([])` from
+    /// one that probed and found nothing installed.
+    #[serde(default)]
+    pub harness_catalog: Option<Vec<HarnessCatalogEntry>>,
+}
+
+/// One installed harness and what it lists, as the instance last probed it.
+///
+/// `kind` is a plain `String` for the reason
+/// [`RunShapeSettings::default_agent_kind`] is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessCatalogEntry {
+    pub kind: String,
+    pub models: Vec<ModelChoice>,
+    #[serde(default)]
+    pub effort_levels: Option<Vec<Effort>>,
+    /// Where the list came from (`config`, `probed`, `bundled`). A bundled
+    /// list is the instance's built-in guess, not what the harness answered.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Unix seconds.
+    pub probed_at: i64,
+}
+
+/// A model a harness lists: the value a run passes and the name a picker
+/// shows.
+///
+/// There is no `description`, deliberately: the instance's own description
+/// of a model can name the config file it read, a path under the user's
+/// home that never leaves an instance (AGENTS §2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelChoice {
+    pub value: String,
+    pub name: String,
 }

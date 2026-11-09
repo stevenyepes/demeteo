@@ -151,6 +151,7 @@ mod tests {
             run_shape: Vec::new(),
             features: Vec::new(),
             harnesses: None,
+            harness_catalog: None,
         }
     }
 

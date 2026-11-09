@@ -141,6 +141,7 @@ fn with_project(id: &str) -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 
@@ -519,6 +520,7 @@ fn two_projects() -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 
@@ -600,6 +602,7 @@ fn labelled() -> Snapshot {
             },
         ],
         harnesses: Some(vec!["claude-code".to_owned(), "opencode".to_owned()]),
+        harness_catalog: None,
         ..two_projects()
     }
 }
@@ -2678,6 +2681,7 @@ impl Populated {
                         run_shape: Vec::new(),
                         features: Vec::new(),
                         harnesses: None,
+                        harness_catalog: None,
                     },
                 )
                 .await;

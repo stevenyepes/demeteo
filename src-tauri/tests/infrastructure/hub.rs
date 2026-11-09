@@ -4495,6 +4495,7 @@ fn no_projects() -> SnapshotInput {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     }
 }

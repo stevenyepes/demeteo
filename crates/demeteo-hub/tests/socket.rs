@@ -172,6 +172,7 @@ fn snapshot(project_names: &[&str]) -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 
