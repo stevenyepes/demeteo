@@ -1,4 +1,4 @@
-import { Monitor } from 'lucide-react';
+import { Monitor, Server } from 'lucide-react';
 import { useId } from 'react';
 
 import { Chip } from '../../../src/components/ui/Chip';
@@ -12,10 +12,9 @@ interface DispatchTargetListProps {
 }
 
 /**
- * Desktop instances only: no runner rows and no "unattended" toggle. A runner
- * start must also name the source desktop whose snapshot the Hub resolves it
- * from (docs/HUB.md §6.4), which this form has no step for yet; a desktop run
- * always parks its gates for a human.
+ * Desktops and runners alike. A runner is offered here whatever its snapshot
+ * holds: it runs a project some desktop reported, chosen in the next step
+ * (docs/HUB.md §6.4).
  *
  * Offline does not disable a row — a request to an absent instance queues
  * until it reconnects. Only a missing `spend` scope does, since the instance
@@ -78,7 +77,7 @@ function TargetRow({ instance, selected, onSelect }: TargetRowProps) {
           selected ? 'text-white' : 'text-slate-400'
         }`}
       >
-        <Monitor className="h-4 w-4" />
+        {instance.kind === 'runner' ? <Server className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1.5">
         <span className="flex flex-wrap items-center gap-2">
