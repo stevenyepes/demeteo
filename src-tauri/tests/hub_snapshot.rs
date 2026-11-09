@@ -1042,7 +1042,7 @@ fn entry(kind: &str, models: Vec<ConfigOptionValue>) -> CatalogEntry {
         kind: kind.to_owned(),
         models,
         effort_levels: vec![EffortLevel::High],
-        source: ModelSource::Probed,
+        source: Some(ModelSource::Probed),
         probed_at_ms: 1_000,
     }
 }
@@ -1076,7 +1076,7 @@ fn a_listed_harness_replaces_its_entry() {
     let out = merged(&previous, vec![probe("claude-code", listed)], levels_for);
     assert_eq!(kinds_of(&out), ["claude-code"]);
     assert_eq!(out[0].models[0].value, "new");
-    assert_eq!(out[0].source, ModelSource::Bundled);
+    assert_eq!(out[0].source, Some(ModelSource::Bundled));
     assert_eq!(out[0].probed_at_ms, 9_000);
     assert_eq!(out[0].effort_levels, [EffortLevel::Low, EffortLevel::Max]);
 }
@@ -1118,6 +1118,23 @@ fn an_unreachable_harness_keeps_what_it_last_listed() {
     assert_eq!(kinds_of(&out), ["codex"]);
     assert_eq!(out[0].models[0].value, "m");
     assert_eq!(out[0].probed_at_ms, 1_000);
+}
+
+#[test]
+fn an_unreachable_harness_never_listed_is_held_with_no_models_and_no_source() {
+    let out = merged(
+        &[],
+        vec![probe("claude-code", HarnessProbeOutcome::Unreachable)],
+        levels_for,
+    );
+    assert_eq!(kinds_of(&out), ["claude-code"]);
+    assert!(out[0].models.is_empty());
+    assert_eq!(out[0].source, None);
+    assert_eq!(out[0].effort_levels, [EffortLevel::Low, EffortLevel::Max]);
+
+    let wire = outbound_catalog(&out);
+    assert_eq!(wire[0].kind, "claude-code");
+    assert_eq!(wire[0].source, None);
 }
 
 #[test]
@@ -1195,7 +1212,7 @@ fn a_codex_description_never_crosses() {
     let mut codex = entry("codex", vec![model("MiniMax-M2", "MiniMax-M2")]);
     codex.models[0].description = Some("~/.codex/config.toml (minimax)".to_owned());
     codex.models[0].supports_images = true;
-    codex.source = ModelSource::Config;
+    codex.source = Some(ModelSource::Config);
     let shot = snapshot(&SnapshotInput {
         harness_catalog: Some(vec![codex]),
         ..only(Vec::new())
