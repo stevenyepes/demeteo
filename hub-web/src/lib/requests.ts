@@ -75,6 +75,13 @@ export async function setStepAssignment(
   return requestTicketOf(await postInSession(path, body, isWireRequestTicket));
 }
 
+/** Queues a `cancel_feature`. Unlike a gate's cancel it takes no passkey: the route needs `spend` alone (docs/HUB.md §6.4). */
+export async function cancelRun(instanceId: string, featureId: string): Promise<RequestTicket> {
+  const path = `/v1/instances/${encodeURIComponent(instanceId)}/runs/${encodeURIComponent(featureId)}/cancel`;
+  rejectSyntheticInstance(instanceId, path);
+  return requestTicketOf(await postInSession(path, {}, isWireRequestTicket));
+}
+
 export function isTerminal(state: RequestOutcome): boolean {
   return state.status === 'accepted' || state.status === 'refused' || state.status === 'expired';
 }
