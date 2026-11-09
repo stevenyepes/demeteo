@@ -186,6 +186,7 @@ function renderRunShape(instance: InstanceDetail, props: Partial<Parameters<type
       onAgentChange={vi.fn()}
       onModelChange={vi.fn()}
       onEffortChange={vi.fn()}
+      agentProblem={null}
       {...props}
     />,
   );
@@ -206,6 +207,14 @@ describe('DispatchRunShapeFields', () => {
 
     expect(screen.getByRole('combobox', { name: 'Model' })).toBeEnabled();
     expect(screen.getByRole('option', { name: 'GPT-5.5 (gpt-5.5)' })).toBeInTheDocument();
+  });
+
+  it('marks the agent field with the problem it is given', () => {
+    renderRunShape(CATALOGUED, { agentProblem: 'Pick an agent it has.' });
+
+    const agent = screen.getByRole('combobox', { name: 'Default agent' });
+    expect(agent).toHaveAttribute('aria-invalid', 'true');
+    expect(agent).toHaveAccessibleDescription('Pick an agent it has.');
   });
 
   it('offers only the harnesses the target found installed, and never a test runtime', () => {

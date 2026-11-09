@@ -17,6 +17,7 @@ import {
   parseMaxCostCents,
   parseWallClockSecs,
   toStepOverrides,
+  unofferedDefaultAgent,
   usdOfCents,
 } from './dispatchForm';
 import type { HarnessCatalog, InstanceDetail, WorkflowChoice } from './fleet';
@@ -131,6 +132,22 @@ describe('modelChoicesFor', () => {
     const unanswered = { ...CATALOGUED, harnessCatalog: [{ ...CODEX, models: [], source: null }] };
     expect(modelChoicesFor(unanswered, 'codex')).toBeNull();
     expect(agentChoicesFor(unanswered)).toEqual(['codex']);
+  });
+});
+
+describe('unofferedDefaultAgent', () => {
+  it('names a project default the instance reports it cannot run, while the agent is left blank', () => {
+    const codexOnly = { ...CATALOGUED, harnessCatalog: [CODEX] };
+    expect(unofferedDefaultAgent(codexOnly, '', 'claude-code')).toBe('claude-code');
+    expect(unofferedDefaultAgent({ ...INSTANCE, harnesses: ['codex'] }, '', 'claude-code')).toBe('claude-code');
+  });
+
+  it('is null once an agent is picked, for an offered default, with no default, or with nothing reported', () => {
+    const codexOnly = { ...CATALOGUED, harnessCatalog: [CODEX] };
+    expect(unofferedDefaultAgent(codexOnly, 'codex', 'claude-code')).toBeNull();
+    expect(unofferedDefaultAgent(codexOnly, '', 'codex')).toBeNull();
+    expect(unofferedDefaultAgent(codexOnly, '', '')).toBeNull();
+    expect(unofferedDefaultAgent(INSTANCE, '', 'my-harness')).toBeNull();
   });
 });
 

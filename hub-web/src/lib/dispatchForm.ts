@@ -105,6 +105,18 @@ export function agentChoicesFor(instance: InstanceDetail): string[] {
 }
 
 /**
+ * The project's default agent when a blank agent would inherit one `instance`
+ * reports it cannot run, else `null`. The instance would accept the dispatch
+ * and fail the run once started, so the form asks for an agent instead. An
+ * instance that reports no harnesses at all is not judged.
+ */
+export function unofferedDefaultAgent(instance: InstanceDetail, agentKind: string, projectAgentKind: string): string | null {
+  const reports = instance.harnessCatalog !== null || instance.harnesses !== null;
+  if (agentKind !== '' || projectAgentKind === '' || !reports) return null;
+  return agentChoicesFor(instance).includes(projectAgentKind) ? null : projectAgentKind;
+}
+
+/**
  * `null` selects free text: `instance` reports no catalog, no entry for `kind`,
  * or an entry with no models and no source, which is a harness that has not
  * yet answered a listing.
@@ -161,8 +173,9 @@ export function hubCatalog(projects: HubProject[], workflows: WorkflowChoice[]):
  * A default the form cannot offer is left blank rather than selected: a
  * workflow the catalog does not list would be refused as `unknown_workflow`,
  * and an agent `agentChoicesFor(instance)` does not offer
- * would leave the select showing something other than its value. The default
- * model belongs to the default agent, so it is not filled in under an agent
+ * would leave the select showing something other than its value. A blank
+ * agent still inherits that default, which `unofferedDefaultAgent` refuses.
+ * The default model belongs to the default agent, so it is not filled in under an agent
  * the user picked.
  *
  * `catalog` holds the projects and their run shape; `instance` is the one

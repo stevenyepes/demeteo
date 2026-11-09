@@ -14,6 +14,7 @@ import {
   prefillFor,
   type StepOverrideDraft,
   toStepOverrides,
+  unofferedDefaultAgent,
 } from '../lib/dispatchForm';
 import type { InstanceDetail } from '../lib/fleet';
 import { useStagedAttachments } from '../lib/useStagedAttachments';
@@ -81,6 +82,11 @@ export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormPr
 
   const projectAgentKind = catalog.runShape.find((row) => row.projectId === projectId)?.agentKind ?? '';
   const workflow = workflows.find((choice) => choice.workflowId === workflowId);
+  const unoffered = unofferedDefaultAgent(instance, agentKind, projectAgentKind);
+  const agentProblem =
+    unoffered === null
+      ? null
+      : `This project's default agent, ${unoffered}, is not installed on this instance. Pick an agent it has.`;
 
   const edit = (field: PrefillField) => setEdited((held) => new Set(held).add(field));
 
@@ -110,7 +116,7 @@ export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormPr
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!spendGranted || projectId === '' || send.state !== 'editing') return;
+    if (!spendGranted || projectId === '' || agentProblem !== null || send.state !== 'editing') return;
     const cost = parseMaxCostCents(maxCostUsd);
     const wallClock = parseWallClockSecs(maxWallClockMins);
     const next: Errors = {
@@ -261,6 +267,7 @@ export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormPr
               edit('effort');
               setEffort(next);
             }}
+            agentProblem={agentProblem}
           />
           {workflow !== undefined && (
             <DispatchPipeline
@@ -302,7 +309,7 @@ export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormPr
           <span className="font-mono text-xs text-slate-400">
             {overrideSummary(overrideCount)}
           </span>
-          <Button variant="primary" type="submit" disabled={!spendGranted || projectId === '' || sending}>
+          <Button variant="primary" type="submit" disabled={!spendGranted || projectId === '' || agentProblem !== null || sending}>
             {instance.present ? 'Start feature' : 'Queue feature'}
           </Button>
         </div>

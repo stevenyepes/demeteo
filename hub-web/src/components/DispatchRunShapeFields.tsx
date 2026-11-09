@@ -17,6 +17,8 @@ interface DispatchRunShapeFieldsProps {
   onAgentChange: (agentKind: string) => void;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: EffortLevel | '') => void;
+  /** Why the agent as chosen cannot run on `instance`; the run is not sent while it is set. */
+  agentProblem: string | null;
 }
 
 const FIELD_CLASS = 'input-field disabled:cursor-not-allowed disabled:opacity-40';
@@ -32,6 +34,7 @@ export function DispatchRunShapeFields({
   onAgentChange,
   onModelChange,
   onEffortChange,
+  agentProblem,
 }: DispatchRunShapeFieldsProps) {
   const ids = { agent: useId(), model: useId(), effort: useId() };
   const choices = agentChoicesFor(instance);
@@ -49,6 +52,8 @@ export function DispatchRunShapeFields({
           id={ids.agent}
           value={agentKind}
           onChange={(event) => onAgentChange(event.target.value)}
+          aria-invalid={agentProblem !== null}
+          aria-describedby={agentProblem === null ? undefined : `${ids.agent}-problem`}
           className={`${FIELD_CLASS} font-mono`}
         >
           <option value="">Project default</option>
@@ -58,6 +63,11 @@ export function DispatchRunShapeFields({
             </option>
           ))}
         </select>
+        {agentProblem !== null && (
+          <p id={`${ids.agent}-problem`} className="text-xs text-ruby-300">
+            {agentProblem}
+          </p>
+        )}
       </div>
       <div className="flex flex-col gap-1.5">
         <label htmlFor={ids.model} className={LABEL_CLASS}>
