@@ -1,40 +1,48 @@
 import { useId } from 'react';
 
+import { EFFORT_LABELS, isEffortLevel, reconcileEffort } from '../../../src/lib/effortLevels';
 import {
-  EFFORT_LABELS,
-  EFFORT_SUPPORT,
-  isEffortLevel,
-  reconcileEffort,
-  supportedEffortsFor,
-} from '../../../src/lib/effortLevels';
-import { isOverridable, type StepOverrideDraft } from '../lib/dispatchForm';
-import type { WorkflowGraphNode } from '../lib/fleet';
+  agentChoicesFor,
+  effortsFor,
+  isOverridable,
+  type StepOverrideDraft,
+} from '../lib/dispatchForm';
+import type { InstanceDetail, WorkflowGraphNode } from '../lib/fleet';
 import { Button } from '../../../src/components/ui/Button';
+import { ModelSelect } from './ModelSelect';
 
 interface StepOverridePanelProps {
   node: Pick<WorkflowGraphNode, 'id' | 'type' | 'title'>;
   override: StepOverrideDraft;
   /** What the step runs on while its own agent inherits; blank when the form has no default either. */
   defaultAgentKind: string;
+  /** The instance the run is sent to, whose catalog says which agents, models and efforts there are. */
+  instance: InstanceDetail;
   onChange: (next: StepOverrideDraft) => void;
   onReset: () => void;
 }
-
-const AGENT_KINDS = Object.keys(EFFORT_SUPPORT);
 
 const SELECT_CLASS =
   'input-field disabled:cursor-not-allowed disabled:opacity-40';
 
 /**
  * Plain controls, not `src/components/ui/HarnessModelPicker.tsx`: that picker
- * lists models from the desktop's agent catalog, which reaches Tauri, while the
- * Hub knows neither an instance's harnesses nor their models. The agent list is
- * therefore the static `EFFORT_SUPPORT` table, and the instance is the judge.
+ * probes the desktop's own agents through Tauri, while the Hub reads what the
+ * target instance last reported of its own (`agentChoicesFor`,
+ * `modelChoicesFor`, `effortsFor`). That report can be hours old, so the
+ * instance stays the judge of what it runs.
  *
  * A field left on inherit is absent from the draft rather than `''`, so
  * `toStepOverrides` drops a step whose every field inherits.
  */
-export function StepOverridePanel({ node, override, defaultAgentKind, onChange, onReset }: StepOverridePanelProps) {
+export function StepOverridePanel({
+  node,
+  override,
+  defaultAgentKind,
+  instance,
+  onChange,
+  onReset,
+}: StepOverridePanelProps) {
   const agentId = useId();
   const modelId = useId();
   const effortId = useId();
@@ -51,14 +59,15 @@ export function StepOverridePanel({ node, override, defaultAgentKind, onChange, 
   }
 
   const effectiveAgent = override.agentKind || defaultAgentKind;
-  const efforts = supportedEffortsFor(effectiveAgent);
+  const efforts = effortsFor(instance, effectiveAgent);
+  const agentKinds = agentChoicesFor(instance);
   const agentOptions =
-    override.agentKind && !AGENT_KINDS.includes(override.agentKind) ? [...AGENT_KINDS, override.agentKind] : AGENT_KINDS;
+    override.agentKind && !agentKinds.includes(override.agentKind) ? [...agentKinds, override.agentKind] : agentKinds;
 
   const changeAgent = (agentKind: string) => {
     // The same rule as `src/components/StartFeatureModal.tsx`: a model belongs to
     // one harness, and an effort the new harness cannot run would be re-sent anyway.
-    const effort = reconcileEffort(override.effort ?? '', supportedEffortsFor(agentKind || defaultAgentKind));
+    const effort = reconcileEffort(override.effort ?? '', effortsFor(instance, agentKind || defaultAgentKind));
     onChange({ ...(agentKind ? { agentKind } : {}), ...(effort ? { effort } : {}) });
   };
 
@@ -107,14 +116,13 @@ export function StepOverridePanel({ node, override, defaultAgentKind, onChange, 
         <label htmlFor={modelId} className="text-xs font-medium text-slate-300">
           Model
         </label>
-        <input
+        <ModelSelect
           id={modelId}
-          type="text"
           value={override.model ?? ''}
-          onChange={(event) => changeModel(event.target.value)}
-          placeholder="Inherit"
-          autoComplete="off"
-          className={`${SELECT_CLASS} font-mono`}
+          onChange={changeModel}
+          instance={instance}
+          agentKind={effectiveAgent}
+          blankLabel="Inherit"
         />
       </div>
       <div className="flex flex-col gap-1.5">

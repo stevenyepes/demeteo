@@ -1,17 +1,11 @@
 import { type FormEvent, useId, useState } from 'react';
 
-import {
-  EFFORT_LABELS,
-  EFFORT_SUPPORT,
-  type EffortLevel,
-  isEffortLevel,
-  reconcileEffort,
-  supportedEffortsFor,
-} from '../../../src/lib/effortLevels';
+import { type EffortLevel, reconcileEffort } from '../../../src/lib/effortLevels';
 import { HubApiError } from '../lib/api';
 import { dispatchErrorSentence, dispatchFeature, type Enqueued } from '../lib/dispatch';
 import {
   buildDispatchRequest,
+  effortsFor,
   parseMaxCostCents,
   type Prefill,
   type PrefillField,
@@ -27,6 +21,7 @@ import { AttachmentPicker } from './AttachmentPicker';
 import { CeremonyError } from './CeremonyError';
 import { DispatchCapsFields } from './DispatchCapsFields';
 import { DispatchPipeline } from './DispatchPipeline';
+import { DispatchRunShapeFields } from './DispatchRunShapeFields';
 import { RequestStatusCard } from './RequestStatusCard';
 import { Button } from '../../../src/components/ui/Button';
 
@@ -45,8 +40,6 @@ interface DispatchFormProps {
 type Errors = { title?: string; cost?: string; wallClock?: string };
 
 type Send = { state: 'editing' } | { state: 'sending' } | { state: 'sent'; enqueued: Enqueued };
-
-const AGENT_KINDS = Object.keys(EFFORT_SUPPORT);
 
 const FIELD_CLASS =
   'input-field disabled:cursor-not-allowed disabled:opacity-40';
@@ -71,14 +64,13 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
     what: useId(),
     how: useId(),
   };
-  const agentIds = { agent: useId(), model: useId(), effort: useId() };
   const catalog = source ?? instance;
   const projects = catalog.projects ?? [];
   const workflows = catalog.workflows ?? [];
   const problemOf = (project: ProjectSummary) => (source === undefined ? null : runnerProjectProblem(project));
   const firstProjectId = projects.find((project) => problemOf(project) === null)?.id ?? '';
 
-  const [initial] = useState(() => prefillFor(catalog, firstProjectId, UNFILLED, new Set()));
+  const [initial] = useState(() => prefillFor(catalog, firstProjectId, UNFILLED, new Set(), instance));
   const [projectId, setProjectId] = useState(firstProjectId);
   const [workflowId, setWorkflowId] = useState(initial.workflowId);
   const [title, setTitle] = useState('');
@@ -95,7 +87,7 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
   const [failure, setFailure] = useState<unknown>(null);
   const attachments = useStagedAttachments();
 
-  const efforts = supportedEffortsFor(agentKind);
+  const projectAgentKind = catalog.runShape?.find((row) => row.projectId === projectId)?.agentKind ?? '';
   const workflow = workflows.find((choice) => choice.workflowId === workflowId);
 
   const edit = (field: PrefillField) => setEdited((held) => new Set(held).add(field));
@@ -111,12 +103,12 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
     edit('agentKind');
     setAgentKind(next);
     setModel('');
-    setEffort((held) => reconcileEffort(held, supportedEffortsFor(next)));
+    setEffort((held) => reconcileEffort(held, effortsFor(instance, next)));
   };
 
   const changeProject = (next: string) => {
     setProjectId(next);
-    const filled = prefillFor(catalog, next, { agentKind, model, effort, workflowId, maxCostUsd }, edited);
+    const filled = prefillFor(catalog, next, { agentKind, model, effort, workflowId, maxCostUsd }, edited, instance);
     setAgentKind(filled.agentKind);
     setModel(filled.model);
     setEffort(filled.effort);
@@ -266,72 +258,30 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
           <h2 id={ids.how} className="font-heading text-sm font-semibold text-slate-200">
             How
           </h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={agentIds.agent} className={LABEL_CLASS}>
-                Default agent
-              </label>
-              <select
-                id={agentIds.agent}
-                value={agentKind}
-                onChange={(event) => changeAgent(event.target.value)}
-                className={`${FIELD_CLASS} font-mono`}
-              >
-                <option value="">Project default</option>
-                {AGENT_KINDS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {kind}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={agentIds.model} className={LABEL_CLASS}>
-                Model
-              </label>
-              <input
-                id={agentIds.model}
-                type="text"
-                value={model}
-                onChange={(event) => {
-                  edit('model');
-                  setModel(event.target.value);
-                }}
-                placeholder="Project default"
-                autoComplete="off"
-                className={`${FIELD_CLASS} font-mono`}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={agentIds.effort} className={LABEL_CLASS}>
-                Effort
-              </label>
-              <select
-                id={agentIds.effort}
-                value={effort}
-                onChange={(event) => {
-                  edit('effort');
-                  setEffort(isEffortLevel(event.target.value) ? event.target.value : '');
-                }}
-                disabled={efforts.length === 0}
-                className={FIELD_CLASS}
-              >
-                <option value="">Project default</option>
-                {efforts.map((level) => (
-                  <option key={level} value={level}>
-                    {EFFORT_LABELS[level]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          <DispatchRunShapeFields
+            instance={instance}
+            agentKind={agentKind}
+            projectAgentKind={projectAgentKind}
+            model={model}
+            effort={effort}
+            onAgentChange={changeAgent}
+            onModelChange={(next) => {
+              edit('model');
+              setModel(next);
+            }}
+            onEffortChange={(next) => {
+              edit('effort');
+              setEffort(next);
+            }}
+          />
           {workflow !== undefined && (
             <DispatchPipeline
               key={workflow.workflowId}
               workflow={workflow}
               overrides={overrides}
               onOverridesChange={setOverrides}
-              defaultAgentKind={agentKind}
+              defaultAgentKind={agentKind || projectAgentKind}
+              instance={instance}
             />
           )}
           <DispatchCapsFields

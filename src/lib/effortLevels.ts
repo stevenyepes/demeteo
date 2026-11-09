@@ -37,8 +37,10 @@ export const EFFORT_LABELS: Readonly<Record<EffortLevel, string>> = {
  * The live source of truth for the picker is `AgentCatalogEntry.effort_levels`
  * (straight off the agent's declared Rust capabilities), so a UI that has the
  * catalog should prefer that. This table exists for the pure/offline paths
- * (the workflow editor, which has no machine context to probe) and as the
- * mirror the drift test asserts against.
+ * (the workflow editor, which has no machine context to probe), for hub-web
+ * when the target instance reports no `harness_catalog` (`effortsFor` and
+ * `agentChoicesFor` in `hub-web/src/lib/dispatchForm.ts`), and as the mirror
+ * the drift test asserts against.
  */
 export const EFFORT_SUPPORT: Readonly<Record<string, readonly EffortLevel[]>> = {
   'claude-code': EFFORT_LEVELS,

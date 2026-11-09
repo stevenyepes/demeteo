@@ -1,19 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
+import { EFFORT_LEVELS } from '../../../src/lib/effortLevels';
 import {
+  agentChoicesFor,
   buildDispatchRequest,
   type DispatchForm,
   definitionOf,
   dispatchBlocker,
   dispatchSources,
+  effortsFor,
   isOverridable,
+  modelChoicesFor,
+  type Prefill,
+  prefillFor,
   parseMaxCostCents,
   parseWallClockSecs,
   runnerProjectProblem,
   toStepOverrides,
   usdOfCents,
 } from './dispatchForm';
-import type { FleetInstance, InstanceDetail, ProjectSummary, WorkflowChoice } from './fleet';
+import type { FleetInstance, HarnessCatalog, InstanceDetail, ProjectSummary, WorkflowChoice } from './fleet';
 
 const INSTANCE: InstanceDetail = {
   id: '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21',
@@ -30,8 +36,31 @@ const INSTANCE: InstanceDetail = {
   projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: null, providerKind: null }],
   liveRuns: [],
   harnesses: null,
+  harnessCatalog: null,
   workflows: [{ workflowId: 'wf-1', version: 3, name: 'Default', graph: null }],
   runShape: [],
+};
+
+const CODEX: HarnessCatalog = {
+  kind: 'codex',
+  models: [{ value: 'gpt-5.5', name: 'GPT-5.5' }],
+  effortLevels: ['low', 'medium'],
+  source: 'bundled',
+  probedAt: 1_700_000_000,
+};
+
+const OPENCODE: HarnessCatalog = {
+  kind: 'opencode',
+  models: [{ value: 'anthropic/claude-opus', name: 'Claude Opus' }],
+  effortLevels: null,
+  source: 'probed',
+  probedAt: 1_700_000_000,
+};
+
+const CATALOGUED: InstanceDetail = {
+  ...INSTANCE,
+  harnesses: ['claude-code', 'codex', 'opencode'],
+  harnessCatalog: [CODEX, OPENCODE],
 };
 
 const CHOICE: WorkflowChoice = {
@@ -59,6 +88,77 @@ const FORM: DispatchForm = {
   maxBudgetCents: 500,
   maxWallClockSecs: undefined,
 };
+
+describe('agentChoicesFor', () => {
+  it('offers the harnesses the instance found installed', () => {
+    expect(agentChoicesFor(CATALOGUED)).toEqual(['codex', 'opencode']);
+  });
+
+  it('offers none when the instance probed and found none installed', () => {
+    expect(agentChoicesFor({ ...CATALOGUED, harnessCatalog: [] })).toEqual([]);
+  });
+
+  it('falls back to the registered harnesses, never a test runtime, from an instance with no catalog', () => {
+    expect(agentChoicesFor({ ...INSTANCE, harnesses: ['noop', 'claude-code', 'stub', 'pi'] })).toEqual([
+      'claude-code',
+      'pi',
+    ]);
+  });
+
+  it('falls back to every kind this build knows from an instance reporting neither', () => {
+    expect(agentChoicesFor(INSTANCE)).toEqual(['claude-code', 'codex', 'opencode', 'hermes']);
+  });
+});
+
+describe('modelChoicesFor', () => {
+  it("lists the kind's models and where they came from", () => {
+    expect(modelChoicesFor(CATALOGUED, 'codex')).toEqual({ models: CODEX.models, source: 'bundled' });
+  });
+
+  it('is free text for a kind the catalog has no entry for, or with no catalog at all', () => {
+    expect(modelChoicesFor(CATALOGUED, 'claude-code')).toBeNull();
+    expect(modelChoicesFor(CATALOGUED, '')).toBeNull();
+    expect(modelChoicesFor(INSTANCE, 'codex')).toBeNull();
+  });
+
+  it('is an empty list, not free text, for an entry that lists no model', () => {
+    const empty = { ...CATALOGUED, harnessCatalog: [{ ...CODEX, models: [] }] };
+    expect(modelChoicesFor(empty, 'codex')).toEqual({ models: [], source: 'bundled' });
+  });
+});
+
+describe('effortsFor', () => {
+  it("takes the instance's levels for a kind it reports them for", () => {
+    expect(effortsFor(CATALOGUED, 'codex')).toEqual(['low', 'medium']);
+  });
+
+  it("falls back to this build's table where the instance gives none", () => {
+    expect(effortsFor(CATALOGUED, 'opencode')).toEqual(EFFORT_LEVELS);
+    expect(effortsFor(INSTANCE, 'codex')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(effortsFor(CATALOGUED, 'hermes')).toEqual([]);
+  });
+});
+
+describe('prefillFor', () => {
+  const UNFILLED: Prefill = { agentKind: '', model: '', effort: '', workflowId: '', maxCostUsd: '' };
+  const withDefaults = (agentKind: string): InstanceDetail => ({
+    ...INSTANCE,
+    runShape: [
+      { projectId: 'p-1', agentKind, model: 'm', effort: 'high', workflowId: null, maxBudgetCents: 500 },
+    ],
+  });
+
+  it("fills the project's default agent when the target can run it, clamping effort to the target's levels", () => {
+    const filled = prefillFor(withDefaults('codex'), 'p-1', UNFILLED, new Set(), CATALOGUED);
+    expect(filled).toMatchObject({ agentKind: 'codex', model: 'm', effort: 'medium' });
+  });
+
+  it('leaves the agent blank when the target does not offer it, judged on the target alone', () => {
+    const source = { ...withDefaults('claude-code'), harnessCatalog: [{ ...CODEX, kind: 'claude-code' }] };
+    const filled = prefillFor(source, 'p-1', UNFILLED, new Set(), CATALOGUED);
+    expect(filled.agentKind).toBe('');
+  });
+});
 
 describe('parseMaxCostCents', () => {
   it.each(['', '   ', '-1', '0', '0.00', '1e2', 'abc', '1.234', '1.', '.5', '+1', '0x10', '1,5', '12 5'])(

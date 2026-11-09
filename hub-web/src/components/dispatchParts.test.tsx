@@ -3,9 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { TONE_CHIP } from '../../../src/lib/runStatus';
-import type { FleetInstance } from '../lib/fleet';
+import type { FleetInstance, HarnessCatalog, InstanceDetail } from '../lib/fleet';
 import { AttachmentPicker } from './AttachmentPicker';
 import { DispatchCapsFields } from './DispatchCapsFields';
+import { DispatchRunShapeFields } from './DispatchRunShapeFields';
+import { ModelSelect } from './ModelSelect';
 import { DispatchTargetList } from './DispatchTargetList';
 import { RequestStatusCard } from './RequestStatusCard';
 import { StepOverridePanel } from './StepOverridePanel';
@@ -47,13 +49,196 @@ describe('DispatchCapsFields', () => {
   });
 });
 
+/** Reports neither harnesses nor a catalog, as an instance that predates both does. */
+const UNREPORTED: InstanceDetail = {
+  id: '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21',
+  kind: 'runner',
+  present: true,
+  connectedAt: null,
+  lastSeen: null,
+  installId: null,
+  os: 'linux',
+  arch: 'x86_64',
+  version: '1.4.0',
+  scopes: ['read', 'spend'],
+  readGranted: true,
+  projects: [],
+  liveRuns: [],
+  harnesses: null,
+  harnessCatalog: null,
+  workflows: [],
+  runShape: [],
+};
+
+const CODEX: HarnessCatalog = {
+  kind: 'codex',
+  models: [
+    { value: 'gpt-5.5', name: 'GPT-5.5' },
+    { value: 'gpt-5.5-mini', name: 'gpt-5.5-mini' },
+  ],
+  effortLevels: ['low', 'medium'],
+  source: 'probed',
+  probedAt: 1_700_000_000,
+};
+
+const CATALOGUED: InstanceDetail = {
+  ...UNREPORTED,
+  harnesses: ['codex', 'noop', 'opencode'],
+  harnessCatalog: [CODEX, { ...CODEX, kind: 'opencode', models: [{ value: 'big-pickle', name: 'Big Pickle' }] }],
+};
+
+const optionLabels = (select: HTMLElement) => within(select).getAllByRole('option').map((option) => option.textContent);
+
 const agentNode = { id: 'implement', type: 'agent', title: 'Implement' };
 
 function renderPanel(props: Partial<Parameters<typeof StepOverridePanel>[0]> = {}) {
   const handlers = { onChange: vi.fn(), onReset: vi.fn() };
-  render(<StepOverridePanel node={agentNode} override={{}} defaultAgentKind="claude-code" {...handlers} {...props} />);
+  render(
+    <StepOverridePanel
+      node={agentNode}
+      override={{}}
+      defaultAgentKind="claude-code"
+      instance={UNREPORTED}
+      {...handlers}
+      {...props}
+    />,
+  );
   return handlers;
 }
+
+function renderModel(props: Partial<Parameters<typeof ModelSelect>[0]> = {}) {
+  const onChange = vi.fn();
+  render(
+    <>
+      <label htmlFor="model">Model</label>
+      <ModelSelect
+        id="model"
+        value=""
+        onChange={onChange}
+        instance={CATALOGUED}
+        agentKind="codex"
+        blankLabel="Project default"
+        {...props}
+      />
+    </>,
+  );
+  return onChange;
+}
+
+describe('ModelSelect', () => {
+  it('offers a blank default and each listed model, and reports the one picked', async () => {
+    const onChange = renderModel();
+    const select = screen.getByRole('combobox', { name: 'Model' });
+
+    expect(optionLabels(select)).toEqual(['Project default', 'GPT-5.5 (gpt-5.5)', 'gpt-5.5-mini']);
+    await userEvent.selectOptions(select, 'gpt-5.5-mini');
+    expect(onChange).toHaveBeenLastCalledWith('gpt-5.5-mini');
+  });
+
+  it('keeps a held model the instance did not list, and says so', () => {
+    renderModel({ value: 'o3' });
+
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('o3');
+    expect(screen.getByRole('option', { name: 'o3 (not reported by this instance)' })).toBeInTheDocument();
+  });
+
+  it('is disabled until an agent is in effect, on an instance that reports a catalog', () => {
+    renderModel({ agentKind: '' });
+
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Pick an agent first' })).toBeInTheDocument();
+  });
+
+  it.each<[string, InstanceDetail, string]>([
+    ['reports no catalog, with no agent in effect', UNREPORTED, ''],
+    ['reports no catalog', UNREPORTED, 'codex'],
+    ['has no entry for the agent', CATALOGUED, 'claude-code'],
+  ])('is free text when the instance %s', async (_, instance, agentKind) => {
+    const onChange = renderModel({ instance, agentKind });
+    const input = screen.getByRole('textbox', { name: 'Model' });
+
+    expect(input).toHaveAttribute('placeholder', 'Project default');
+    await userEvent.type(input, 'x');
+    expect(onChange).toHaveBeenLastCalledWith('x');
+  });
+
+  it('says in words when the list is the bundled one', () => {
+    renderModel({ instance: { ...CATALOGUED, harnessCatalog: [{ ...CODEX, source: 'bundled' }] } });
+
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveAccessibleDescription(/Bundled list/);
+  });
+
+  it('says nothing of the source for a probed list', () => {
+    renderModel();
+
+    expect(screen.queryByText(/Bundled list/)).toBeNull();
+  });
+});
+
+function renderRunShape(instance: InstanceDetail, props: Partial<Parameters<typeof DispatchRunShapeFields>[0]> = {}) {
+  render(
+    <DispatchRunShapeFields
+      instance={instance}
+      agentKind=""
+      projectAgentKind=""
+      model=""
+      effort=""
+      onAgentChange={vi.fn()}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+      {...props}
+    />,
+  );
+}
+
+describe('DispatchRunShapeFields', () => {
+  it("builds the Model select from the target's catalog for the chosen agent", () => {
+    renderRunShape(CATALOGUED, { agentKind: 'opencode' });
+
+    expect(optionLabels(screen.getByRole('combobox', { name: 'Model' }))).toEqual([
+      'Project default',
+      'Big Pickle (big-pickle)',
+    ]);
+  });
+
+  it("follows the project's default agent while none is chosen", () => {
+    renderRunShape(CATALOGUED, { projectAgentKind: 'codex' });
+
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'GPT-5.5 (gpt-5.5)' })).toBeInTheDocument();
+  });
+
+  it('offers only the harnesses the target found installed, and never a test runtime', () => {
+    renderRunShape(CATALOGUED);
+
+    expect(optionLabels(screen.getByRole('combobox', { name: 'Default agent' }))).toEqual([
+      'Project default',
+      'codex',
+      'opencode',
+    ]);
+  });
+
+  it('never offers noop from an instance that reports harnesses but no catalog', () => {
+    renderRunShape({ ...UNREPORTED, harnesses: ['claude-code', 'noop', 'stub'] });
+
+    expect(optionLabels(screen.getByRole('combobox', { name: 'Default agent' }))).toEqual([
+      'Project default',
+      'claude-code',
+    ]);
+  });
+
+  it('is a text input for the model when the target reports no catalog', () => {
+    renderRunShape(UNREPORTED, { agentKind: 'codex' });
+
+    expect(screen.getByRole('textbox', { name: 'Model' })).toBeInTheDocument();
+  });
+
+  it("offers the target's own effort levels for the chosen agent", () => {
+    renderRunShape(CATALOGUED, { agentKind: 'codex' });
+
+    expect(optionLabels(screen.getByRole('combobox', { name: 'Effort' }))).toEqual(['Project default', 'Low', 'Medium']);
+  });
+});
 
 describe('StepOverridePanel', () => {
   it('reports the agent, model and effort set on a step', async () => {
@@ -98,7 +283,14 @@ describe('StepOverridePanel', () => {
 
   it('says effort is unsupported when the step runs on hermes, inherited or pinned', () => {
     const { unmount } = render(
-      <StepOverridePanel node={agentNode} override={{}} defaultAgentKind="hermes" onChange={vi.fn()} onReset={vi.fn()} />,
+      <StepOverridePanel
+        node={agentNode}
+        override={{}}
+        defaultAgentKind="hermes"
+        instance={UNREPORTED}
+        onChange={vi.fn()}
+        onReset={vi.fn()}
+      />,
     );
     expect(screen.getByText(/hermes has no per-run effort setting/)).toBeVisible();
     expect(screen.getByLabelText('Effort')).toBeDisabled();
@@ -119,6 +311,20 @@ describe('StepOverridePanel', () => {
     renderPanel();
 
     expect(screen.getByText(/harness_not_registered/)).toBeVisible();
+  });
+
+  it("follows the target's catalog for agents, the inherited agent's models and its efforts", () => {
+    renderPanel({ instance: CATALOGUED, defaultAgentKind: 'codex' });
+
+    expect(optionLabels(screen.getByLabelText('Agent'))).toEqual(['Inherit (codex)', 'codex', 'opencode']);
+    expect(optionLabels(screen.getByLabelText('Model'))).toEqual(['Inherit', 'GPT-5.5 (gpt-5.5)', 'gpt-5.5-mini']);
+    expect(optionLabels(screen.getByLabelText('Effort'))).toEqual(['Inherit', 'Low', 'Medium']);
+  });
+
+  it("switches the model list to the step's own agent", () => {
+    renderPanel({ instance: CATALOGUED, defaultAgentKind: 'codex', override: { agentKind: 'opencode' } });
+
+    expect(optionLabels(screen.getByLabelText('Model'))).toEqual(['Inherit', 'Big Pickle (big-pickle)']);
   });
 });
 

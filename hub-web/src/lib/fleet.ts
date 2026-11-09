@@ -71,6 +71,23 @@ export type RunShapeDefaults = {
   maxBudgetCents: number | null;
 };
 
+export type ModelChoice = { value: string; name: string };
+
+/**
+ * One harness the instance found installed on its own machine and the models
+ * it lists there. `source` is `config`, `probed` or `bundled`, or `null` from an
+ * instance that does not say; a bundled list is the instance's built-in guess,
+ * not the harness's answer. `effortLevels` is `null` when the instance does not
+ * say, never "supports none".
+ */
+export type HarnessCatalog = {
+  kind: string;
+  models: ModelChoice[];
+  effortLevels: EffortLevel[] | null;
+  source: string | null;
+  probedAt: number;
+};
+
 export type InstanceDetail = {
   id: string;
   kind: InstanceKind;
@@ -87,6 +104,11 @@ export type InstanceDetail = {
   projects: ProjectSummary[] | null;
   liveRuns: RunSummary[] | null;
   harnesses: string[] | null;
+  /**
+   * `null` without `read`, before a snapshot, and from an instance that has
+   * not reported one; `[]` when it probed and found no harness installed.
+   */
+  harnessCatalog: HarnessCatalog[] | null;
   workflows: WorkflowChoice[] | null;
   runShape: RunShapeDefaults[] | null;
 };
@@ -147,6 +169,15 @@ type WireRunShape = {
   default_max_budget_cents: number | null;
 };
 
+type WireHarnessCatalog = {
+  kind: string;
+  models: ModelChoice[];
+  /** Any strings: an effort this build does not know is dropped rather than refusing the answer. */
+  effort_levels: string[] | null;
+  source: string | null;
+  probed_at: number;
+};
+
 type WireInstanceDetail = {
   id: string;
   kind?: unknown;
@@ -162,6 +193,7 @@ type WireInstanceDetail = {
   projects: WireProject[] | null;
   live_runs: WireRunSummary[] | null;
   harnesses: string[] | null;
+  harness_catalog?: WireHarnessCatalog[] | null;
   workflows: WireWorkflow[] | null;
   run_shape: WireRunShape[] | null;
 };
@@ -232,8 +264,19 @@ function instanceDetailOf(wire: WireInstanceDetail): InstanceDetail {
     projects: wire.projects === null ? null : wire.projects.map(projectOf),
     liveRuns: wire.live_runs === null ? null : wire.live_runs.map(runSummaryOf),
     harnesses: wire.harnesses === null ? null : [...wire.harnesses],
+    harnessCatalog: wire.harness_catalog == null ? null : wire.harness_catalog.map(harnessCatalogOf),
     workflows: wire.workflows === null ? null : wire.workflows.map(workflowOf),
     runShape: wire.run_shape === null ? null : wire.run_shape.map(runShapeOf),
+  };
+}
+
+function harnessCatalogOf(wire: WireHarnessCatalog): HarnessCatalog {
+  return {
+    kind: wire.kind,
+    models: wire.models.map((model) => ({ value: model.value, name: model.name })),
+    effortLevels: wire.effort_levels === null ? null : wire.effort_levels.filter(isEffortLevel),
+    source: wire.source,
+    probedAt: wire.probed_at,
   };
 }
 
@@ -356,6 +399,21 @@ const isWireRunShape: Guard<WireRunShape> = (value): value is WireRunShape =>
   isStringOrNull(memberOf(value, 'default_workflow_id')) &&
   isNumberOrNull(memberOf(value, 'default_max_budget_cents'));
 
+const isWireModelChoice: Guard<ModelChoice> = (value): value is ModelChoice =>
+  typeof memberOf(value, 'value') === 'string' && typeof memberOf(value, 'name') === 'string';
+
+export const isHarnessCatalog: Guard<WireHarnessCatalog> = (value): value is WireHarnessCatalog => {
+  const models = memberOf(value, 'models');
+  return (
+    typeof memberOf(value, 'kind') === 'string' &&
+    Array.isArray(models) &&
+    models.every(isWireModelChoice) &&
+    isListOrNull(memberOf(value, 'effort_levels'), isString) &&
+    isStringOrNull(memberOf(value, 'source')) &&
+    typeof memberOf(value, 'probed_at') === 'number'
+  );
+};
+
 const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireInstanceDetail =>
   typeof memberOf(value, 'id') === 'string' &&
   typeof memberOf(value, 'present') === 'boolean' &&
@@ -370,6 +428,7 @@ const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireIn
   isListOrNull(memberOf(value, 'projects'), isWireProject) &&
   isListOrNull(memberOf(value, 'live_runs'), isWireRunSummary) &&
   isListOrNull(memberOf(value, 'harnesses'), isString) &&
+  (memberOf(value, 'harness_catalog') === undefined || isListOrNull(memberOf(value, 'harness_catalog'), isHarnessCatalog)) &&
   isListOrNull(memberOf(value, 'workflows'), isWireWorkflow) &&
   isListOrNull(memberOf(value, 'run_shape'), isWireRunShape);
 

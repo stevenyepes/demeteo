@@ -7,7 +7,7 @@ import {
 } from '../../../src/lib/effortLevels';
 import type { StepOverride } from '../../../src/types';
 import type { DispatchRequest } from './dispatch';
-import type { FleetInstance, InstanceDetail, ProjectSummary, WorkflowChoice } from './fleet';
+import type { FleetInstance, InstanceDetail, ModelChoice, ProjectSummary, WorkflowChoice } from './fleet';
 
 export type FieldResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -45,6 +45,12 @@ export type Prefill = {
 
 export type PrefillField = keyof Prefill;
 
+/** What a Model field offers for one harness; `source` as `HarnessCatalog.source`. */
+export type ModelChoices = { models: ModelChoice[]; source: string | null };
+
+/** Registered by an instance for its own tests: it would run them, but no dispatch may name one. */
+const TEST_RUNTIMES: readonly string[] = ['noop', 'stub'];
+
 const DOLLARS = /^(\d+)(?:\.(\d{1,2}))?$/;
 const WHOLE = /^\d+$/;
 
@@ -74,6 +80,30 @@ export function usdOfCents(cents: number): string {
 }
 
 /**
+ * The agents a dispatch to `instance` may name: the harnesses it found
+ * installed, else the kinds it registered, else, from an instance that reports
+ * neither, every kind this build knows. A reported empty catalog offers none:
+ * the instance probed and found nothing installed.
+ */
+export function agentChoicesFor(instance: InstanceDetail): string[] {
+  const reported = instance.harnessCatalog?.map((entry) => entry.kind) ?? instance.harnesses;
+  if (reported === null) return Object.keys(EFFORT_SUPPORT);
+  return reported.filter((kind) => !TEST_RUNTIMES.includes(kind));
+}
+
+/** `null` selects free text: `instance` reports no catalog, or no entry for `kind`. */
+export function modelChoicesFor(instance: InstanceDetail, kind: string): ModelChoices | null {
+  const entry = instance.harnessCatalog?.find((candidate) => candidate.kind === kind);
+  return entry === undefined ? null : { models: entry.models, source: entry.source };
+}
+
+/** The instance's own answer for `kind` where it gives one, else this build's table. */
+export function effortsFor(instance: InstanceDetail, kind: string): readonly EffortLevel[] {
+  const entry = instance.harnessCatalog?.find((candidate) => candidate.kind === kind);
+  return entry?.effortLevels ?? supportedEffortsFor(kind);
+}
+
+/**
  * What the form shows once `projectId` is chosen: each field in `edited`
  * keeps its `held` value, and the rest take the project's run-shape default,
  * or blank where it has none, so one project's defaults never carry over to
@@ -81,20 +111,24 @@ export function usdOfCents(cents: number): string {
  *
  * A default the form cannot offer is left blank rather than selected: a
  * workflow the instance did not report would be refused as
- * `unknown_workflow`, and an agent kind this build has no option for would
- * leave the select showing something other than its value. The default model
- * belongs to the default agent, so it is not filled in under an agent the
- * user picked.
+ * `unknown_workflow`, and an agent `agentChoicesFor(target)` does not offer
+ * would leave the select showing something other than its value. The default
+ * model belongs to the default agent, so it is not filled in under an agent
+ * the user picked.
+ *
+ * `instance` holds the projects and their run shape; `target` is the instance
+ * the run is sent to, which alone says what agents and efforts there are.
  */
 export function prefillFor(
   instance: InstanceDetail,
   projectId: string,
   held: Prefill,
   edited: ReadonlySet<PrefillField>,
+  target: InstanceDetail,
 ): Prefill {
   const row = instance.runShape?.find((entry) => entry.projectId === projectId);
   const workflows = instance.workflows ?? [];
-  const defaultAgent = row?.agentKind && Object.keys(EFFORT_SUPPORT).includes(row.agentKind) ? row.agentKind : '';
+  const defaultAgent = row?.agentKind && agentChoicesFor(target).includes(row.agentKind) ? row.agentKind : '';
   const agentKind = edited.has('agentKind') ? held.agentKind : defaultAgent;
   const keepModel = edited.has('model') || edited.has('agentKind');
   const workflowId = edited.has('workflowId')
@@ -103,7 +137,7 @@ export function prefillFor(
   return {
     agentKind,
     model: keepModel ? held.model : (row?.model ?? ''),
-    effort: reconcileEffort(edited.has('effort') ? held.effort : (row?.effort ?? ''), supportedEffortsFor(agentKind)),
+    effort: reconcileEffort(edited.has('effort') ? held.effort : (row?.effort ?? ''), effortsFor(target, agentKind)),
     workflowId,
     maxCostUsd: edited.has('maxCostUsd') ? held.maxCostUsd : usdOfCents(row?.maxBudgetCents ?? 0),
   };
