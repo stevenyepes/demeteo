@@ -94,7 +94,12 @@ const WIRE_RUN = {
   tickets: { completed: 1, failed: 0, running: 2 },
 };
 
-const WIRE_PROJECT = { id: 'p-1', name: 'demeteo', remote_url: 'https://example.com/demeteo.git' };
+const WIRE_PROJECT = {
+  id: 'p-1',
+  name: 'demeteo',
+  remote_url: 'https://example.com/demeteo.git',
+  provider_kind: 'github',
+};
 
 const WIRE_NODE = { id: 's-implement', type: 'agent', title: 'Implement', position: { x: 120, y: 40 } };
 
@@ -363,7 +368,7 @@ describe('getInstance', () => {
       version: '1.4.0',
       scopes: ['read', 'spend', 'gates'],
       readGranted: true,
-      projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: 'https://example.com/demeteo.git' }],
+      projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: 'https://example.com/demeteo.git', providerKind: 'github' }],
       liveRuns: [
         {
           instanceId: INSTANCE_ID,
@@ -525,8 +530,17 @@ describe('getInstance', () => {
     const detail = await getInstance(INSTANCE_ID);
     const [project] = detail.projects ?? [];
 
-    expect(Object.keys(project ?? {}).sort()).toEqual(['id', 'name', 'remoteUrl']);
+    expect(Object.keys(project ?? {}).sort()).toEqual(['id', 'name', 'providerKind', 'remoteUrl']);
     expect(JSON.stringify(detail)).not.toContain('/home/u/secret');
+  });
+
+  it('reads a project from a Hub that predates provider_kind as having none', async () => {
+    const { provider_kind: _omitted, ...older } = WIRE_PROJECT;
+    stubFetch([get(DETAIL_PATH, { ...WIRE_DETAIL, projects: [older] })]);
+
+    const detail = await getInstance(INSTANCE_ID);
+
+    expect(detail.projects?.[0]?.providerKind).toBeNull();
   });
 
   it('carries no member of the detail it does not name', async () => {

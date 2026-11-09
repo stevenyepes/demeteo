@@ -40,7 +40,13 @@ export type FleetInstance = {
   projectCount: number | null;
 };
 
-export type ProjectSummary = { id: string; name: string; remoteUrl: string | null };
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  remoteUrl: string | null;
+  /** `github` or `gitlab`; `null` for a Project with no Git host, or from a desktop or Hub that predates the field. */
+  providerKind: string | null;
+};
 
 export type WorkflowGraphNode = {
   id: string;
@@ -113,7 +119,7 @@ type WireFleetInstance = {
   project_count: number | null;
 };
 
-type WireProject = { id: string; name: string; remote_url: string | null };
+type WireProject = { id: string; name: string; remote_url: string | null; provider_kind?: string | null };
 
 type WireGraphNode = {
   id: string;
@@ -263,7 +269,7 @@ function runShapeOf(wire: WireRunShape): RunShapeDefaults {
 }
 
 function projectOf(wire: WireProject): ProjectSummary {
-  return { id: wire.id, name: wire.name, remoteUrl: wire.remote_url };
+  return { id: wire.id, name: wire.name, remoteUrl: wire.remote_url, providerKind: wire.provider_kind ?? null };
 }
 
 function scopesOf(scopes: unknown[]): HubScope[] {
@@ -305,7 +311,8 @@ const isFleet: Guard<{ instances: WireFleetInstance[] }> = (
 const isWireProject: Guard<WireProject> = (value): value is WireProject =>
   typeof memberOf(value, 'id') === 'string' &&
   typeof memberOf(value, 'name') === 'string' &&
-  isStringOrNull(memberOf(value, 'remote_url'));
+  isStringOrNull(memberOf(value, 'remote_url')) &&
+  (memberOf(value, 'provider_kind') === undefined || isStringOrNull(memberOf(value, 'provider_kind')));
 
 const isWirePosition: Guard<{ x: number; y: number }> = (value): value is { x: number; y: number } =>
   typeof memberOf(value, 'x') === 'number' && typeof memberOf(value, 'y') === 'number';

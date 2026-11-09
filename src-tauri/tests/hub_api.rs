@@ -695,8 +695,8 @@ async fn an_instance_shows_its_projects_and_live_runs_and_nothing_unreported() {
     assert_eq!(
         detail["projects"],
         json!([
-            {"id": "p-1", "name": "demeteo", "remote_url": "https://git.example/demeteo.git"},
-            {"id": "p-2", "name": "scratch", "remote_url": null},
+            {"id": "p-1", "name": "demeteo", "remote_url": "https://git.example/demeteo.git", "provider_kind": null},
+            {"id": "p-2", "name": "scratch", "remote_url": null, "provider_kind": null},
         ])
     );
     assert_eq!(member(&detail, "harnesses"), &Value::Null);
