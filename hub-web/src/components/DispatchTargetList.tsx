@@ -12,9 +12,10 @@ interface DispatchTargetListProps {
 }
 
 /**
- * Desktop instances only: no runner rows and no "unattended" toggle, because
- * runner dispatch is not built (docs/HUB.md §10) and a desktop run always
- * parks its gates for a human.
+ * Desktop instances only: no runner rows and no "unattended" toggle. A runner
+ * start must also name the source desktop whose snapshot the Hub resolves it
+ * from (docs/HUB.md §6.4), which this form has no step for yet; a desktop run
+ * always parks its gates for a human.
  *
  * Offline does not disable a row — a request to an absent instance queues
  * until it reconnects. Only a missing `spend` scope does, since the instance
