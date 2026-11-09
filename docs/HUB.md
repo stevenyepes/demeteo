@@ -20,7 +20,7 @@
 
 ## 1. Summary
 
-Decisions [62–69](DECISIONS.md#1-the-locked-decisions) are the short form of what
+Decisions [62–72](DECISIONS.md#1-the-locked-decisions) are the short form of what
 follows. Each row here has a section below that states the rejected alternative in
 full.
 
@@ -29,12 +29,13 @@ full.
 | 62 | A browser control plane (the Hub) is in scope; reverses [`OPEN_QUESTIONS.md` §17](OPEN_QUESTIONS.md#17-other-captured-items) | keeping a web companion out of scope | one view over a fleet, and a gate decided away from the machine, are needs the desktop cannot meet |
 | 63 | Single tenant: one person, who also operates the Hub | hosted multi-tenant (the 2026-10-02 answer); teams | a Hub that mints git tokens (71) would put every tenant's repositories behind one breach; the passkey endorsement chain has no notion of membership |
 | 64 | Desktops and runners pair and each hold one outbound `wss`; the Hub dials neither | unpaired runners relayed by a desktop (the 2026-10-02 answer); the Hub dialing runners over SSH; the Hub storing PATs or long-lived SSH keys | a run must start while the desktop is off; NAT; a runner's pairing secrets are sealed by `systemd-creds` — see [decision 64](DECISIONS.md#64--hub-instances-detail) |
-| 65 | The Hub builds future runner `RunSpec`s from desktop-reported snapshots with local paths stripped | Hub-side authoring of Projects and Workflows; Workflows read from repo files | a second editor plus drift; a new concept |
+| 65 | The Hub owns its own Projects and Workflows (the embedded starters), and a dispatch to a runner is built from them alone; a desktop dispatch names the desktop's own (amended 2026-11-09) | syncing with a desktop's copy; dispatch through a source desktop's snapshot (the 2026-10-02 answer); Hub-authored Workflows in v1 | a runner run must not need a desktop; the Hub signed what a desktop's scrubber left — see §6.4 |
 | 66 | A Gate may be decided from the Hub by a WebAuthn assertion the desktop verifies against pinned passkeys | a session plus a step-up for some gates; read-only gates; manual per-desktop passkey acceptance | a compromised Hub could approve ordinary gates; see §8 |
 | 67 | Scopes `read` / `spend` / `gates`, toggled and enforced on the instance; local per-run and rolling-24-hour ceilings | a `logs` scope; MCP's `configure`; toggle-only scopes | transcripts and diffs never leave an instance; a Hub-supplied cap is a cap the Hub can raise — see §7 |
 | 68 | Postgres plus OpenBao (Transit) as Docker Compose: `hub`, `postgres`, `openbao`, `caddy` | HashiCorp Vault; Cosmian/Eviden KMS | BSL is not open source; source-available licensing — see §9 |
 | 69 | `demeteo-hub`, `demeteo-hub-protocol` and `hub-web/` | the Hub linking `demeteo-core` in v1 | it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls |
 | 71 | The Hub mints a short-lived git token per runner run, and stores none: from a GitHub App key held in OpenBao, or from a GitLab bot user's OAuth refresh token | a runner storing its own git credential; the Hub storing PATs; SSH certificate authorities | nothing standing on an idle runner; one place to revoke; acceptable only single-tenant — see [decision 71](DECISIONS.md#71--runner-git-credentials-detail) |
+| 72 | Each instance probes its own harnesses' models and reports them as `harness_catalog`; amends 70 | the Hub, or a desktop, probing a runner; free text only | either reads the wrong machine and needs its credentials; a guessed slug fails after the run starts — see §5 *Harness catalog* |
 
 ---
 
@@ -42,17 +43,17 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep; and git tokens (§6.5): `POST /git-token`, admitted like the socket, minting a GitHub App installation token through a JWT signed in Transit. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On an instance*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
-| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, a `start_feature`'s optional `runner` start (§6.1), snapshots (Features, harness kinds and each Project's `provider_kind` included, decision 70), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
-| `hub-web/` (second Vite entry) | **built** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`. Runs reads `GET /v1/runs` into Needs-you, Active and Finished bands with one run's preview beside the list; Run reads `GET /v1/instances/{instance_id}/runs/{feature_id}`, polling every 5 s while the run is running, and draws the pinned Workflow on the `src/components/canvas` strip with its steps, ticket progress, events and a git-token problem the runner reported (§6.5), decides a pending gate (approve or cancel, after a passkey challenge, §8), re-points a step (`set_step_assignment`), and cancels a running run (`cancel_feature`, behind an inline confirm and no passkey, as the route asks only `spend`); Dispatch picks a desktop or a runner; for a runner, a source desktop reporting `read` too, chosen for the user when only one qualifies, whose snapshot supplies the Project and Workflow and is named as `source_instance_id` (§6.4). It offers a Project and Workflow from that snapshot, caps and attachments, uploads the attachments to the target and queues the `start_feature`, following the request to its outcome. For a runner it greys out, with the reason, a Project the Hub would refuse or that has no runner path yet — no `provider_kind`, a remote not of the `https://host/owner/repo` shape, or GitLab (§10); a Workflow holding the scrub mask is the one refusal it cannot foresee, since the browser is sent graphs only. Git hosts connects and removes GitHub Apps (§6.5). `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep; and git tokens (§6.5): `POST /git-token`, admitted like the socket, minting a GitHub App installation token through a JWT signed in Transit; and Hub Projects and Workflows (§6.4): the tenant's own Projects under `/v1/projects`, the embedded starters at `GET /v1/workflows`, and a dispatch to a runner built from the two. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On an instance*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
+| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, a `start_feature`'s optional `runner` start (§6.1), snapshots (Features, harness kinds and each Project's `provider_kind` included, decision 70, and the harness catalog, decision 72), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
+| `hub-web/` (second Vite entry) | **built** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`. Runs reads `GET /v1/runs` into Needs-you, Active and Finished bands with one run's preview beside the list; Run reads `GET /v1/instances/{instance_id}/runs/{feature_id}`, polling every 5 s while the run is running, and draws the pinned Workflow on the `src/components/canvas` strip with its steps, ticket progress, events and a git-token problem the runner reported (§6.5), decides a pending gate (approve or cancel, after a passkey challenge, §8), re-points a step (`set_step_assignment`), and cancels a running run (`cancel_feature`, behind an inline confirm and no passkey, as the route asks only `spend`); Dispatch picks a desktop or a runner. For a desktop it offers a Project and Workflow from that desktop's snapshot; for a runner, one of this Hub's own Projects and one of its embedded starters (§6.4), and a state that links to Projects when there are none. A GitLab Project is greyed out for a runner, with the reason in words. The default agent is one of the target's harnesses, and the model a select over what the target's catalog lists for the agent in effect, free text only where the target reports no list (§5 *Harness catalog*). It takes caps and attachments, uploads the attachments to the target and queues the `start_feature`, following the request to its outcome. Projects at `#/projects` lists, creates, edits and removes the Hub's own Projects: a repository pasted as `https://host/owner/repo` and the run-shape defaults a runner dispatch fills in. Git hosts connects and removes GitHub Apps (§6.5). `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first. **For a runner** (§4 *Pairing a runner by device code*), `demeteo-core` also has the device-code client (`HubPairing::begin_device_pairing`) and the sealed store (`SealedSecretStore`, migration `V68__hub_sealed_secrets.sql`), and composes both in `ExecutionMode::LocalOnly` when the caller hands it a store (`build_core_context_with_hub_store`). `demeteo-runner serve` holds that pairing and starts its socket; `demeteo-runner hub pair`, `status`, `policy`, `log` and `disconnect` call the `hub_*` methods of its control socket (`crates/demeteo-runner/src/rpc/hub.rs`), which a desktop's Settings › Machines calls over SSH too (the runner's Hub panel, below); and `demeteo-runner hub seal`, which both installers run, seals the store key and writes the unit drop-in that loads it |
-| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On an instance*). Each row goes out under the Feature id its instance's `HubRunKeys` reports it under: a desktop reports its shadows of detached runs too, unless the runner the run went to last said it is paired to the same Hub origin, and a runner re-keys its run-id rows to the Feature id its snapshot lists (§5 *Events and the cursor*); a snapshot after the first `CursorAck` and after each Project or Workflow write (§5 *Snapshots*). The `hub-socket` feature no longer implies `keyring`, so a runner build can carry the socket; a runner binds its own request handler before its socket starts (§6.1 *On an instance*) |
+| Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On an instance*). Each row goes out under the Feature id its instance's `HubRunKeys` reports it under: a desktop reports its shadows of detached runs too, unless the runner the run went to last said it is paired to the same Hub origin, and a runner re-keys its run-id rows to the Feature id its snapshot lists (§5 *Events and the cursor*); a snapshot after the first `CursorAck`, after each Project or Workflow write, and after each harness probe it finishes (§5 *Snapshots*). The `hub-socket` feature no longer implies `keyring`, so a runner build can carry the socket; a runner binds its own request handler before its socket starts (§6.1 *On an instance*) |
 | Desktop side: Settings › Hub tab | **built** — `src/components/settings/HubTab.tsx`. Outside `ExecutionMode::Router` it shows only the local toggles, ceilings, passkeys and activity log. It pairs and disconnects; shows the fingerprint, this machine as the Hub sees it (`hub_machine`), and the socket's state, sync, Hello → first-ack latency and why it stopped (`hub_connection`); sets the toggles and ceilings of §7 through `hub_policy_set`; lists the trusted passkeys as pinned or endorsed (`hub_trusted_passkeys`); and shows the activity log (`hub_request_log`). It polls the connection and the log every 5 s while open. `spend` and `gates` still default to off, so every request that needs one is refused until the user turns it on |
 | Desktop side: a runner's Hub panel in Settings › Machines | **built** — `src/components/RunnerHubPanel.tsx`, mounted on each machine whose runner reports a version. Its `remote_hub_*` commands (`src-tauri/src/commands/remote_runner_hub.rs`, wrappers in `src/lib/runnerHub.ts`) each call one of the runner's `hub_*` methods over SSH through `application/remote_runs/runner_hub.rs`. It pairs by device code (the code, the Hub's verification URL and the runner's fingerprint, polling `hub_pair_state` every 2 s until it settles), shows the runner's status, connection and machine, sets its toggles and ceilings through `hub_policy_set`, disconnects it, and shows its activity log; a runner refusal, such as one with no sealed store, is shown in the runner's own words, and a runner predating `hub_status` or `hub_request_log` is named as too old rather than failing. A pairing change made here refreshes `machine_hub_state` at once (§5 *Events and the cursor*) |
 | Desktop side: passkey pin set, request verification, local ceilings | **built** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`, and each passkey's signature counter by `V66__hub_passkey_sign_count.sql`. Every request is verified against the pinned request-signing key and judged against the local toggles and ceilings, which migration `V65__hub_requests.sql` stores with the consumed ids and the activity log (§6.1 *On an instance*, §7). The WebAuthn assertion a `gate_decision` or a `passkey_revocation` carries is verified on the desktop against the pinned set before the request has any effect: a gate is then decided by the desktop's own `gate_decide`, and a key is removed in one transaction with the signer's counter (§8). Every `passkey_endorsement` is consumed and refused `unknown_kind` without its assertion being read (§11 item 20). A gate of a run a `demeteo-runner` owns is not decided by the desktop: it is refused `runner_owned`, and a paired runner decides it for its own report of the run (§10) |
 | An instance-wide read over `run_events` | **built** — `RunEventsPort::list_after` pages every Feature in offset order (§5); the socket client's backfill and live send read through it |
-| Runner dispatch from the Hub | **partly built** — a paired runner verifies, judges and answers the requests the Hub queues for it, as a desktop does (§6.1 *On an instance*): `cancel_feature`, `set_step_assignment` and `gate_decision` land in its own control socket's calls, on any run it holds whichever desktop submitted it. A `start_feature` the Hub resolved from a source desktop's snapshot maps to a `RunSpec` and is submitted through the control socket's own `submit`, owned by `HUB_CLIENT_ID`, its cap committed on the run row (§6.1 *On a runner*). The run's git access is the Hub's too: a paired runner fetches a one-repository GitHub App token for each Hub-started run from `POST /git-token` and keeps it fresh until the run ends (§6.5, decision 71). **Not built:** GitLab, whose starts are answered `422` at the token fetch; see §10 |
+| Runner dispatch from the Hub | **partly built** — a paired runner verifies, judges and answers the requests the Hub queues for it, as a desktop does (§6.1 *On an instance*): `cancel_feature`, `set_step_assignment` and `gate_decision` land in its own control socket's calls, on any run it holds whichever desktop submitted it. A `start_feature` the Hub built from one of its own Projects and an embedded starter (§6.4) maps to a `RunSpec` and is submitted through the control socket's own `submit`, owned by `HUB_CLIENT_ID`, its cap committed on the run row (§6.1 *On a runner*). The run's git access is the Hub's too: a paired runner fetches a one-repository GitHub App token for each Hub-started run from `POST /git-token` and keeps it fresh until the run ends (§6.5, decision 71). **Not built:** GitLab, whose starts are answered `422` at the token fetch; see §10 |
 
 The design mockup in [`hub-design/`](hub-design/README.md) exists. It is a
 picture of the Hub, not a part of it, and where it disagrees with this document
@@ -73,7 +74,8 @@ judged by what that attacker cannot do.
 | Provider API keys | a `ProviderInstance` key lives in the OS keyring only ([AGENTS.md §2](../AGENTS.md)) |
 | Git tokens | the same rule; an instance clones and pushes with its own |
 | Harness sign-ins | `~/.claude`, `~/.codex` and their kind are never read, copied or mutated |
-| Local paths | snapshots strip them (§5); the Hub names a Project by an id the instance reported, never by a path |
+| Harness configuration | codex's `config.toml` is read on the instance to list its models, and only the configured model slug crosses (§5 *Harness catalog*); the file, its path and the provider entry that names it do not |
+| Local paths | snapshots strip them (§5); the Hub names an instance's Project by an id the instance reported, never by a path, and a Hub Project has no path field (§6.4) |
 | Transcripts | there is no scope that sends them — §7 |
 | Diffs | the same |
 | File contents | the same; an event is an allowlisted projection, not a file |
@@ -96,7 +98,8 @@ judged by what that attacker cannot do.
 | Events and snapshots an instance chose to send | status-level; §5 |
 | Queued requests | until delivery or expiry |
 | **Attachments**, briefly | user-authored content the browser sent: a file the user attached to a Feature. Encrypted at rest, deleted after the instance fetches it — §6.3 |
-| Feature titles and harness kinds | the other user-authored content on the Hub: the title of each of an instance's newest Features, scrubbed and cut to 200 characters, in its snapshot, and the kinds of harness it registered. Sent only with `read` on, replaced by the next snapshot ([decision 70](DECISIONS.md#1-the-locked-decisions), §5). A Feature's description, prompts and PR text have no field |
+| Feature titles, harness kinds and model lists | the other user-authored content on the Hub: the title of each of an instance's newest Features, scrubbed and cut to 200 characters, in its snapshot, the kinds of harness it registered, and the models each installed one lists on that instance's machine, scrubbed and capped. Sent only with `read` on, replaced by the next snapshot ([decisions 70 and 72](DECISIONS.md#1-the-locked-decisions), §5). A Feature's description, prompts and PR text have no field |
+| Hub Projects | what the tenant entered on the Hub itself: a name, a repository's identity (provider, host, `owner/repo`) and run-shape defaults (agent, model, effort, Workflow, budget). No path, no URL with userinfo and no secret (§6.4, §9) |
 | Its own server secrets | in OpenBao, or encrypted under Transit — §9 |
 | The GitHub App private key | imported into OpenBao Transit and used there, never in the Hub process; it signs the App's JWT, which mints a one-repository token per runner run that is never stored (§6.5, [decision 71](DECISIONS.md#71--runner-git-credentials-detail)) |
 
@@ -768,9 +771,10 @@ left. Transcripts, diffs and file contents are not on it (§3).
 
 ### Snapshots
 
-Paired desktops report **Project and Workflow snapshots with local paths
-stripped** (decision 65). A `Snapshot` is one struct carrying the instance's
-Projects, Workflow versions and run-shape settings together. **The Hub holds one
+Paired instances report **Project and Workflow snapshots with local paths
+stripped**. A `Snapshot` is one struct carrying the instance's Projects,
+Workflow versions and run-shape settings together, with the Features and
+harnesses below. **The Hub holds one
 row per instance and each snapshot replaces it wholesale**, so there is one
 current copy and nothing to merge. A snapshot is sent after `hello` and whenever
 its content changes. The Hub answers it with no frame: the instance keeps no
@@ -797,9 +801,54 @@ the version the number of the one the Feature pins. Beside each Workflow's
 latest version, `workflows` then carries the versions those Features pin, at
 most 20 of them, newest Feature first, so the Hub can name a run's steps from
 the graph that run actually follows. `harnesses` is the sorted list of the
-agent registry's kinds and nothing else about them. Both are `#[serde(default)]`,
+agent registry's kinds this build supports, which leaves out the test runtimes
+`noop` and `stub`, and says nothing about whether each is installed; what is
+installed is the harness catalog below. Each of these is `#[serde(default)]`,
 so a Hub reads an older desktop's snapshot; an older Hub refuses a newer one,
 so the Hub ships first (§11 item 8).
+
+**Harness catalog** ([decision 72](DECISIONS.md#1-the-locked-decisions)).
+`harness_catalog` is what the instance found installed on **its own machine**
+and the models each harness lists there, one entry per harness as `{kind,
+models: [{value, name}], effort_levels, source, probed_at}`. Desktop and
+runner run the same code, always against the local machine: a desktop's
+catalog says nothing about an SSH compute host it runs on (§11 *The
+desktop socket's carried defaults*).
+
+- **The probe runs on the instance, never on the Hub.** A relaying session
+  asks for one as it sends its first snapshot after the `CursorAck`, and again
+  on a timer; a reconnect inside the floor of §11 starts none, so a socket
+  that flaps does not run every harness's CLI each time. One probe runs at a
+  time, each harness's listing under a timeout. Availability is asked afresh
+  each probe, so a harness installed after start appears at the next one.
+- **The cache never blocks a build.** A snapshot reads what the last probe
+  stored and goes on; a completed probe wakes a rebuild through the same wake a
+  Project write does, and the rebuilt snapshot is sent if it differs.
+- **A harness that does not answer keeps its last entry.** One found not
+  installed loses it; one that timed out or failed in transport keeps what it
+  last listed, so a briefly unreachable machine does not read as having
+  nothing installed.
+- **What crosses is cut and scrubbed.** Only kinds this build supports, sorted;
+  within a kind the listing's order, deduplicated by value, the first kept. A
+  value that is empty or holds a NUL is dropped; value and name go through the
+  secret scrubber and are cut to 200 characters; a harness lists at most 500
+  models. `source` says where the list came from — `config` (codex's
+  `config.toml`), `probed` (the harness's own listing) or `bundled` (this
+  build's guess, which the browser labels as such).
+- **A model's `description` never crosses.** `ModelChoice` has no field for
+  it, because codex's names the config file it was read from, a path under the
+  user's home.
+- **`null` and `[]` differ.** `null` is an instance that predates the field or
+  has not finished a probe, and the browser falls back to free text; `[]` is
+  one that probed and found nothing installed.
+
+The policy — when a probe is due, how one folds into the cache, and what
+crosses — is
+[`domain/hub_socket/harness_catalog.rs`](../crates/demeteo-core/src/domain/hub_socket/harness_catalog.rs);
+the cache and the probe task are
+[`adapters/hub/harness_catalog.rs`](../crates/demeteo-core/src/adapters/hub/harness_catalog.rs).
+`probed_at` changes with every completed probe, so a connected instance resends
+its snapshot at least once per probe interval.
 
 **A Feature is listed as its rows are reported.** The snapshot source asks the
 same `HubRunKeys` the session does, so a Feature is listed under the id its
@@ -821,11 +870,12 @@ event is sent with the next snapshot something else wakes.
 holds the caps; the Hub's lookups are
 [`api/run_labels.rs`](../crates/demeteo-hub/src/api/run_labels.rs).
 
-These are what a Hub-authored `start_feature` names (§6) and what the
-future runner dispatch would build a `RunSpec` from (§10). The Hub never authors a
-Project or a Workflow: **rejected, because it is a second editor and a second copy
-that drifts from the desktop's.** **Workflows read from repo files** were rejected
-for being a new concept — a Workflow in a Project's tree would need its own
+These are what a Hub-authored `start_feature` **to a desktop** names (§6),
+and what the Hub labels an instance's runs with. A dispatch to a runner never
+reads them: it names one of the Hub's own Projects and one of its embedded
+starters (§6.4, [decision 65](DECISIONS.md#1-the-locked-decisions)). The Hub
+never edits or syncs a desktop's Projects or Workflows. **Workflows read from
+repo files** were rejected for being a new concept — a Workflow in a Project's tree would need its own
 versioning story, and [decision 38](DECISIONS.md#1-the-locked-decisions) already
 pins a Feature to a Workflow *version*.
 
@@ -848,7 +898,9 @@ version.
 
 Beside it, a Project carries `provider_kind` (`github` or `gitlab`), the kind
 of the provider that same Repository names, because a host alone does not say
-which provider serves it and the Hub never guesses (§6.1 *On a runner*). It is
+which provider serves it and the Hub never guesses. The Hub shows it on the
+instance read; since decision 65 was amended it no longer starts a runner from
+it (§6.4). It is
 `#[serde(default)]`, so a Hub reads an older desktop's Project as having none;
 an older Hub refuses a snapshot carrying it, as for `features` (§11 item 8).
 The desktop builder reports it only beside the `remote_url` it describes, and
@@ -940,15 +992,23 @@ the parsed request, and verifies the signature against the key it pinned at pair
 `signing_bytes`, and is not repeated here.
 
 **One field is appended, not encoded as an `opt`.** `start_feature`'s `runner`
-— the Project's repository and the Workflow version a Hub resolves from a
-desktop's snapshot for a start addressed to a runner (§6.1 *On a runner*) —
-adds **no bytes at all** when absent, so a start without it signs exactly as
+— the repository of a Hub Project and the embedded starter the Hub signs for a
+start addressed to a runner (§6.4, §6.1 *On a runner*) — adds **no bytes at all** when absent, so a start without it signs exactly as
 it did before the field existed; present, it follows `attachments`. An `opt`
 would have added a `0x00` to every start, and every desktop that predates the
 field would have dropped every start as a bad signature. It is also omitted
 from the JSON when absent. It is a wire change with no `v` bump: a body
 carrying it does not parse in a build that predates it, so the Hub ships
 first, then runners, then desktops.
+
+**`runner.source_instance_id` is an unread origin label.** A Hub fills it with
+`"hub"` (`HUB_ORIGIN` in
+[`api/runner_start.rs`](../crates/demeteo-hub/src/api/runner_start.rs)); a
+Hub built before decision 65 was amended sent the id of the source desktop it
+resolved the start from. No runner reads it. It stays, required and signed,
+because every deployed runner refuses a `runner` start without it, so
+`RunnerStart`'s fields and signing layout do not change; dropping it waits
+until every deployed runner has been replaced.
 
 **The signature is Ed25519 over `signing_bytes()` itself.** There is no separate
 SHA-256: the message handed to the signer, and to the instance's verifier, is the
@@ -1309,16 +1369,21 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | Method and path | Scope | Answer |
 |---|---|---|
 | `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs`, `needs_you`, `harnesses` and `project_count` |
-| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url, provider_kind}`, its `workflows` (graph-only, below), its `run_shape`, its `harnesses` and its live runs |
+| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url, provider_kind}`, its `workflows` (graph-only, below), its `run_shape`, its `harnesses`, its `harness_catalog` and its live runs |
 | `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
 | `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, title, project, the pinned `workflow` graph, steps, ticket progress, pending gates and events in offset order |
 | `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
-| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name; to a runner, carrying the start its `source_instance_id` resolves (below) |
+| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name; to a runner, carrying the start its Hub Project and starter resolve to (below) |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/cancel` | `spend` | `202`, a `cancel_feature` queued |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment` | `spend` | `202`, a `set_step_assignment` queued |
 | `POST /v1/instances/{instance_id}/gates/challenge` | `gates` | `200`, a held challenge and the `navigator.credentials.get` options over it |
 | `POST /v1/instances/{instance_id}/gates/decision` | `gates` | `202 {request_id, expires_at}`, a `gate_decision` queued |
 | `GET /v1/instances/{instance_id}/requests/{request_id}` | none beyond owning the instance | `200`, the request's kind, derived status, `deliveries`, `expires_at` and `answered_at` |
+| `GET /v1/projects` | none | `200 {projects}`, the tenant's Hub Projects ordered by name, each with a derived `remote_url` and `runner_ready` (below) |
+| `POST /v1/projects` | none | `201`, the Hub Project created |
+| `POST /v1/projects/{id}` | none | `200`, the Hub Project replaced whole by the body |
+| `POST /v1/projects/{id}/remove` | none | `204`, the Hub Project removed |
+| `GET /v1/workflows` | none | `200 {workflows}`, the embedded starters as `{workflow_id, version, name, description, graph}`, ordered by name |
 
 **An instance's workflows are graph-only.** `workflows` holds one entry per
 `workflow_id`, at its highest `version`, as `{workflow_id, version, name,
@@ -1336,33 +1401,71 @@ it. Both follow the read-scope rule of `projects`: `null` without `read`, `[]`
 until a readable snapshot arrives. The projection is
 [`api/snapshot_view.rs`](../crates/demeteo-hub/src/api/snapshot_view.rs).
 
-**A dispatch to a runner names the desktop it runs from.** The body is the
-signed `start_feature`'s fields, `attachment_ids`, and `source_instance_id`. A
-runner keeps no copy of a desktop's Projects or Workflows, so a dispatch to an
-instance of kind `runner` must name one: another instance of the tenant's, of
-kind `desktop`, reporting `read`. A dispatch to a desktop reads its own and is
-refused one (`400 invalid_request`). From that desktop's last snapshot the Hub
-resolves the `runner` field of §6.1 and signs it into the payload:
+**The harness catalog** is the target's `harness_catalog` (§5 *Harness
+catalog*), projected field by field: `{kind, models: [{value, name}],
+effort_levels, source, probed_at}`. It follows the read-scope rule of
+`projects` with one difference: it is `null`, not `[]`, until a snapshot
+carrying it arrives, since `[]` means an instance that probed and found
+nothing installed. The fleet list does not carry it.
 
-- the Project of `project_id`: its `provider_kind`, required and never inferred
-  from the host, and its `remote_url` split into `host` and `full_name`. The
-  desktop builds that URL as `https://{host}/{repo_path}` (§5), so that is the
-  only shape read; a URL of any other shape, or one with an `@`, whitespace or
-  an empty path segment, is not guessed at;
-- the Workflow of `workflow_id` at its **highest `version`** in the snapshot,
-  the one the browser was offered above, with that version's number, its name
-  by the rule above, and its `steps_json` as the desktop sent it. A
-  `steps_json` holding `***`, the mask the desktop's secret scrubber writes in
-  place of a token, is not the Workflow the desktop runs, and is refused — a
-  prompt holding the three characters as its own text is refused too, since
-  the Hub cannot tell the two apart.
+**A dispatch to a runner names a Hub Project.** A runner keeps no Projects or
+Workflows, so the Hub keeps its own ([decision 65](DECISIONS.md#1-the-locked-decisions)):
+a dispatch to an instance of kind `runner` names, as `project_id`, one of the
+tenant's Hub Projects by its UUID, and, as `workflow_id`, one of the starters
+`GET /v1/workflows` lists. From the two the Hub builds the `runner` field of
+§6.1 and signs it into the payload:
 
-Nothing is guessed and nothing is half-sent: each miss is a `409` below, and a
-dispatch refused on any of them is not signed, queues nothing and binds no
-attachment. The start is resolved after the rest of the body and before the
-attachments. `project_settings` are not carried: a runner applies its detected
-defaults. The resolution is
+- the repository is the Hub Project's `provider_kind`, `host` and
+  `full_name`, as stored; the runner clones `https://{host}/{full_name}`;
+- the Workflow is the starter's id, name, version and steps. A starter file
+  carries no version, so the Hub derives one from what it signs: the first
+  four bytes of the SHA-256 of its serialised `steps`, masked to 31 bits and
+  never 0. The same steps are the same version on every Hub build, and a
+  change to them is another;
+- each of `agent_kind`, `model`, `effort` and `max_budget_cents` the body
+  leaves out is filled from the Hub Project's defaults **before signing**. A
+  runner runs with no project settings, so this is the only place a default
+  exists, and what is signed is the effective value. A field the body sets
+  is kept.
+
+The Workflow is judged before the Project. Nothing is guessed and nothing is
+half-sent: each miss is a `409` below, and a dispatch refused on any of them
+is not signed, queues nothing and binds no attachment. The start is resolved
+after the rest of the body and before the attachments. A dispatch to a desktop
+is unchanged: its `project_id` and `workflow_id` name that desktop's own, and
+the desktop resolves them. The resolution is
 [`api/runner_start.rs`](../crates/demeteo-hub/src/api/runner_start.rs).
+
+**Hub Projects** are the tenant's own, entered on the Hub and never synced with
+a desktop. A body carries `name`, `provider_kind` (`github` or `gitlab`),
+`host`, `full_name` and the optional defaults `default_agent_kind`,
+`default_model`, `default_effort`, `default_workflow_id` and
+`default_max_budget_cents`; an update replaces the row whole. The Hub refuses
+(`400 invalid_request`) a name of more than 200 characters or holding a NUL, a
+`host` and `full_name` that do not round-trip through
+`https://{host}/{full_name}` as an `owner/repo` path with no empty segment and
+no userinfo, whitespace or control character, a default agent kind or model
+that is only whitespace or holds a NUL, a default workflow that names no
+starter, and a budget of 0 or past `i64::MAX`. The host is stored lowercased,
+and an empty default reads as unset. A default workflow has no foreign key: a
+starter a later build drops leaves an id that reads as unset. One repository
+is one Project per tenant (`409 project_exists`). `runner_ready` is false for
+GitLab, which a runner cannot clone until decision 71's GitLab leg exists: the
+Project is kept and a dispatch to a runner naming it is refused. Removing a
+Hub Project does not stop a run already queued or started from it, which
+keeps what it was signed with. The rules are
+[`projects/verdict.rs`](../crates/demeteo-hub/src/projects/verdict.rs).
+
+**The Hub's Workflows are the desktop's bundled starters.** The Hub build
+embeds `src-tauri/workflows/*.json`, so a Hub built without that directory
+fails, and a Workflow is chosen, never edited. The browser is sent each
+starter's graph and never its steps or prompts. The graph is derived as a
+desktop's v1→v2 migration derives it, by a copy in
+[`workflows/graph.rs`](../crates/demeteo-hub/src/workflows/graph.rs), because
+the Hub does not link core; `src-tauri/tests/hub_starters.rs` pins the copy to
+core's migration, and holds every starter to what a runner accepts, on Linux.
+A Hub newer than a runner can sign a starter whose steps the runner cannot
+parse; the runner refuses it as `malformed_body`.
 
 **The attachment fetch is not a session route.** `GET /attachments/{attachment_id}`
 is outside `/v1`, beside `/socket` and `/token`, because its caller is an
@@ -1400,12 +1503,13 @@ body is judged, so it queues nothing and holds no challenge.
 
 | Status | `error` | When |
 |---|---|---|
-| 404 | `not_found` | the instance, run, request or attachment is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too; so is a `source_instance_id` that is not the tenant's |
-| 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it. For a dispatch's source, `read` |
-| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter, an `attachment_ids` that repeats an id or names more than `MAX_ATTACHMENTS_PER_DISPATCH`; a dispatch to a runner with no `source_instance_id` or one naming a runner, and a dispatch to a desktop naming one |
-| 409 | `unknown_project` | a runner dispatch whose source has no readable snapshot, or one naming no Project of `project_id`; nothing is signed, queued or bound |
-| 409 | `unknown_workflow` | a runner dispatch whose source's snapshot names no version of `workflow_id`; nothing is signed, queued or bound |
-| 409 | `project_not_dispatchable` | a runner dispatch whose Project has no `provider_kind` or a `remote_url` not of the desktop's `https://host/owner/repo` shape, or whose Workflow's latest `steps_json` holds the scrub mask `***`; nothing is signed, queued or bound |
+| 404 | `not_found` | the instance, run, request, attachment or Hub Project is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too |
+| 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it |
+| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter, an `attachment_ids` that repeats an id or names more than `MAX_ATTACHMENTS_PER_DISPATCH`, a dispatch body carrying `source_instance_id` (a field the Hub no longer takes), and a Hub Project the rules above refuse |
+| 409 | `unknown_project` | a runner dispatch whose `project_id` names no Hub Project of the tenant, a `project_id` that is not a UUID included; nothing is signed, queued or bound |
+| 409 | `unknown_workflow` | a runner dispatch whose `workflow_id` names no embedded starter; nothing is signed, queued or bound |
+| 409 | `project_not_dispatchable` | a runner dispatch whose Hub Project a runner cannot clone yet: GitLab (`runner_ready` false); nothing is signed, queued or bound |
+| 409 | `project_exists` | a Hub Project created or updated onto a repository (`host` and `full_name`) another of the tenant's Hub Projects holds |
 | 413 | `attachment_too_large` | an upload over `DEMETEO_HUB_ATTACHMENT_MAX_BYTES` (§6.3); nothing is stored |
 | 409 | `attachment_unavailable` | a dispatch naming an attachment of the tenant's instance that is already bound to a request or has expired; nothing is queued and no attachment is bound |
 | 409 | `challenge_mismatch` | a decision whose `request_id` is not the one its challenge minted |
@@ -2017,6 +2121,16 @@ nothing from which the content or its digest could be read without Transit
 > leave a stored row whose signature no longer verifies. A human may decide
 > otherwise (§11 item 19).
 
+**Hub Projects** are rows of `hub_projects`, from
+[`0012_hub_projects.sql`](../crates/demeteo-hub/migrations/0012_hub_projects.sql):
+the tenant, a name, `provider_kind` (`github` or `gitlab`), the lowercased
+host, `full_name`, the five run-shape defaults and the two timestamps, unique
+per tenant on host and `full_name`, and deleted with the tenant. No column
+holds a path, a URL or a secret. `default_workflow_id` has no foreign key,
+since the Workflows it names are the starters in the Hub's binary (§6.4). The
+statements are in
+[`store/hub_projects.rs`](../crates/demeteo-hub/src/store/hub_projects.rs).
+
 **Connected GitHub Apps** are rows of `git_hosts`, from
 [`0011_git_hosts.sql`](../crates/demeteo-hub/migrations/0011_git_hosts.sql):
 the tenant, host, API and web base URLs, App id and slug, owning account, and
@@ -2078,17 +2192,19 @@ process.
 | `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing, the instance socket, the session API and attachments **built**; unpairing **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `device.rs` is a runner's pending device codes and their verdicts, `pending.rs` holds consents, codes, device codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, `access.rs` is the admission of a DPoP-bound access token that the socket, the attachment fetch and the git-token fetch share, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `runner_view.rs` is a runner's `hub_pair_state` and `hub_status` answers in the spelling both the runner sends and a desktop parses. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
-| `crates/demeteo-core/src/domain/hub_socket/` | the desktop socket's policy — **built**, and synchronous: `src-tauri/tests/hub_layout.rs` fails on an `async fn` anywhere in it. `projection.rs` is the allowlist a `run_events` row passes to become a protocol `RunEvent`, `mod.rs` the `Hello` and whether events are sent at all, `reporting.rs` which Feature id a run is reported under and whether this instance reports it (`reported_feature_id`, and what a runner's `hub_status` says of its pairing), and `verdict.rs` what follows a connection's or a refresh's end, the backoff, and the numbers the session runs on |
-| `crates/demeteo-core/src/ports/hub.rs` | the ports pairing, the socket and the requests reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`, `HubRequestRepository`, and the policy's `HubPolicyReader` and `HubPolicyWriter`, kept apart so the handler can be given the first alone), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`), the attachment fetch (`HubAttachmentFetcher`), the git-token fetch (`HubGitTokenFetcher`, §6.5), the trusted passkey set and its counters (`HubPasskeyTrust`, over the `sign_count` column migration `V66__hub_passkey_sign_count.sql` adds, with its SQL beside the pins' in `adapters/database/repos/hub.rs`), the request handler the socket hands frames to (`HubRequestHandler`), where a start and a cancel land on this instance (`HubRunControl`, with `StartSupport` saying whether it launches starts), which Feature id each run-log key is reported under (`HubRunKeys`), and a browser — **built**. Only the keyring port carries a secret |
-| `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps and owns the refresh lock and the socket's lifetime; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters, `attachments.rs` fetches an attachment once and checks its size and SHA-256 (§6.3), and `run_keys.rs` holds the two `HubRunKeys` readers, `DesktopRunKeys` over the remote-run mirror, `machine_hub_state` and the pins, and `RunnerRunKeys` over `runner_runs` and the Features, which `composition/mod.rs` chooses by execution mode and hands to both the session and `snapshot_source.rs`. It is composed under `ExecutionMode::Router`, and in `LocalOnly` when the caller hands it a store; `src-tauri/src/commands/hub.rs` exposes it on a desktop |
+| `crates/demeteo-core/src/domain/hub_socket/` | the desktop socket's policy — **built**, and synchronous: `src-tauri/tests/hub_layout.rs` fails on an `async fn` anywhere in it. `projection.rs` is the allowlist a `run_events` row passes to become a protocol `RunEvent`, `mod.rs` the `Hello` and whether events are sent at all, `reporting.rs` which Feature id a run is reported under and whether this instance reports it (`reported_feature_id`, and what a runner's `hub_status` says of its pairing), `verdict.rs` what follows a connection's or a refresh's end, the backoff, and the numbers the session runs on, and `harness_catalog.rs` when a harness probe is due, how one folds into the cache and what of it crosses (§5 *Harness catalog*) |
+| `crates/demeteo-core/src/ports/hub.rs` | the ports pairing, the socket and the requests reach the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`, `HubRequestRepository`, and the policy's `HubPolicyReader` and `HubPolicyWriter`, kept apart so the handler can be given the first alone), the Hub's `/token` for both grants (`HubTokenEndpoint`, `HubRefreshEndpoint`), the socket (`HubSocketDialer`, `HubSocketConnection`), the attachment fetch (`HubAttachmentFetcher`), the git-token fetch (`HubGitTokenFetcher`, §6.5), the trusted passkey set and its counters (`HubPasskeyTrust`, over the `sign_count` column migration `V66__hub_passkey_sign_count.sql` adds, with its SQL beside the pins' in `adapters/database/repos/hub.rs`), the request handler the socket hands frames to (`HubRequestHandler`), where a start and a cancel land on this instance (`HubRunControl`, with `StartSupport` saying whether it launches starts), which Feature id each run-log key is reported under (`HubRunKeys`), the harness probe and the catalog cache a snapshot reads (`HarnessModelProbe`, `HarnessCatalogSource`), and a browser — **built**. Only the keyring port carries a secret |
+| `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps and owns the refresh lock and the socket's lifetime; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters, `attachments.rs` fetches an attachment once and checks its size and SHA-256 (§6.3), `harness_catalog.rs` caches the harness catalog and runs its probe on a task of its own, over `adapters/agent/model_probe.rs` (§5 *Harness catalog*), and `run_keys.rs` holds the two `HubRunKeys` readers, `DesktopRunKeys` over the remote-run mirror, `machine_hub_state` and the pins, and `RunnerRunKeys` over `runner_runs` and the Features, which `composition/mod.rs` chooses by execution mode and hands to both the session and `snapshot_source.rs`. It is composed under `ExecutionMode::Router`, and in `LocalOnly` when the caller hands it a store; `src-tauri/src/commands/hub.rs` exposes it on a desktop |
 | `crates/demeteo-core/src/domain/hub_request/` | the desktop's request policy (§6.1, §7) — **built**, and synchronous. `mod.rs` is the scopes in force, `precheck` (signature, scope, instance, expiry) and `decide` (replay, then spend), split around the consumption of the id; `ceiling.rs` the two ceilings, `verify.rs` the Ed25519 check against the pinned key, `log.rs` the activity-log row, and three for §8: `cose.rs` the parse of a canonical `COSE_Key`, `assertion.rs` the WebAuthn assertion check and the counter rule, and `passkeys.rs` the three challenge digests and the gate, endorsement and revocation verdicts |
 | `crates/demeteo-core/src/application/hub_requests.rs` | the request handler — **built**. It parses, loads the pins, the policy, the committed total and the trusted passkeys, records the id, and acts through the instance's own calls: its `HubRunControl` for a start and a cancel (`hub_requests/desktop_runs.rs` is a desktop's, `DesktopRuns`, over `launch_run` and `step_control::cancel_feature`), and `step_control::set_step_assignment` and `gate_decide` for the rest. `hub_requests/start.rs` holds a start once its id is spent, and `hub_requests/trust.rs` the I/O of the three kinds a passkey signs: loading the set and a gate's step, the counter or set write, and the gate decision. `composition/mod.rs` binds it to `HubPairing` on a desktop, and hands a runner the `HubRequestBinding` it binds with. The SQL is `adapters/database/repos/hub_requests.rs` |
 | `crates/demeteo-core/src/application/remote_runs/` (Hub parts) | a desktop's side of a runner's pairing — **built**. `runner_hub.rs` is one function per `hub_*` method a runner answers, called over SSH for the runner Hub panel (§2), with `src-tauri/src/commands/remote_runner_hub.rs` as its commands; `runner_hub_state.rs` asks a runner's `hub_status` and stores the answer in `machine_hub_state` (migration `V69__machine_hub_state.sql`, SQL in `adapters/database/repos/machine_hub_state.rs`), from every reconcile and every pairing change made through `runner_hub.rs` |
 | `crates/demeteo-runner/src/hub/` and `control.rs` | a runner's Hub side — **built**. `hub/mod.rs` is `HubControl`, the pairing, the sealed store, the policy writer and the request log, kept out of `RunnerServices` (§7); `hub/runs.rs` is `RunnerHubRuns`, its `HubRunControl`; `hub/keeper.rs` keeps each Hub-started run supplied with git tokens (§6.5), its decisions in `hub/keeper_policy.rs`; `hub/cli.rs` the `demeteo-runner hub` commands, `log` included; `rpc/hub.rs` the `hub_*` control methods, `hub_request_log` included. `control.rs` is what stopping a run means there, the body the control socket's `cancel_run` and a Hub cancel share |
 | `crates/demeteo-core/src/adapters/hub/socket/` | the instance socket's I/O — **built**. `mod.rs` is the supervisor (refresh, proof, dial, session, verdict, backoff), `session.rs` one connection from its `Hello` to its end, re-keying each run-log row through `HubRunKeys` as it reads it, `wake.rs` the `RunEventsPort` decorator that wakes a session on every append, and `ws_transport.rs` the `HubSocketDialer` over `tokio-tungstenite` and rustls, the only file that names the WebSocket crate. `ws_transport.rs` exists only with `demeteo-core`'s default `hub-socket` feature, which `demeteo-runner` turns on by name without `keyring` (`src-tauri/tests/hub_layout.rs` gates both) |
 | `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds the `GET /socket` upgrade and its admission (`admitted`, which names the socket's URL to `pairing/access.rs`), `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
-| `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs`, `request_status.rs` and `attachments.rs`, the upload. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
+| `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs`, `request_status.rs` and `attachments.rs`, the upload; `runner_start.rs` builds a runner's signed start from a Hub Project and a starter. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
 | `crates/demeteo-hub/src/git_token/` and `adapters/github_app.rs` | git tokens for Hub-started runs (§6.5) — **built**, GitHub only. `verdict.rs` is the decisions, synchronous and without I/O: which status a fetch gets, and the binding and liveness rules. `port.rs` and `postgres.rs` read the start and bind its Feature through `store/requests.rs`, and `fetch.rs` is the route. `adapters/github_app.rs` builds the App JWT, signs it through the `RsaSigner` port of `ports/key_service.rs`, and makes the two GitHub calls behind `ports/git_host.rs` |
+| `crates/demeteo-hub/src/projects/` | Hub Projects (§6.4) — **built**. `verdict.rs` is what a Hub Project may hold, synchronous and without I/O, with `parse_remote` and `runner_ready`; `port.rs` is the `HubProjectStore` port, `postgres.rs` the store over `store/hub_projects.rs`, `testing.rs` the in-memory double, and `handlers.rs` the four routes over use-cases that take the store and the tenant |
+| `crates/demeteo-hub/src/workflows/` and `build.rs` | the embedded starters (§6.4) — **built**. `build.rs` lists `src-tauri/workflows/*.json` into the build; `mod.rs` parses them once, versions each by its content and finds one by id; `graph.rs` derives a starter's graph as core's v1→v2 migration does; `handlers.rs` is `GET /v1/workflows` |
 | `crates/demeteo-hub/src/attachments/` | attachments (§6.3) — **built**. `envelope.rs` is the sealing and the decisions, synchronous and without I/O: the size verdict, the expiry and which ids a dispatch may bind. `port.rs` is the `AttachmentStore` port, `postgres.rs` the store over `store/attachments.rs`, `fetch.rs` the fetch-once use-case and its route, and `sweep.rs` the TTL sweep `main.rs` spawns. The upload is a session route, so it is `api/attachments.rs` |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; `demeteo-hub` and `demeteo-core` depend on it, and it depends on neither |
@@ -2161,23 +2277,39 @@ by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
 [71](DECISIONS.md#71--runner-git-credentials-detail) settle its shape: a
 `demeteo-runner` host pairs and holds its own outbound socket, verifying,
 enforcing and reporting as a desktop does; the Hub signs what the run needs
-from the last snapshot a paired desktop reported (§5), and the runner builds
-its `RunSpec` from that; and the Hub mints each run's git
+from one of its own Projects and an embedded starter (§6.4, decision 65), and
+the runner builds its `RunSpec` from that; and the Hub mints each run's git
 token from a GitHub App key in OpenBao, fetched and refreshed over HTTPS
 (§6.5). All three are built for GitHub. The first part: a paired runner reports
 its runs under their Feature ids (§5) and answers `cancel_feature`,
 `set_step_assignment` and `gate_decision` through its own control socket's
 calls, on any run it holds (§6.1 *On a runner*). So is the Hub's half of a
-start: a dispatch to a runner names a source desktop, and the Hub resolves the
-repository and pinned Workflow version from that desktop's snapshot and signs
-them into the `start_feature` (§6.4), refusing a Project or Workflow it cannot
-resolve as a `409` rather than queueing a guess. So is the runner's: it maps
+start: a dispatch to a runner names a Hub Project and a starter, and the Hub
+signs the Project's repository, the starter's steps and version, and the
+Project's run-shape defaults into the `start_feature` (§6.4), refusing a
+Project or Workflow it does not hold, or a GitLab Project, as a `409` rather
+than queueing a guess. Until 2026-11-09 it resolved both from the snapshot of a
+source desktop the dispatch named; that path is gone, and with it a runner
+run's need for a desktop paired with `read`. So is the runner's: it maps
 that start to a `RunSpec` and submits it through its control socket's own
 `submit` (§6.1 *On a runner*). So is the git access: the runner fetches the
 run's token from `POST /git-token` and keeps it fresh (§6.5). **What is not
 built is GitLab:** its bot user's OAuth custody waits on what decision 71
-lists to verify first, and a GitLab start is answered `422` at the token
-fetch, so its run parks `needs-credentials`. Why a Hub run stopped getting
+lists to verify first. A GitLab Hub Project can be kept, and a dispatch to a
+runner naming it is refused `409 project_not_dispatchable` before anything is
+signed. The token fetch still answers any GitLab start `422`, so a run that
+reached a runner parks `needs-credentials`.
+
+**Not built around Hub Projects and the harness catalog:** a Workflow editor on
+the Hub (its Workflows are the starters, chosen and not authored); a request
+that asks an instance to probe its harnesses now, which would be a new request
+kind; a desktop's catalog of each SSH machine it runs on; the desktop's own
+model picker reading the cached catalog instead of probing when it opens;
+naming a Hub-started runner run after its Hub Project in the run views; and
+checking, when a Hub Project is created, that the GitHub App is installed on
+its repository, which the first token fetch finds out instead. For an
+instance that reports no catalog, hub-web falls back to the desktop's
+`EFFORT_SUPPORT` table (`src/lib/effortLevels.ts`), which has no `pi`. Why a Hub run stopped getting
 tokens is in the runner's journal
 ([`RUNNER_DEV.md`](RUNNER_DEV.md#pairing-a-runner-with-the-hub)).
 
@@ -2273,8 +2405,9 @@ what a desktop client implements.
    envelope, 128 bits for a request id, the field lists of the two passkey
    challenges, and an upper bound on `expires_at` an instance will accept.
    Pairing carries more, listed under *Pairing's carried defaults* below, the
-   socket under *The socket's carried defaults*, and attachments under *The
-   attachments' carried defaults*. One
+   socket under *The socket's carried defaults*, attachments under *The
+   attachments' carried defaults*, and the harness probe under *The harness
+   catalog's carried defaults*. One
    more is already in stored data: the Hub's own endorsement and revocation
    assertions bind `instance_id = "*"`, a fresh `request_id` and a 300-second
    `expires_at`, all stored with the record (§8). How an instance accepts such
@@ -2291,13 +2424,16 @@ what a desktop client implements.
     Its loopback callback binds `127.0.0.1:0`, takes the port the OS assigns,
     and serves one random path; nothing configures either.
 11. **Whether a step's `command` and prompt templates may cross at all.** They
-    travel inside a Workflow snapshot's documents, and decision 65 needs them:
-    a `RunSpec` cannot be built without the command and the prompt (§10). But
-    both are user-authored text that may embed a local path or a credential
-    (`curl -H "Authorization: Bearer …"`), which no field-level strip can
-    detect. Sending them, redacting them, or sending a projection without them
-    — the last re-decides decision 65 — is open. Until it is decided the
-    desktop sends them, scrubbed (§11 *The desktop socket's carried defaults*).
+    travel inside a Workflow snapshot's documents. Decision 65 as first taken
+    needed them, to build a runner's `RunSpec` from a desktop's snapshot; as
+    amended on 2026-11-09 it does not, since a runner is sent an embedded
+    starter (§6.4), and nothing the Hub does now reads them: the browser is
+    sent graphs only. But both are user-authored text that may embed a local
+    path or a credential (`curl -H "Authorization: Bearer …"`), which no
+    field-level strip can detect. Sending them, redacting them, or sending a
+    projection without them is open, and the last no longer costs a feature.
+    Until it is decided the desktop sends them, scrubbed (§11 *The desktop
+    socket's carried defaults*).
     The snapshot builder's settled obligations, `cwd` and `remote_url`
     userinfo, are in §5.
 12. **Approving a pairing on a session alone.** The consent routes (§4) take a
@@ -2402,9 +2538,10 @@ what a desktop client implements.
     signs the Workflow it runs, `steps_json` with every step's commands and
     prompts, and the stored envelope keeps it for as long as the request row
     lives, which is for good (§9), as item 19's digest is. A desktop's start
-    names its Workflow by id, so this is new with runner dispatch. The Hub
-    refuses a Workflow carrying the snapshot's scrub mask (§6.4), so no
-    secret the desktop scrubbed is signed; what a prompt says in the clear is.
+    names its Workflow by id, so this is new with runner dispatch. Since
+    2026-11-09 what is signed is an embedded starter, the same text every Hub
+    build ships, so no user-authored prompt is stored this way; envelopes a
+    Hub signed before then hold a desktop's Workflow, scrubbed, as it was.
     **Default built:** kept, so the stored signature still verifies. Redacting
     it once the request is answered or expired, or deleting old request rows,
     is open, and is the same choice as item 19's.
@@ -2503,6 +2640,10 @@ is decided; each is what the desktop does today.
 - **A provider edit does not wake a rebuild.** Adding or deleting a provider
   changes the `remote_url`s derived from it, which stay stale until the next
   Project or Workflow write or the next connection.
+- **The harness catalog describes this machine only.** A desktop that runs
+  steps on an SSH compute host reports what is installed where the app runs,
+  so a model it lists can fail at run time on that host. A catalog per
+  machine is not built (§10).
 - **A Project reports one `remote_url`**, its first Repository's.
   `ProjectSnapshot` has one field, and reporting every Repository is a
   protocol change.
@@ -2554,6 +2695,21 @@ a backoff of `2^attempt` seconds capped at 300 and scaled by a jitter in
 silence before a connection is dropped, mirroring the Hub's deadline above;
 128 rows read per page; and at most 256 events sent past the last ack.
 
+### The harness catalog's carried defaults
+
+The numbers the harness probe runs on (§5 *Harness catalog*) are carried
+defaults in the same sense: chosen so it could be built, measured against
+nothing. Each is a constant in
+[`domain/hub_socket/harness_catalog.rs`](../crates/demeteo-core/src/domain/hub_socket/harness_catalog.rs).
+
+| Default | Value | What moving it changes |
+|---|---|---|
+| Probe interval, `HARNESS_PROBE_INTERVAL_SECS` | 6 hours | how stale a catalog may be on a connected instance, how often it runs every harness's CLI in the background, and how often its snapshot is resent |
+| Connect floor, `HARNESS_PROBE_CONNECT_FLOOR_SECS` | 15 minutes | how soon after a probe a reconnect probes again |
+| Per-harness timeout, `HARNESS_PROBE_TIMEOUT_SECS` | 60 seconds | how long one harness's listing may take before it counts as unreachable and keeps its last entry |
+| Models per harness, `MAX_CATALOG_MODELS` | 500 | what one harness can add to a snapshot, against the 4 MiB frame |
+| Characters per value or name, `MAX_CATALOG_CHARS` | 200 | — |
+
 ### The attachments' carried defaults
 
 The numbers attachments run on (§6.3) are carried defaults in the same sense.
@@ -2575,7 +2731,7 @@ uploads within one TTL.
 
 ## 12. Related
 
-- [`DECISIONS.md`](DECISIONS.md) — decisions 62–69, the short form of this document
+- [`DECISIONS.md`](DECISIONS.md) — decisions 62–72, the short form of this document
 - [`hub-design/README.md`](hub-design/README.md) — the mockup, and where it is superseded
 - [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) — the other external surface; §5 for the OAuth shape this one differs from, §8 for decision 50
 - [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) — §17, the web-companion bullet this reverses
