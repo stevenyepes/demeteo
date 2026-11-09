@@ -1426,7 +1426,9 @@ tenant's Hub Projects by its UUID, and, as `workflow_id`, one of the starters
   leaves out is filled from the Hub Project's defaults **before signing**. A
   runner runs with no project settings, so this is the only place a default
   exists, and what is signed is the effective value. A field the body sets
-  is kept.
+  is kept. The default model and effort belong to the default agent: under
+  another agent the body names they stay unset, since a model slug is one
+  harness's and an effort may be one the named harness cannot run.
 
 The Workflow is judged before the Project. Nothing is guessed and nothing is
 half-sent: each miss is a `409` below, and a dispatch refused on any of them

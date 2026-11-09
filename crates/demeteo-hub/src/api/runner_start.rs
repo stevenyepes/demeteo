@@ -71,15 +71,27 @@ pub fn runner_start(
 
 /// `start` with each run-shape field the body left out taken from `row`'s
 /// defaults. A field the body set is kept, whatever the project says.
+///
+/// The default model and effort belong to the default agent: under any other
+/// agent the body names they stay unset, since a model slug is one harness's
+/// and an effort level may be one the named harness cannot run.
 pub fn run_shape_defaults(start: StartFeature, row: &HubProjectRow) -> StartFeature {
     let defaults = &row.fields;
+    let agent_kind = start
+        .agent_kind
+        .or_else(|| defaults.default_agent_kind.clone());
+    let default_agent = agent_kind == defaults.default_agent_kind;
     StartFeature {
-        agent_kind: start
-            .agent_kind
-            .or_else(|| defaults.default_agent_kind.clone()),
-        model: start.model.or_else(|| defaults.default_model.clone()),
-        effort: start.effort.or(defaults.default_effort),
+        model: start.model.or_else(|| {
+            default_agent
+                .then(|| defaults.default_model.clone())
+                .flatten()
+        }),
+        effort: start
+            .effort
+            .or_else(|| default_agent.then_some(defaults.default_effort).flatten()),
         max_budget_cents: start.max_budget_cents.or(defaults.default_max_budget_cents),
+        agent_kind,
         ..start
     }
 }
@@ -239,5 +251,30 @@ mod tests {
         bare.fields.default_effort = None;
         bare.fields.default_max_budget_cents = None;
         assert_eq!(run_shape_defaults(start(), &bare), start());
+    }
+
+    #[test]
+    fn the_default_model_and_effort_follow_only_the_default_agent() {
+        let named = |agent: &str| StartFeature {
+            agent_kind: Some(agent.to_owned()),
+            ..start()
+        };
+
+        let other = run_shape_defaults(named("claude-code"), &row("github"));
+        assert_eq!(
+            (
+                other.agent_kind.as_deref(),
+                other.model,
+                other.effort,
+                other.max_budget_cents
+            ),
+            (Some("claude-code"), None, None, Some(900))
+        );
+
+        let same = run_shape_defaults(named("codex"), &row("github"));
+        assert_eq!(
+            (same.model.as_deref(), same.effort),
+            (Some("gpt-5"), Some(Effort::High))
+        );
     }
 }

@@ -492,8 +492,9 @@ becomes a run on a runner that has no Project or Workflow of its own:
 - **The run shape is signed whole.** A runner runs with no project settings,
   so the Hub fills each of `agent_kind`, `model`, `effort` and
   `max_budget_cents` the dispatch leaves out from the Hub Project's defaults
-  before it signs (added 2026-11-09). What the runner is sent is the
-  effective value, and no default is applied after the signature.
+  before it signs (added 2026-11-09), the default model and effort only
+  under the default agent. What the runner is sent is the effective value,
+  and no default is applied after the signature.
 - **No start until the run can reach its repository.** A runner's `starts`
   answers that it launches only when a seam for the run's git credential is
   composed. Without one every start is refused `unknown_kind` with nothing
