@@ -7,7 +7,7 @@ import {
 } from '../../../src/lib/effortLevels';
 import type { StepOverride } from '../../../src/types';
 import type { DispatchRequest } from './dispatch';
-import type { InstanceDetail, WorkflowChoice } from './fleet';
+import type { FleetInstance, InstanceDetail, ProjectSummary, WorkflowChoice } from './fleet';
 
 export type FieldResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -28,6 +28,8 @@ export type DispatchForm = {
   overrides: Record<string, StepOverrideDraft>;
   maxBudgetCents: number;
   maxWallClockSecs: number | undefined;
+  /** Set exactly when the target is a runner: the desktop whose snapshot it runs from. */
+  sourceInstanceId?: string;
 };
 
 export type DispatchBlocker = 'no-read' | 'no-spend' | 'no-snapshot';
@@ -180,5 +182,48 @@ export function buildDispatchRequest(form: DispatchForm, attachmentIds: string[]
     max_budget_cents: form.maxBudgetCents,
     ...(form.maxWallClockSecs === undefined ? {} : { max_wall_clock_secs: form.maxWallClockSecs }),
     attachment_ids: attachmentIds,
+    ...(form.sourceInstanceId === undefined ? {} : { source_instance_id: form.sourceInstanceId }),
   };
+}
+
+/**
+ * The desktops a runner can be started from: the Hub reads the Project and
+ * Workflow from the source's snapshot, so it must be a desktop reporting
+ * `read` with something in it (docs/HUB.md §6.4). Its `spend` is not asked:
+ * the runner spends, not the source.
+ */
+export function dispatchSources(fleet: FleetInstance[]): FleetInstance[] {
+  return fleet.filter(
+    (instance) => instance.kind === 'desktop' && instance.readGranted && (instance.projectCount ?? 0) > 0,
+  );
+}
+
+/**
+ * Why a runner cannot start `project`, or `null` when it can. Mirrors
+ * `repository` in `crates/demeteo-hub/src/api/runner_start.rs`, which answers
+ * every miss but GitLab with `409 project_not_dispatchable`; GitLab passes it
+ * and fails later, at the runner's git-token fetch (docs/HUB.md §6.5). A
+ * Workflow holding the scrub mask is the one refusal this cannot see: the
+ * browser is sent graphs, never `steps_json`.
+ */
+export function runnerProjectProblem(project: ProjectSummary): string | null {
+  if (project.providerKind === null || project.providerKind === '') {
+    return 'This project has no Git host, so a runner has nothing to clone.';
+  }
+  if (project.providerKind === 'gitlab') return 'Runners cannot run GitLab projects yet.';
+  if (!isRunnerRemote(project.remoteUrl)) {
+    return "The Hub cannot read this project's remote as https://host/owner/repo.";
+  }
+  return null;
+}
+
+function isRunnerRemote(remoteUrl: string | null): boolean {
+  if (remoteUrl === null || !remoteUrl.startsWith('https://')) return false;
+  const rest = remoteUrl.slice('https://'.length);
+  const slash = rest.indexOf('/');
+  if (slash <= 0) return false;
+  const fullName = rest.slice(slash + 1);
+  const wellFormed = fullName.includes('/') && fullName.split('/').every((segment) => segment !== '');
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the Hub refuses control characters, so this must too.
+  return wellFormed && !/[@\s\u0000-\u001f\u007f-\u009f]/.test(rest);
 }

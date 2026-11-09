@@ -17,10 +17,11 @@ import {
   type PrefillField,
   parseWallClockSecs,
   prefillFor,
+  runnerProjectProblem,
   type StepOverrideDraft,
   toStepOverrides,
 } from '../lib/dispatchForm';
-import type { InstanceDetail } from '../lib/fleet';
+import type { InstanceDetail, ProjectSummary } from '../lib/fleet';
 import { useStagedAttachments } from '../lib/useStagedAttachments';
 import { AttachmentPicker } from './AttachmentPicker';
 import { CeremonyError } from './CeremonyError';
@@ -33,6 +34,12 @@ interface DispatchFormProps {
   /** An instance `dispatchBlocker` passed, or blocked only on `no-spend`. */
   instance: InstanceDetail;
   spendGranted: boolean;
+  /**
+   * Set exactly when `instance` is a runner: the desktop whose snapshot the
+   * Hub resolves the start from, so its projects, workflows and run-shape
+   * defaults are the ones offered (docs/HUB.md §6.4).
+   */
+  source?: InstanceDetail;
 }
 
 type Errors = { title?: string; cost?: string; wallClock?: string };
@@ -49,11 +56,13 @@ const LABEL_CLASS = 'text-xs font-medium text-slate-300';
 const UNFILLED: Prefill = { agentKind: '', model: '', effort: '', workflowId: '', maxCostUsd: '' };
 
 /**
- * Projects and workflows are offered only from the instance's own snapshot,
- * never typed: an id the instance does not hold is refused as
- * `unknown_project` / `unknown_workflow` after a round trip through the queue.
+ * Projects and workflows are offered only from a snapshot, never typed: an id
+ * the instance does not hold is refused as `unknown_project` /
+ * `unknown_workflow` after a round trip through the queue. For a runner that
+ * snapshot is the source desktop's, and a project the Hub would refuse to
+ * start there is shown but not offered.
  */
-export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
+export function DispatchForm({ instance, spendGranted, source }: DispatchFormProps) {
   const ids = {
     project: useId(),
     workflow: useId(),
@@ -63,11 +72,14 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
     how: useId(),
   };
   const agentIds = { agent: useId(), model: useId(), effort: useId() };
-  const projects = instance.projects ?? [];
-  const workflows = instance.workflows ?? [];
+  const catalog = source ?? instance;
+  const projects = catalog.projects ?? [];
+  const workflows = catalog.workflows ?? [];
+  const problemOf = (project: ProjectSummary) => (source === undefined ? null : runnerProjectProblem(project));
+  const firstProjectId = projects.find((project) => problemOf(project) === null)?.id ?? '';
 
-  const [initial] = useState(() => prefillFor(instance, projects[0]?.id ?? '', UNFILLED, new Set()));
-  const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
+  const [initial] = useState(() => prefillFor(catalog, firstProjectId, UNFILLED, new Set()));
+  const [projectId, setProjectId] = useState(firstProjectId);
   const [workflowId, setWorkflowId] = useState(initial.workflowId);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -104,7 +116,7 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
 
   const changeProject = (next: string) => {
     setProjectId(next);
-    const filled = prefillFor(instance, next, { agentKind, model, effort, workflowId, maxCostUsd }, edited);
+    const filled = prefillFor(catalog, next, { agentKind, model, effort, workflowId, maxCostUsd }, edited);
     setAgentKind(filled.agentKind);
     setModel(filled.model);
     setEffort(filled.effort);
@@ -114,7 +126,7 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!spendGranted || send.state !== 'editing') return;
+    if (!spendGranted || projectId === '' || send.state !== 'editing') return;
     const cost = parseMaxCostCents(maxCostUsd);
     const wallClock = parseWallClockSecs(maxWallClockMins);
     const next: Errors = {
@@ -137,6 +149,7 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
       overrides,
       maxBudgetCents: cost.value,
       maxWallClockSecs: wallClock.value,
+      ...(source === undefined ? {} : { sourceInstanceId: source.id }),
     };
     setSend({ state: 'sending' });
     attachments
@@ -213,11 +226,15 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
                 onChange={(event) => changeProject(event.target.value)}
                 className={FIELD_CLASS}
               >
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
+                {projectId === '' && <option value="">No project a runner can start</option>}
+                {projects.map((project) => {
+                  const problem = problemOf(project);
+                  return (
+                    <option key={project.id} value={project.id} disabled={problem !== null}>
+                      {problem === null ? project.name : `${project.name} — ${problem}`}
+                    </option>
+                  );
+                })}
               </select>
             </div>
             <div className="flex flex-col gap-1.5">
@@ -332,6 +349,11 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
       </div>
       <div className="flex flex-col gap-3 border-t border-hairline px-5 py-4">
         {failure !== null && <DispatchFailure error={failure} />}
+        {projectId === '' && (
+          <p className="text-sm text-slate-300">
+            None of this desktop's projects can run on a runner: each is listed with the reason.
+          </p>
+        )}
         {!spendGranted && (
           <p className="text-sm text-ruby-300">
             Spend has not been granted on this instance, so it would refuse a Feature sent from the Hub. Grant spend for
@@ -342,7 +364,7 @@ export function DispatchForm({ instance, spendGranted }: DispatchFormProps) {
           <span className="font-mono text-xs text-slate-400">
             {overrideSummary(overrideCount)}
           </span>
-          <Button variant="primary" type="submit" disabled={!spendGranted || sending}>
+          <Button variant="primary" type="submit" disabled={!spendGranted || projectId === '' || sending}>
             {instance.present ? 'Start feature' : 'Queue feature'}
           </Button>
         </div>

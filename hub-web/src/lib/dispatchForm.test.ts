@@ -5,13 +5,15 @@ import {
   type DispatchForm,
   definitionOf,
   dispatchBlocker,
+  dispatchSources,
   isOverridable,
   parseMaxCostCents,
   parseWallClockSecs,
+  runnerProjectProblem,
   toStepOverrides,
   usdOfCents,
 } from './dispatchForm';
-import type { InstanceDetail, WorkflowChoice } from './fleet';
+import type { FleetInstance, InstanceDetail, ProjectSummary, WorkflowChoice } from './fleet';
 
 const INSTANCE: InstanceDetail = {
   id: '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21',
@@ -25,7 +27,7 @@ const INSTANCE: InstanceDetail = {
   scopes: ['read', 'spend'],
   kind: 'desktop',
   readGranted: true,
-  projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: null }],
+  projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: null, providerKind: null }],
   liveRuns: [],
   harnesses: null,
   workflows: [{ workflowId: 'wf-1', version: 3, name: 'Default', graph: null }],
@@ -230,6 +232,7 @@ describe('buildDispatchRequest', () => {
         effort: 'medium',
         overrides: { 's-implement': { model: 'opus' }, 's-gate': {} },
         maxWallClockSecs: 5400,
+        sourceInstanceId: 'src-1',
       },
       ['att-1', 'att-2'],
     );
@@ -243,6 +246,7 @@ describe('buildDispatchRequest', () => {
         'max_wall_clock_secs',
         'model',
         'project_id',
+        'source_instance_id',
         'step_overrides',
         'title',
         'workflow_id',
@@ -260,6 +264,73 @@ describe('buildDispatchRequest', () => {
       max_budget_cents: 500,
       max_wall_clock_secs: 5400,
       attachment_ids: ['att-1', 'att-2'],
+      source_instance_id: 'src-1',
     });
+  });
+});
+
+function project(remoteUrl: string | null, providerKind: string | null): ProjectSummary {
+  return { id: 'p', name: 'widgets', remoteUrl, providerKind };
+}
+
+describe('runnerProjectProblem', () => {
+  it('offers a GitHub project whose remote is https://host/owner/repo, a nested group included', () => {
+    expect(runnerProjectProblem(project('https://github.com/acme/widgets', 'github'))).toBeNull();
+    expect(runnerProjectProblem(project('https://ghe.example.com/org/team/widgets', 'github'))).toBeNull();
+  });
+
+  it('refuses a project with no Git host, as the Hub would', () => {
+    expect(runnerProjectProblem(project('https://github.com/acme/widgets', null))).toMatch(/no Git host/);
+    expect(runnerProjectProblem(project('https://github.com/acme/widgets', ''))).toMatch(/no Git host/);
+  });
+
+  it('refuses GitLab, which the Hub accepts but no runner can fetch a token for', () => {
+    expect(runnerProjectProblem(project('https://gitlab.com/acme/widgets', 'gitlab'))).toMatch(/GitLab/);
+  });
+
+  it.each([
+    null,
+    'git@github.com:acme/widgets.git',
+    'http://github.com/acme/widgets',
+    'https://github.com/widgets',
+    'https:///acme/widgets',
+    'https://github.com/acme//widgets',
+    'https://github.com/acme/widgets/',
+    'https://user@github.com/acme/widgets',
+    'https://github.com/acme/wid gets',
+    'https://github.com/acme/wid\u0085gets',
+  ])('refuses the remote %j, whose shape the Hub would not read', (remoteUrl) => {
+    expect(runnerProjectProblem(project(remoteUrl, 'github'))).toMatch(/remote/);
+  });
+});
+
+describe('dispatchSources', () => {
+  const desktop: FleetInstance = {
+    id: 'd-1',
+    kind: 'desktop',
+    label: 'laptop',
+    present: true,
+    os: 'linux',
+    arch: 'x86_64',
+    version: '1.0.0',
+    scopes: ['read'],
+    readGranted: true,
+    lastSeen: null,
+    liveRuns: 0,
+    needsYou: [],
+    harnesses: null,
+    projectCount: 2,
+  };
+
+  it('keeps only desktops reporting read with projects, whatever their spend', () => {
+    const fleet: FleetInstance[] = [
+      desktop,
+      { ...desktop, id: 'd-spend', scopes: ['read', 'spend'] },
+      { ...desktop, id: 'r-1', kind: 'runner' },
+      { ...desktop, id: 'd-no-read', readGranted: false },
+      { ...desktop, id: 'd-empty', projectCount: 0 },
+      { ...desktop, id: 'd-unknown-kind', kind: null },
+    ];
+    expect(dispatchSources(fleet).map((instance) => instance.id)).toEqual(['d-1', 'd-spend']);
   });
 });

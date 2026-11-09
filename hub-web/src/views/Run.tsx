@@ -5,6 +5,7 @@ import { Chip } from '../../../src/components/ui/Chip';
 import { runStatusMeta } from '../../../src/lib/runStatus';
 import { CeremonyError } from '../components/CeremonyError';
 import { PageHeader } from '../components/PageHeader';
+import { RunCancel } from '../components/RunCancel';
 import { RunEvents } from '../components/RunEvents';
 import { RunGatesWaiting } from '../components/RunGatesWaiting';
 import { RunGitTokenProblem } from '../components/RunGitTokenProblem';
@@ -58,6 +59,11 @@ export function Run({ instanceId, featureId }: RunProps) {
         title={loaded === null ? 'Run' : (loaded.title ?? featureId)}
         eyebrow={loaded === null ? undefined : <RunBreadcrumb instanceId={instanceId} detail={loaded} />}
         summary={loaded === null ? undefined : <RunSummaryLine featureId={featureId} detail={loaded} />}
+        actions={
+          loaded === null ? undefined : (
+            <RunCancel instanceId={instanceId} featureId={featureId} status={loaded.status} scopes={scopes} />
+          )
+        }
       />
       {load.state === 'loading' && <p className="text-sm text-slate-400">Loading run {ids}…</p>}
       {load.state === 'failed' && isNotFound(load.error) && (

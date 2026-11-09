@@ -101,12 +101,16 @@ pub struct InstanceDetailView {
 }
 
 /// A project as the snapshot names it. Built field by field: the snapshot is
-/// the desktop's own description, and only these three are the Hub's to show.
+/// the desktop's own description, and only these four are the Hub's to show.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectView {
     pub id: String,
     pub name: String,
     pub remote_url: Option<String>,
+    /// As [`ProjectSnapshot::provider_kind`](crate::protocol::ProjectSnapshot::provider_kind):
+    /// what lets the browser tell, before it dispatches, a Project a runner
+    /// cannot start from one it can (`docs/HUB.md` §6.4).
+    pub provider_kind: Option<String>,
 }
 
 /// One Feature of one instance, from its mirrored events and the labels of
@@ -371,6 +375,7 @@ fn reported_of(snapshot: Option<Snapshot>) -> Reported {
                 id: project.id,
                 name: project.name,
                 remote_url: project.remote_url,
+                provider_kind: project.provider_kind,
             })
             .collect(),
         workflows: workflows(snapshot.workflows),
@@ -410,4 +415,37 @@ fn unix_seconds(at: OffsetDateTime) -> Option<u64> {
 
 fn count(len: usize) -> u32 {
     u32::try_from(len).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use demeteo_hub_protocol::ProjectSnapshot;
+
+    fn project(provider_kind: Option<&str>) -> ProjectSnapshot {
+        ProjectSnapshot {
+            id: "p".to_owned(),
+            name: "Widgets".to_owned(),
+            remote_url: Some("https://gitlab.example.com/acme/widgets".to_owned()),
+            provider_kind: provider_kind.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_projects_provider_kind_reaches_the_view_as_the_desktop_reported_it() {
+        let snapshot = Snapshot {
+            v: 1,
+            projects: vec![project(Some("gitlab")), project(None)],
+            workflows: Vec::new(),
+            run_shape: Vec::new(),
+            features: Vec::new(),
+            harnesses: None,
+        };
+        let kinds: Vec<Option<String>> = reported_of(Some(snapshot))
+            .projects
+            .into_iter()
+            .map(|view| view.provider_kind)
+            .collect();
+        assert_eq!(kinds, [Some("gitlab".to_owned()), None]);
+    }
 }
