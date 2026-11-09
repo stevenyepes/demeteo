@@ -5,6 +5,7 @@
 //! database is reachable, and they stand a double here instead.
 
 use crate::socket::port::SocketStore;
+use crate::store::hub_projects::{HubProjectId, HubProjectRow};
 use crate::store::instances::Instance;
 use crate::store::requests::{RequestId, RequestRecord};
 use crate::store::run_mirror::MirrorRecord;
@@ -13,8 +14,8 @@ use async_trait::async_trait;
 use demeteo_hub_protocol::{RunEvent, Snapshot};
 
 /// Every method takes the tenant first and answers only with that tenant's
-/// rows: another tenant's instance, request or mirror reads exactly as one
-/// that does not exist, `None` or empty, never an error.
+/// rows: another tenant's instance, request, mirror or Hub Project reads
+/// exactly as one that does not exist, `None` or empty, never an error.
 #[async_trait]
 pub trait ApiStore: Send + Sync {
     async fn instances(&self, user: UserId) -> Result<Vec<Instance>, StoreError>;
@@ -56,6 +57,13 @@ pub trait ApiStore: Send + Sync {
     /// The credential ids of the tenant's trusted passkeys, as unpadded
     /// base64url, for a ceremony's `allowCredentials`.
     async fn trusted_credential_ids(&self, user: UserId) -> Result<Vec<String>, StoreError>;
+
+    /// The tenant's Hub Project `id`, which a dispatch to a runner names.
+    async fn hub_project(
+        &self,
+        user: UserId,
+        id: HubProjectId,
+    ) -> Result<Option<HubProjectRow>, StoreError>;
 
     /// The store a request for `instance` is queued through. Like
     /// [`PostgresStore::new`](crate::socket::postgres::PostgresStore::new) it

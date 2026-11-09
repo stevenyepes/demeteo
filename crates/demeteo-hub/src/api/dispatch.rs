@@ -16,16 +16,16 @@
 //! (`docs/HUB.md` §6.3), and is bound to the request in the store call that
 //! queues it: of two dispatches naming one attachment, one is queued.
 //!
-//! A `start_feature` for a runner carries the repository and Workflow version
-//! to run as well, resolved from the snapshot of the desktop the body names
-//! as `source_instance_id` ([`runner_start`](super::runner_start)) before
-//! anything is fetched, signed or bound.
+//! A `start_feature` for a runner names a Hub Project and an embedded starter,
+//! and carries the repository and Workflow version to run as well, with the
+//! project's run-shape defaults filled in ([`runner_start`](super::runner_start))
+//! before anything is fetched, signed or bound. A dispatch to a desktop names
+//! that desktop's own Project and Workflow, which the desktop resolves.
 
 use super::attachments::lowercase_hex;
-use super::fleet::{granted, parsed_instance, snapshot_of};
-use super::runner_start::runner_start;
+use super::fleet::granted;
+use super::runner_start::{run_shape_defaults, runner_start};
 use super::runs::owned;
-use super::scope::read_verdict;
 use super::{ApiContext, PostgresApi};
 use crate::attachments::envelope::{self, dispatch_verdict, requested_ids, EnvelopeError};
 use crate::attachments::postgres::PostgresAttachments;
@@ -36,21 +36,23 @@ use crate::socket::requests::{
     enqueue_verdict, enqueued_as, enqueued_binding, fresh_minted, EnqueueError, Enqueued, Minted,
 };
 use crate::socket::MAX_FEATURE_ID_BYTES;
+use crate::store::hub_projects::HubProjectId;
 use crate::store::instances::{Instance, InstanceKind};
-use crate::store::{InstanceId, UserId};
+use crate::store::UserId;
+use crate::workflows;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use demeteo_hub_protocol::{
-    AttachmentRef, CancelFeature, Effort, RequestPayload, RunnerStart, SetStepAssignment,
-    StartFeature, StepOverride,
+    AttachmentRef, CancelFeature, Effort, RequestPayload, SetStepAssignment, StartFeature,
+    StepOverride,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A `start_feature` as a browser asks for it. Every field but
-/// `attachment_ids` and `source_instance_id` is the signed payload's own, of
-/// its own type, so what is queued is what was asked.
+/// `attachment_ids` is the signed payload's own, of its own type, so what is
+/// queued is what was asked, save the defaults a runner dispatch fills in.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DispatchBody {
@@ -75,11 +77,6 @@ pub struct DispatchBody {
     /// the payload lists them.
     #[serde(default)]
     pub attachment_ids: Vec<String>,
-    /// The tenant's desktop whose snapshot says what a runner is to run:
-    /// required when the instance dispatched to is a runner, and refused when
-    /// it is a desktop, which reads its own Projects.
-    #[serde(default)]
-    pub source_instance_id: Option<String>,
 }
 
 /// A `set_step_assignment` as a browser asks for it; the feature and the
@@ -117,14 +114,12 @@ pub async fn dispatch(
 ) -> Result<EnqueuedView, ApiError> {
     let row = owned(api, user, instance_id).await?;
     let malformed = body_verdict(&body);
-    let source = body.source_instance_id.clone();
     let mut start = start_feature(body);
     let unsigned = RequestPayload::StartFeature(start.clone());
     enqueue_verdict(&granted(&row), &unsigned).map_err(EnqueueError::from)?;
     let ids = malformed?;
-    if let Some(source) = source_verdict(&row, source.as_deref())? {
-        let resolved = resolved_start(api, user, source, &start).await?;
-        start.runner = Some(Box::new(resolved));
+    if InstanceKind::parse(&row.kind) == Some(InstanceKind::Runner) {
+        start = runner_resolved(api, user, start).await?;
     }
     if ids.is_empty() {
         return queue(api, user, &row, RequestPayload::StartFeature(start), now).await;
@@ -134,53 +129,29 @@ pub async fn dispatch(
     queue_binding(api, user, &row, payload, &ids, now).await
 }
 
-/// Which desktop's snapshot a dispatch to `target` is resolved from: `None`
-/// for a desktop, which needs none and is refused one, and the parsed id for
-/// a runner, which is refused without one. An id that does not parse is
-/// `404`, as any instance id is.
-pub fn source_verdict(
-    target: &Instance,
-    source: Option<&str>,
-) -> Result<Option<InstanceId>, ApiError> {
-    let runner = InstanceKind::parse(&target.kind) == Some(InstanceKind::Runner);
-    match (runner, source) {
-        (false, None) => Ok(None),
-        (false, Some(_)) | (true, None) => Err(ApiError::INVALID_REQUEST),
-        (true, Some(text)) => parsed_instance(text).map(Some).ok_or(ApiError::NOT_FOUND),
-    }
-}
-
-/// Whether `source` may say what a runner runs: a desktop, since only a
-/// desktop reports Projects of its own, and one reporting `read`, since its
-/// snapshot is what the dispatch reads.
-pub fn source_row_verdict(source: &Instance) -> Result<(), ApiError> {
-    if InstanceKind::parse(&source.kind) != Some(InstanceKind::Desktop) {
-        return Err(ApiError::INVALID_REQUEST);
-    }
-    read_verdict(&granted(source))
-}
-
-async fn resolved_start(
+/// `start` as a runner is signed for it: the Hub Project its `project_id`
+/// names, which a non-UUID never does, with that project's defaults filled
+/// in, and the starter its `workflow_id` names.
+async fn runner_resolved(
     api: &ApiContext<'_>,
     user: UserId,
-    source: InstanceId,
-    start: &StartFeature,
-) -> Result<RunnerStart, ApiError> {
-    let row = api
-        .store
-        .instance(user, source)
-        .await
-        .map_err(store_failed)?
-        .ok_or(ApiError::NOT_FOUND)?;
-    source_row_verdict(&row)?;
-    let snapshot = snapshot_of(api, user, source).await?;
-    let source_text = source.0.to_string();
-    Ok(runner_start(
-        &source_text,
-        snapshot.as_ref(),
-        &start.project_id,
-        &start.workflow_id,
-    )?)
+    start: StartFeature,
+) -> Result<StartFeature, ApiError> {
+    let project = match Uuid::parse_str(&start.project_id) {
+        Ok(id) => api
+            .store
+            .hub_project(user, HubProjectId(id))
+            .await
+            .map_err(store_failed)?,
+        Err(_) => None,
+    };
+    let runner = runner_start(project.as_ref(), workflows::starter(&start.workflow_id))?;
+    let mut start = match &project {
+        Some(row) => run_shape_defaults(start, row),
+        None => start,
+    };
+    start.runner = Some(Box::new(runner));
+    Ok(start)
 }
 
 /// The refs to sign for the rows `ids` name, in request order. Transit
@@ -403,7 +374,6 @@ pub async fn post_assignment(
 pub fn body_verdict(body: &DispatchBody) -> Result<Vec<Uuid>, ApiError> {
     let ids = [body.project_id.as_str(), body.workflow_id.as_str()]
         .into_iter()
-        .chain(body.source_instance_id.as_deref())
         .chain(body.step_overrides.iter().map(|o| o.step_id.as_str()));
     let text = [body.title.as_str(), body.description.as_str()]
         .into_iter()
@@ -473,15 +443,13 @@ mod tests {
             max_budget_cents: None,
             max_wall_clock_secs: None,
             attachment_ids: Vec::new(),
-            source_instance_id: None,
         }
     }
 
     type Edit = fn(&mut DispatchBody, String);
 
-    fn every_string() -> [(&'static str, Edit); 10] {
+    fn every_string() -> [(&'static str, Edit); 9] {
         [
-            ("source_instance_id", |b, s| b.source_instance_id = Some(s)),
             ("project_id", |b, s| b.project_id = s),
             ("workflow_id", |b, s| b.workflow_id = s),
             ("title", |b, s| b.title = s),
@@ -516,8 +484,7 @@ mod tests {
 
     #[test]
     fn an_id_over_the_bound_is_an_invalid_request_and_one_at_it_is_not() {
-        let ids: [(&str, Edit); 4] = [
-            ("source_instance_id", |b, s| b.source_instance_id = Some(s)),
+        let ids: [(&str, Edit); 3] = [
             ("project_id", |b, s| b.project_id = s),
             ("workflow_id", |b, s| b.workflow_id = s),
             ("step_id", |b, s| b.step_overrides[0].step_id = s),
@@ -554,65 +521,5 @@ mod tests {
 
         not_a_uuid.title = "a\0b".to_owned();
         assert_eq!(body_verdict(&not_a_uuid), Err(ApiError::INVALID_REQUEST));
-    }
-
-    fn instance(kind: InstanceKind, scopes: &[&str]) -> Instance {
-        Instance {
-            id: InstanceId::generate(),
-            user_id: UserId::generate(),
-            kind: kind.as_str().to_owned(),
-            name: "name".to_owned(),
-            os: "linux".to_owned(),
-            arch: "x86_64".to_owned(),
-            version: "1.0.0".to_owned(),
-            last_seen: None,
-            granted_scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
-            created_at: time::OffsetDateTime::UNIX_EPOCH,
-            install_id: None,
-            connection_id: None,
-            connected_at: None,
-            event_cursor: 0,
-        }
-    }
-
-    #[test]
-    fn a_desktop_takes_no_source_and_a_runner_needs_one_that_parses() {
-        let desktop = instance(InstanceKind::Desktop, &["spend"]);
-        let runner = instance(InstanceKind::Runner, &["spend"]);
-        let source = InstanceId::generate();
-        let text = source.0.to_string();
-
-        assert_eq!(source_verdict(&desktop, None), Ok(None));
-        assert_eq!(
-            source_verdict(&desktop, Some(&text)),
-            Err(ApiError::INVALID_REQUEST)
-        );
-        assert_eq!(
-            source_verdict(&runner, None),
-            Err(ApiError::INVALID_REQUEST)
-        );
-        assert_eq!(source_verdict(&runner, Some(&text)), Ok(Some(source)));
-        assert_eq!(
-            source_verdict(&runner, Some("not-a-uuid")),
-            Err(ApiError::NOT_FOUND)
-        );
-    }
-
-    #[test]
-    fn a_source_is_a_desktop_reporting_read() {
-        assert_eq!(
-            source_row_verdict(&instance(InstanceKind::Desktop, &["read"])),
-            Ok(())
-        );
-        assert_eq!(
-            source_row_verdict(&instance(InstanceKind::Desktop, &["spend", "gates"])),
-            Err(ApiError::scope_not_granted(
-                demeteo_hub_protocol::Scope::Read
-            ))
-        );
-        assert_eq!(
-            source_row_verdict(&instance(InstanceKind::Runner, &["read"])),
-            Err(ApiError::INVALID_REQUEST)
-        );
     }
 }

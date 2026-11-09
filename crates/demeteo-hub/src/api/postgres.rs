@@ -7,6 +7,7 @@ use crate::auth::challenge::base64url_encode;
 use crate::auth::policy::Status;
 use crate::socket::port::SocketStore;
 use crate::socket::postgres::PostgresStore;
+use crate::store::hub_projects::{find_hub_project, HubProjectId, HubProjectRow};
 use crate::store::instances::{find_instance, list_instances, Instance};
 use crate::store::passkeys::list_passkeys;
 use crate::store::requests::{find_request, git_token_problem_of, RequestId, RequestRecord};
@@ -79,6 +80,14 @@ impl ApiStore for PostgresApi {
             .filter(|passkey| passkey.status == Status::Trusted)
             .map(|passkey| base64url_encode(&passkey.credential_id))
             .collect())
+    }
+
+    async fn hub_project(
+        &self,
+        user: UserId,
+        id: HubProjectId,
+    ) -> Result<Option<HubProjectRow>, StoreError> {
+        find_hub_project(user, &self.db, id).await
     }
 
     async fn requests_of(

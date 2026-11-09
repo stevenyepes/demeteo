@@ -1,40 +1,33 @@
 //! What a dispatch to a runner signs beside the `start_feature`: the
-//! repository and Workflow version a desktop reported, resolved from that
-//! desktop's last snapshot (`docs/HUB.md` §6.4, decision 64 *Hub-started
-//! runner runs*).
+//! repository of a Hub Project and an embedded starter Workflow
+//! (`docs/HUB.md` §6.4). Both are the Hub's own, never a desktop's, which
+//! supersedes decision 65's resolution through a source desktop's snapshot.
 //!
-//! A runner keeps no copy of a desktop's Projects or Workflows, so whatever
-//! is signed here is all it will run. Every miss is therefore a refusal and
-//! never a guess: a Project or Workflow the snapshot does not name, a
-//! repository it cannot be cloned from as given, or a definition the
-//! desktop's scrubber already rewrote.
+//! A runner keeps no Projects or Workflows and runs with no project settings,
+//! so whatever is signed here is all it will run, and the Hub Project's
+//! run-shape defaults are filled in before signing or not at all. Every miss
+//! is a refusal and never a guess.
 
-use super::snapshot_view::version_name;
 use crate::auth::handlers::ApiError;
+use crate::projects::verdict::runner_ready;
+use crate::store::hub_projects::HubProjectRow;
+use crate::workflows::Starter;
 use axum::http::StatusCode;
-use demeteo_hub_protocol::{
-    ProjectSnapshot, RunnerRepository, RunnerStart, RunnerWorkflow, Snapshot,
-    WorkflowVersionSnapshot,
-};
+use demeteo_hub_protocol::{RunnerRepository, RunnerStart, RunnerWorkflow, StartFeature};
 
-/// What core's `secret_scrub` writes in place of a secret it found. A
-/// definition holding it is not the one the desktop runs, and a runner
-/// handed it would run a `***` where a token or a command used to be. A
-/// prompt that holds the three characters as its own text is refused too:
-/// the Hub cannot tell the two apart.
-pub const SCRUB_MASK: &str = "***";
+/// What every Hub-built [`RunnerStart`] carries as `source_instance_id`. No
+/// runner reads the field, and every deployed runner requires it.
+pub const HUB_ORIGIN: &str = "hub";
 
 /// Why a dispatch to a runner resolved nothing to sign.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchRefusal {
-    /// The source's snapshot names no Project of the body's `project_id`, or
-    /// there is no readable snapshot at all.
+    /// The body's `project_id` names no Hub Project of the tenant.
     UnknownProject,
-    /// The snapshot names no version of the body's `workflow_id`.
+    /// The body's `workflow_id` names no embedded starter.
     UnknownWorkflow,
-    /// The Project and Workflow are there, but not as a runner can run them:
-    /// no `provider_kind`, a `remote_url` that is not `https://host/owner/repo`,
-    /// or a definition holding [`SCRUB_MASK`].
+    /// The Hub Project is one a runner cannot clone yet: GitLab, until a
+    /// runner can be minted a GitLab token (decision 71).
     ProjectNotDispatchable,
 }
 
@@ -49,271 +42,202 @@ impl From<DispatchRefusal> for ApiError {
     }
 }
 
-/// The start a runner is signed for `project_id` and `workflow_id`, read from
-/// `snapshot`, the last one `source_instance_id` sent. The Workflow is pinned
-/// at its highest `version` in the snapshot, which is the one the browser was
-/// offered (§6.4 *An instance's workflows are graph-only*).
+/// The start a runner is signed for `project` and `starter`, each `None`
+/// when the body named none the Hub holds. The Workflow is judged first.
 pub fn runner_start(
-    source_instance_id: &str,
-    snapshot: Option<&Snapshot>,
-    project_id: &str,
-    workflow_id: &str,
+    project: Option<&HubProjectRow>,
+    starter: Option<&Starter>,
 ) -> Result<RunnerStart, DispatchRefusal> {
-    let snapshot = snapshot.ok_or(DispatchRefusal::UnknownProject)?;
-    let project = snapshot
-        .projects
-        .iter()
-        .find(|project| project.id == project_id)
-        .ok_or(DispatchRefusal::UnknownProject)?;
-    let version =
-        latest(&snapshot.workflows, workflow_id).ok_or(DispatchRefusal::UnknownWorkflow)?;
-    let repository = repository(project).ok_or(DispatchRefusal::ProjectNotDispatchable)?;
-    if version.steps_json.contains(SCRUB_MASK) {
+    let starter = starter.ok_or(DispatchRefusal::UnknownWorkflow)?;
+    let fields = &project.ok_or(DispatchRefusal::UnknownProject)?.fields;
+    if !runner_ready(&fields.provider_kind) {
         return Err(DispatchRefusal::ProjectNotDispatchable);
     }
     Ok(RunnerStart {
-        source_instance_id: source_instance_id.to_owned(),
-        repository,
+        source_instance_id: HUB_ORIGIN.to_owned(),
+        repository: RunnerRepository {
+            provider_kind: fields.provider_kind.clone(),
+            host: fields.host.clone(),
+            full_name: fields.full_name.clone(),
+        },
         workflow: RunnerWorkflow {
-            workflow_id: version.workflow_id.clone(),
-            version: version.version,
-            name: version_name(version),
-            steps_json: version.steps_json.clone(),
+            workflow_id: starter.id.clone(),
+            version: starter.version,
+            name: starter.name.clone(),
+            steps_json: starter.steps_json.clone(),
         },
     })
 }
 
-fn latest<'a>(
-    versions: &'a [WorkflowVersionSnapshot],
-    workflow_id: &str,
-) -> Option<&'a WorkflowVersionSnapshot> {
-    versions
-        .iter()
-        .filter(|version| version.workflow_id == workflow_id)
-        .max_by_key(|version| version.version)
-}
-
-/// The desktop builds `remote_url` as `https://{host}/{repo_path}` from the
-/// provider and the repository, never from git (core
-/// `domain/hub_socket/snapshot.rs`), so this is the one shape to undo. The
-/// provider is the snapshot's word alone: a host does not say which provider
-/// serves it.
-fn repository(project: &ProjectSnapshot) -> Option<RunnerRepository> {
-    let provider_kind = project.provider_kind.as_deref().filter(|k| !k.is_empty())?;
-    let rest = project.remote_url.as_deref()?.strip_prefix("https://")?;
-    let (host, full_name) = rest.split_once('/')?;
-    let well_formed = !host.is_empty()
-        && full_name.contains('/')
-        && full_name.split('/').all(|segment| !segment.is_empty());
-    let doubtful = |c: char| c == '@' || c.is_whitespace() || c.is_control();
-    if !well_formed || rest.contains(doubtful) {
-        return None;
+/// `start` with each run-shape field the body left out taken from `row`'s
+/// defaults. A field the body set is kept, whatever the project says.
+pub fn run_shape_defaults(start: StartFeature, row: &HubProjectRow) -> StartFeature {
+    let defaults = &row.fields;
+    StartFeature {
+        agent_kind: start
+            .agent_kind
+            .or_else(|| defaults.default_agent_kind.clone()),
+        model: start.model.or_else(|| defaults.default_model.clone()),
+        effort: start.effort.or(defaults.default_effort),
+        max_budget_cents: start.max_budget_cents.or(defaults.default_max_budget_cents),
+        ..start
     }
-    Some(RunnerRepository {
-        provider_kind: provider_kind.to_owned(),
-        host: host.to_owned(),
-        full_name: full_name.to_owned(),
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::snapshot_view::WorkflowGraphView;
+    use crate::store::hub_projects::{HubProjectFields, HubProjectId};
+    use demeteo_hub_protocol::Effort;
+    use time::OffsetDateTime;
 
-    fn project(remote_url: Option<&str>, provider_kind: Option<&str>) -> ProjectSnapshot {
-        ProjectSnapshot {
-            id: "p-1".to_owned(),
-            name: "Project".to_owned(),
-            remote_url: remote_url.map(str::to_owned),
-            provider_kind: provider_kind.map(str::to_owned),
+    fn row(provider_kind: &str) -> HubProjectRow {
+        HubProjectRow {
+            id: HubProjectId::generate(),
+            fields: HubProjectFields {
+                name: "Widgets".to_owned(),
+                provider_kind: provider_kind.to_owned(),
+                host: "github.com".to_owned(),
+                full_name: "acme/widgets".to_owned(),
+                default_agent_kind: Some("codex".to_owned()),
+                default_model: Some("gpt-5".to_owned()),
+                default_effort: Some(Effort::High),
+                default_workflow_id: None,
+                default_max_budget_cents: Some(900),
+            },
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
         }
     }
 
-    fn version(workflow_id: &str, number: u32, steps_json: &str) -> WorkflowVersionSnapshot {
-        WorkflowVersionSnapshot {
-            id: format!("{workflow_id}-v{number}"),
-            workflow_id: workflow_id.to_owned(),
-            version: number,
-            steps_json: steps_json.to_owned(),
-            definition_json: Some(format!(
-                r#"{{"name":"Standard v{number}","nodes":[],"edges":[]}}"#
-            )),
-            note: None,
-            created_at: 1_700_000_000,
+    fn starter() -> Starter {
+        Starter {
+            id: "wf-starter-standard".to_owned(),
+            name: "Standard".to_owned(),
+            description: "Plan, build, review.".to_owned(),
+            version: 42,
+            steps_json: r#"[{"id":"s-plan"}]"#.to_owned(),
+            graph: WorkflowGraphView {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
         }
     }
 
-    fn snapshot(project: ProjectSnapshot, workflows: Vec<WorkflowVersionSnapshot>) -> Snapshot {
-        Snapshot {
-            v: 1,
-            projects: vec![project],
-            workflows,
-            run_shape: Vec::new(),
-            features: Vec::new(),
-            harnesses: None,
-            harness_catalog: None,
+    fn start() -> StartFeature {
+        StartFeature {
+            project_id: "p".to_owned(),
+            workflow_id: "wf-starter-standard".to_owned(),
+            title: "t".to_owned(),
+            description: String::new(),
+            agent_kind: None,
+            model: None,
+            effort: None,
+            step_overrides: Vec::new(),
+            max_budget_cents: None,
+            max_wall_clock_secs: None,
+            attachments: Vec::new(),
+            runner: None,
         }
-    }
-
-    fn dispatchable() -> Snapshot {
-        snapshot(
-            project(Some("https://github.com/acme/widgets"), Some("github")),
-            vec![
-                version("w-1", 3, r#"[{"v":3}]"#),
-                version("w-1", 7, r#"[{"v":7}]"#),
-                version("w-1", 5, r#"[{"v":5}]"#),
-                version("w-2", 9, r#"[{"other":true}]"#),
-            ],
-        )
     }
 
     #[test]
-    fn a_runner_start_pins_the_highest_version_and_splits_the_remote() {
-        let start = runner_start("src-1", Some(&dispatchable()), "p-1", "w-1");
+    fn a_github_project_and_a_starter_sign_their_repository_and_steps_from_the_hub() {
+        let start = runner_start(Some(&row("github")), Some(&starter()));
 
         assert_eq!(
             start,
             Ok(RunnerStart {
-                source_instance_id: "src-1".to_owned(),
+                source_instance_id: "hub".to_owned(),
                 repository: RunnerRepository {
                     provider_kind: "github".to_owned(),
                     host: "github.com".to_owned(),
                     full_name: "acme/widgets".to_owned(),
                 },
                 workflow: RunnerWorkflow {
-                    workflow_id: "w-1".to_owned(),
-                    version: 7,
-                    name: "Standard v7".to_owned(),
-                    steps_json: r#"[{"v":7}]"#.to_owned(),
+                    workflow_id: "wf-starter-standard".to_owned(),
+                    version: 42,
+                    name: "Standard".to_owned(),
+                    steps_json: r#"[{"id":"s-plan"}]"#.to_owned(),
                 },
             })
         );
     }
 
     #[test]
-    fn a_nested_group_and_a_host_with_a_port_are_kept_whole() {
-        let snapshot = snapshot(
-            project(
-                Some("https://gitlab.example:8443/group/sub/repo"),
-                Some("gitlab"),
-            ),
-            vec![version("w-1", 1, "[]")],
-        );
+    fn the_signed_start_keeps_the_wire_shape_every_deployed_runner_reads() {
+        let start = runner_start(Some(&row("github")), Some(&starter())).unwrap();
+        let wire = serde_json::to_value(&start).unwrap();
 
-        let repository =
-            runner_start("src-1", Some(&snapshot), "p-1", "w-1").map(|start| start.repository);
-
+        let keys = |value: &serde_json::Value| {
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
         assert_eq!(
-            repository,
-            Ok(RunnerRepository {
-                provider_kind: "gitlab".to_owned(),
-                host: "gitlab.example:8443".to_owned(),
-                full_name: "group/sub/repo".to_owned(),
-            })
+            keys(&wire),
+            ["repository", "source_instance_id", "workflow"]
+        );
+        assert_eq!(
+            keys(&wire["repository"]),
+            ["full_name", "host", "provider_kind"]
+        );
+        assert_eq!(
+            keys(&wire["workflow"]),
+            ["name", "steps_json", "version", "workflow_id"]
         );
     }
 
     #[test]
-    fn a_project_or_workflow_the_snapshot_does_not_name_is_refused_by_which() {
-        let snapshot = dispatchable();
+    fn each_miss_is_refused_by_which_and_the_workflow_is_judged_first() {
+        let github = row("github");
+        let gitlab = row("gitlab");
+        let starter = starter();
         let cases = [
-            (None, "p-1", "w-1", DispatchRefusal::UnknownProject),
+            (None, None, DispatchRefusal::UnknownWorkflow),
+            (Some(&gitlab), None, DispatchRefusal::UnknownWorkflow),
+            (None, Some(&starter), DispatchRefusal::UnknownProject),
             (
-                Some(&snapshot),
-                "p-2",
-                "w-1",
-                DispatchRefusal::UnknownProject,
-            ),
-            (
-                Some(&snapshot),
-                "p-1",
-                "w-3",
-                DispatchRefusal::UnknownWorkflow,
+                Some(&gitlab),
+                Some(&starter),
+                DispatchRefusal::ProjectNotDispatchable,
             ),
         ];
-        for (snapshot, project_id, workflow_id, refusal) in cases {
-            assert_eq!(
-                runner_start("src-1", snapshot, project_id, workflow_id),
-                Err(refusal),
-                "{project_id} {workflow_id}"
-            );
+        for (project, starter, refusal) in cases {
+            assert_eq!(runner_start(project, starter), Err(refusal), "{refusal:?}");
         }
+        assert!(runner_start(Some(&github), Some(&starter)).is_ok());
     }
 
     #[test]
-    fn a_project_a_runner_cannot_clone_as_given_is_not_dispatchable() {
-        let url = "https://github.com/acme/widgets";
-        let cases = [
-            ("no provider", project(Some(url), None)),
-            ("empty provider", project(Some(url), Some(""))),
-            ("no remote", project(None, Some("github"))),
-            (
-                "not https",
-                project(Some("http://github.com/acme/widgets"), Some("github")),
-            ),
-            (
-                "scp form",
-                project(Some("git@github.com:acme/widgets"), Some("github")),
-            ),
-            (
-                "no owner",
-                project(Some("https://github.com/widgets"), Some("github")),
-            ),
-            (
-                "no path",
-                project(Some("https://github.com"), Some("github")),
-            ),
-            (
-                "no host",
-                project(Some("https:///acme/widgets"), Some("github")),
-            ),
-            (
-                "empty segment",
-                project(Some("https://github.com/acme//widgets"), Some("github")),
-            ),
-            (
-                "trailing slash",
-                project(Some("https://github.com/acme/widgets/"), Some("github")),
-            ),
-            (
-                "userinfo",
-                project(Some("https://tok@github.com/acme/widgets"), Some("github")),
-            ),
-            (
-                "whitespace",
-                project(Some("https://github.com/acme/wid gets"), Some("github")),
-            ),
-        ];
-        for (name, project) in cases {
-            let snapshot = snapshot(project, vec![version("w-1", 1, "[]")]);
-            assert_eq!(
-                runner_start("src-1", Some(&snapshot), "p-1", "w-1"),
-                Err(DispatchRefusal::ProjectNotDispatchable),
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_latest_version_the_desktop_scrubbed_is_not_dispatchable() {
-        let mut snapshot = dispatchable();
-        snapshot
-            .workflows
-            .push(version("w-1", 8, r#"[{"prompt_template":"use ***"}]"#));
-
+    fn defaults_fill_only_what_the_body_left_out() {
+        let filled = run_shape_defaults(start(), &row("github"));
         assert_eq!(
-            runner_start("src-1", Some(&snapshot), "p-1", "w-1"),
-            Err(DispatchRefusal::ProjectNotDispatchable)
+            (
+                filled.agent_kind.as_deref(),
+                filled.model.as_deref(),
+                filled.effort,
+                filled.max_budget_cents,
+            ),
+            (Some("codex"), Some("gpt-5"), Some(Effort::High), Some(900))
         );
-    }
 
-    #[test]
-    fn an_unknown_workflow_is_named_before_the_project_is_judged_dispatchable() {
-        let snapshot = snapshot(project(None, None), Vec::new());
+        let asked = StartFeature {
+            agent_kind: Some("claude-code".to_owned()),
+            model: Some("opus".to_owned()),
+            effort: Some(Effort::Low),
+            max_budget_cents: Some(5),
+            max_wall_clock_secs: Some(60),
+            ..start()
+        };
+        assert_eq!(run_shape_defaults(asked.clone(), &row("github")), asked);
 
-        assert_eq!(
-            runner_start("src-1", Some(&snapshot), "p-1", "w-1"),
-            Err(DispatchRefusal::UnknownWorkflow)
-        );
+        let mut bare = row("github");
+        bare.fields.default_agent_kind = None;
+        bare.fields.default_model = None;
+        bare.fields.default_effort = None;
+        bare.fields.default_max_budget_cents = None;
+        assert_eq!(run_shape_defaults(start(), &bare), start());
     }
 }
