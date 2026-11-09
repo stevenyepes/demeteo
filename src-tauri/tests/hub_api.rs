@@ -1655,7 +1655,7 @@ async fn a_runner_dispatch_signs_the_hub_projects_repository_and_the_starter() {
     let r = RunnerFleet::new();
     let parts = Parts::new();
     let mut body = runner_dispatch(&r.github);
-    for omitted in ["model", "max_budget_cents"] {
+    for omitted in ["agent_kind", "model", "max_budget_cents"] {
         body.as_object_mut().map(|fields| fields.remove(omitted));
     }
 
@@ -1681,12 +1681,7 @@ async fn a_runner_dispatch_signs_the_hub_projects_repository_and_the_starter() {
             start.effort,
             start.max_budget_cents,
         ),
-        (
-            Some("claude-code"),
-            Some("gpt-5"),
-            Some(Effort::High),
-            Some(4200)
-        ),
+        (Some("codex"), Some("gpt-5"), Some(Effort::High), Some(4200)),
         "only what the body left out is the project's"
     );
     assert_eq!(
