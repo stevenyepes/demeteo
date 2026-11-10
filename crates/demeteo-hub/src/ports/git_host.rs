@@ -12,6 +12,45 @@ pub struct GithubRepository {
     pub name: String,
 }
 
+/// A repository one of a tenant's Apps is installed on, as the project
+/// picker offers it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ReachableRepository {
+    /// Lowercase: the spelling a Hub project and a start take.
+    pub host: String,
+    /// `owner/repo`.
+    pub full_name: String,
+    pub private: bool,
+    pub default_branch: Option<String>,
+    pub description: Option<String>,
+}
+
+/// An App whose repositories could not be listed. Its id, not GitHub's
+/// error text, which is not the Hub's to repeat.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UnlistedApp {
+    pub host: String,
+    pub app_id: u64,
+}
+
+/// Every repository a tenant's Apps reach, beside the Apps that did not
+/// answer. An App failing never hides another's repositories.
+#[derive(Debug, Default)]
+pub struct RepositoryListing {
+    pub repositories: Vec<ReachableRepository>,
+    pub unlisted: Vec<UnlistedApp>,
+    /// A listing stopped at its page cap: more repositories exist.
+    pub truncated: bool,
+}
+
+/// Lists what [`GitTokenMinter`] could mint for: the same Apps, judged the
+/// same way, so the picker never offers a repository a run cannot reach.
+#[async_trait]
+pub trait RepositoryLister: Send + Sync {
+    /// Err only when the tenant's own record of Apps cannot be read.
+    async fn repositories(&self, user: UserId, now: u64) -> Result<RepositoryListing, MintError>;
+}
+
 /// A minted installation token. It is handed to one runner and dropped: never
 /// stored, logged or reused (decision 71), so `Debug` omits it and the text
 /// is reachable only through [`secret`](Self::secret).

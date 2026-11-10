@@ -107,12 +107,20 @@ describe('parseRoute', () => {
     expect(parseRoute(hash).name).toBe('not-found');
   });
 
-  it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/projects/p-1', '#/signin', '#/Sign-In'])(
+  it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/signin', '#/Sign-In'])(
     'reports %s as not-found rather than as an auth route',
     (hash) => {
       expect(parseRoute(hash).name).toBe('not-found');
     },
   );
+
+  it('reads the project page: new, or the one project it edits', () => {
+    expect(parseRoute('#/projects/new')).toEqual({ name: 'project' });
+    expect(parseRoute('#/projects/p-1')).toEqual({ name: 'project', projectId: 'p-1' });
+    expect(parseRoute('#/projects/p-1/x').name).toBe('not-found');
+    expect(routeHref({ name: 'project' })).toBe('#/projects/new');
+    expect(routeHref({ name: 'project', projectId: 'p 1' })).toBe('#/projects/p%201');
+  });
 
   it('reads an instance dispatch as neither the instance nor a run', () => {
     expect(parseRoute('#/instances/i-1/dispatch')).toEqual({ name: 'dispatch', instanceId: 'i-1' });

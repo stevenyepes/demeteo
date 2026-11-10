@@ -6,7 +6,11 @@
 
 use super::port::GitHostStore;
 use crate::adapters::github_app::{GithubApp, GithubAppSettings, GithubHost, Installed};
-use crate::ports::{GitTokenMinter, GithubRepository, InstallationToken, MintError, RsaSigner};
+use crate::adapters::github_repos::merged;
+use crate::ports::{
+    GitTokenMinter, GithubRepository, InstallationToken, MintError, RepositoryLister,
+    RepositoryListing, RsaSigner, UnlistedApp,
+};
 use crate::store::git_hosts::GitHostRow;
 use crate::store::UserId;
 use async_trait::async_trait;
@@ -96,6 +100,72 @@ pub fn chosen<T>(lookups: Vec<Result<Option<T>, MintError>>) -> Result<T, MintEr
     }
 }
 
+/// Each App that could mint on each host, paired with that host: every
+/// host the configured App or a connected row names, judged by
+/// [`candidates`] exactly as a mint for a repository there would be.
+pub fn listing_targets(
+    configured: Option<&GithubAppSettings>,
+    rows: &[GitHostRow],
+) -> Vec<(GithubAppSettings, GithubHost)> {
+    let mut hosts: Vec<String> = configured
+        .into_iter()
+        .flat_map(|app| app.hosts.iter().map(|h| h.host.to_ascii_lowercase()))
+        .chain(rows.iter().map(|row| row.host.to_ascii_lowercase()))
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    let mut targets = Vec::new();
+    for host in hosts {
+        for app in candidates(configured, rows, &host) {
+            let reach = app
+                .hosts
+                .iter()
+                .find(|h| h.host.eq_ignore_ascii_case(&host))
+                .cloned();
+            if let Some(reach) = reach {
+                targets.push((app, reach));
+            }
+        }
+    }
+    targets
+}
+
+#[async_trait]
+impl RepositoryLister for GithubApps {
+    async fn repositories(&self, user: UserId, now: u64) -> Result<RepositoryListing, MintError> {
+        let rows = self
+            .store
+            .hosts(user)
+            .await
+            .map_err(|e| MintError::Hosts(e.to_string()))?;
+        let mut listings = Vec::new();
+        let mut unlisted = Vec::new();
+        let mut truncated = false;
+        for (settings, host) in listing_targets(self.configured.as_ref(), &rows) {
+            let app_id = settings.app_id;
+            let app = GithubApp::new(self.http.clone(), self.signer.clone(), settings);
+            match app.repositories(&host, now).await {
+                Ok(listed) => {
+                    truncated |= listed.truncated;
+                    listings.push(listed.repositories);
+                }
+                Err(error) => {
+                    tracing::warn!(app_id, host = %host.host, %error, "a GitHub App's repositories could not be listed");
+                    unlisted.push(UnlistedApp {
+                        host: host.host.to_ascii_lowercase(),
+                        app_id,
+                    });
+                }
+            }
+        }
+        Ok(RepositoryListing {
+            repositories: merged(listings),
+            unlisted,
+            truncated,
+        })
+    }
+}
+
 #[async_trait]
 impl GitTokenMinter for GithubApps {
     async fn mint(
@@ -172,6 +242,26 @@ mod tests {
         assert_eq!(apps[0].key, "demeteo-hub-github-app");
         assert_eq!(apps[1].key, "demeteo-hub-gh-9");
         assert_eq!(apps[1].hosts[0].api_base, "https://github.com/api/v3");
+    }
+
+    #[test]
+    fn every_host_is_listed_by_each_app_that_could_mint_there() {
+        let rows = [
+            row(7, "github.com"),
+            row(9, "github.com"),
+            row(11, "GHE.example"),
+        ];
+        let targets = listing_targets(Some(&configured(7, "github.com")), &rows);
+        let shown: Vec<_> = targets
+            .iter()
+            .map(|(app, host)| (app.app_id, host.host.as_str()))
+            .collect();
+
+        assert_eq!(
+            shown,
+            [(11, "GHE.example"), (7, "github.com"), (9, "github.com")]
+        );
+        assert!(listing_targets(None, &[]).is_empty());
     }
 
     #[test]

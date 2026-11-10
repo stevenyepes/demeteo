@@ -97,12 +97,12 @@ async fn run() -> Result<(), String> {
         None => tracing::info!("no GitHub App is configured; connected Apps alone will mint"),
     }
     let github = github_app::http_client(GITHUB_CONNECT_TIMEOUT, GITHUB_TOTAL_TIMEOUT)?;
-    let minter = GithubApps::new(
+    let minter = Arc::new(GithubApps::new(
         github.clone(),
         signer,
         Arc::clone(&git_hosts),
         config.github_app,
-    );
+    ));
     let setup = GitHostsSetup {
         store: git_hosts,
         importer,
@@ -110,7 +110,8 @@ async fn run() -> Result<(), String> {
         hosts: config.github_hosts,
     };
     let state = state
-        .with_git_tokens(Arc::new(minter))
+        .with_git_tokens(minter.clone())
+        .with_repositories(minter)
         .with_git_token_window(config.git_token_window_secs)
         .with_git_hosts(Arc::new(setup));
     let app = routes::router(state.clone(), &config.web_dir);

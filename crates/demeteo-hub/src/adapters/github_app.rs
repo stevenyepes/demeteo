@@ -25,10 +25,10 @@ const JWT_HEADER: &str = r#"{"alg":"RS256","typ":"JWT"}"#;
 /// `iat`.
 const JWT_BACKDATE_SECS: u64 = 60;
 const JWT_LIFETIME_SECS: u64 = 540;
-const MEDIA_TYPE: &str = "application/vnd.github+json";
-const API_VERSION_HEADER: &str = "X-GitHub-Api-Version";
-const API_VERSION: &str = "2022-11-28";
-const AGENT: &str = concat!("demeteo-hub/", env!("CARGO_PKG_VERSION"));
+pub(super) const MEDIA_TYPE: &str = "application/vnd.github+json";
+pub(super) const API_VERSION_HEADER: &str = "X-GitHub-Api-Version";
+pub(super) const API_VERSION: &str = "2022-11-28";
+pub(super) const AGENT: &str = concat!("demeteo-hub/", env!("CARGO_PKG_VERSION"));
 const LOOKUP: &str = "installation lookup";
 const TOKEN_REQUEST: &str = "token request";
 
@@ -172,7 +172,7 @@ pub fn http_client(connect: Duration, total: Duration) -> Result<reqwest::Client
 }
 
 pub struct GithubApp {
-    http: reqwest::Client,
+    pub(super) http: reqwest::Client,
     signer: Arc<dyn RsaSigner>,
     settings: GithubAppSettings,
 }
@@ -190,7 +190,7 @@ impl GithubApp {
         }
     }
 
-    async fn app_jwt(&self, now: u64) -> Result<String, MintError> {
+    pub(super) async fn app_jwt(&self, now: u64) -> Result<String, MintError> {
         let input = jwt_signing_input(self.settings.app_id, now);
         let signature = self
             .signer
@@ -200,7 +200,12 @@ impl GithubApp {
         Ok(jwt(&input, &signature))
     }
 
-    fn request(&self, method: reqwest::Method, url: String, jwt: &str) -> reqwest::RequestBuilder {
+    pub(super) fn request(
+        &self,
+        method: reqwest::Method,
+        url: String,
+        jwt: &str,
+    ) -> reqwest::RequestBuilder {
         self.http
             .request(method, url)
             .header(AUTHORIZATION, format!("Bearer {jwt}"))
@@ -387,7 +392,7 @@ pub async fn convert_manifest(
 
 /// A 2xx body read as `T`. Any other status is reported by its number
 /// alone, and its body is never read.
-async fn answered<T: for<'de> Deserialize<'de>>(
+pub(super) async fn answered<T: for<'de> Deserialize<'de>>(
     response: reqwest::Response,
     step: &'static str,
 ) -> Result<T, MintError> {
@@ -402,12 +407,12 @@ async fn answered<T: for<'de> Deserialize<'de>>(
     serde_json::from_slice(&body).map_err(|_| MintError::Malformed(step))
 }
 
-fn transport(error: reqwest::Error) -> MintError {
+pub(super) fn transport(error: reqwest::Error) -> MintError {
     MintError::Transport(error.without_url().to_string())
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::adapters::memory_keys::MemoryKeys;
     use aws_lc_rs::signature::{UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA256};
@@ -531,7 +536,7 @@ mod tests {
 
     /// Serves `answers` to as many connections, one each, in order, and
     /// returns every request it read.
-    async fn answering(
+    pub(crate) async fn answering(
         answers: Vec<(u16, Value)>,
     ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -592,7 +597,7 @@ mod tests {
         )
     }
 
-    fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    pub(crate) fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
         request
             .split_once("\r\n\r\n")?
             .0

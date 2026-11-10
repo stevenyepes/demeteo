@@ -21,6 +21,25 @@ export type GitHosts = {
   hosts: GitHost[];
 };
 
+/** A repository one of the connected Apps is installed on, as `GET /v1/git-hosts/repositories` lists it. */
+export type ReachableRepository = {
+  /** Lowercase, as a Hub project spells it. */
+  host: string;
+  /** `owner/repo`. */
+  fullName: string;
+  private: boolean;
+  defaultBranch: string | null;
+  description: string | null;
+};
+
+export type RepositoryListing = {
+  repositories: ReachableRepository[];
+  /** Apps that did not answer, so their repositories are missing from the list. */
+  unlisted: { host: string; appId: number }[];
+  /** More repositories exist than the Hub read. */
+  truncated: boolean;
+};
+
 /** What the browser posts to GitHub to create the App. */
 export type ManifestForm = {
   actionUrl: string;
@@ -51,6 +70,21 @@ export async function listGitHosts(): Promise<GitHosts> {
       installUrl: host.install_url,
       connectedAt: host.connected_at,
     })),
+  };
+}
+
+export async function listRepositories(): Promise<RepositoryListing> {
+  const wire = await getJson('/v1/git-hosts/repositories', isWireListing);
+  return {
+    repositories: wire.repositories.map((repo) => ({
+      host: repo.host,
+      fullName: repo.full_name,
+      private: repo.private,
+      defaultBranch: repo.default_branch,
+      description: repo.description,
+    })),
+    unlisted: wire.unlisted.map((app) => ({ host: app.host, appId: app.app_id })),
+    truncated: wire.truncated,
   };
 }
 
@@ -121,6 +155,43 @@ const isWireManifestForm: Guard<{ action_url: string; manifest: string; state: s
   isHttpsUrl(memberOf(value, 'action_url')) &&
   typeof memberOf(value, 'manifest') === 'string' &&
   typeof memberOf(value, 'state') === 'string';
+
+type WireRepository = {
+  host: string;
+  full_name: string;
+  private: boolean;
+  default_branch: string | null;
+  description: string | null;
+};
+
+type WireListing = {
+  repositories: WireRepository[];
+  unlisted: { host: string; app_id: number }[];
+  truncated: boolean;
+};
+
+const isWireRepository = (value: unknown): value is WireRepository =>
+  typeof memberOf(value, 'host') === 'string' &&
+  typeof memberOf(value, 'full_name') === 'string' &&
+  typeof memberOf(value, 'private') === 'boolean' &&
+  isStringOrNull(memberOf(value, 'default_branch')) &&
+  isStringOrNull(memberOf(value, 'description'));
+
+const isWireListing: Guard<WireListing> = (value): value is WireListing => {
+  const repositories = memberOf(value, 'repositories');
+  const unlisted = memberOf(value, 'unlisted');
+  return (
+    Array.isArray(repositories) &&
+    repositories.every(isWireRepository) &&
+    Array.isArray(unlisted) &&
+    unlisted.every((app) => typeof memberOf(app, 'host') === 'string' && typeof memberOf(app, 'app_id') === 'number') &&
+    typeof memberOf(value, 'truncated') === 'boolean'
+  );
+};
+
+function isStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
 
 const isRemoved: Guard<{ removed: true }> = (value): value is { removed: true } =>
   memberOf(value, 'removed') === true;

@@ -42,6 +42,7 @@ function sectionOf(route: Route): Section | null {
     case 'passkeys':
       return 'passkeys';
     case 'projects':
+    case 'project':
       return 'projects';
     case 'git-hosts':
       return 'git-hosts';

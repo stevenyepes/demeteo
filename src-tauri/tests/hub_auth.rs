@@ -1428,6 +1428,7 @@ const SESSION_BOUND_GETS: &[&str] = &[
     "/v1/instances/{instance_id}/runs/{feature_id}",
     "/v1/instances/{instance_id}/requests/{request_id}",
     "/v1/git-hosts",
+    "/v1/git-hosts/repositories",
     "/v1/projects",
     "/v1/workflows",
 ];
