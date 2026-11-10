@@ -73,6 +73,30 @@ impl std::fmt::Display for AgentKind {
     }
 }
 
+/// Where a harness's model list came from. A picker may show a
+/// [`Bundled`](Self::Bundled) list, but it is Demeteo's guess at what the
+/// harness accepts, not an answer from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelSource {
+    /// Read from the harness's own config file (codex's `config.toml`).
+    Config,
+    /// Listed by the harness's CLI on the machine that runs it.
+    Probed,
+    /// Demeteo's built-in list for the kind.
+    Bundled,
+}
+
+impl ModelSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModelSource::Config => "config",
+            ModelSource::Probed => "probed",
+            ModelSource::Bundled => "bundled",
+        }
+    }
+}
+
 /// Which interpreter runs a command the *agent itself* composes, on Windows.
 ///
 /// Demeteo's own two execution planes are split by authorship, not by OS

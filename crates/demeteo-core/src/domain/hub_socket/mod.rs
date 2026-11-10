@@ -5,8 +5,10 @@
 //! one. What crosses the socket is decided here and only here: [`hub_event`]
 //! is the allowlist a `run_events` row has to pass, [`hello`] the scopes
 //! an instance announces, and [`snapshot`] what an instance reports of its
-//! Projects. Which `feature_status` row the log still owes the Hub before a
-//! run reads as ended there is [`status_backfill`] and [`removal_logs_cancel`].
+//! Projects, with [`outbound_catalog`] deciding what of its harness probe
+//! crosses and [`probe_due`] when that probe runs. Which `feature_status`
+//! row the log still owes the Hub before a run reads as ended there is
+//! [`status_backfill`] and [`removal_logs_cancel`].
 //! What follows a connection's end is decided here
 //! too: [`after`], [`after_close`], [`resets_backoff`], [`refresh_refusal`],
 //! [`after_refresh`] and [`backoff`]. What the Settings tab is told of the
@@ -17,12 +19,18 @@
 use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
 pub mod connection;
+mod harness_catalog;
 mod projection;
 mod reporting;
 mod run_end;
 mod snapshot;
 mod verdict;
 
+pub use harness_catalog::{
+    merged, outbound_catalog, probe_due, CatalogEntry, HarnessProbe, HarnessProbeOutcome,
+    ProbeTrigger, HARNESS_PROBE_CONNECT_FLOOR_SECS, HARNESS_PROBE_INTERVAL_SECS,
+    HARNESS_PROBE_TIMEOUT_SECS, MAX_CATALOG_CHARS, MAX_CATALOG_MODELS,
+};
 pub use projection::{hub_event, MAX_FEATURE_ID_BYTES};
 pub use reporting::{
     observed_runner_hub_state, reported_feature_id, runner_reports_itself, EventOwner,

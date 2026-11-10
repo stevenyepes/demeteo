@@ -71,6 +71,24 @@ export type RunShapeDefaults = {
   maxBudgetCents: number | null;
 };
 
+export type ModelChoice = { value: string; name: string };
+
+/**
+ * One harness the instance found installed on its own machine and the models
+ * it lists there. `source` is `config`, `probed` or `bundled`, or `null` from an
+ * instance that does not say or a harness that has not yet answered a listing,
+ * whose `models` is then empty; a bundled list is the instance's built-in guess,
+ * not the harness's answer. `effortLevels` is `null` when the instance does not
+ * say, never "supports none".
+ */
+export type HarnessCatalog = {
+  kind: string;
+  models: ModelChoice[];
+  effortLevels: EffortLevel[] | null;
+  source: string | null;
+  probedAt: number;
+};
+
 export type InstanceDetail = {
   id: string;
   kind: InstanceKind;
@@ -87,6 +105,11 @@ export type InstanceDetail = {
   projects: ProjectSummary[] | null;
   liveRuns: RunSummary[] | null;
   harnesses: string[] | null;
+  /**
+   * `null` without `read`, before a snapshot, and from an instance that has
+   * not reported one; `[]` when it probed and found no harness installed.
+   */
+  harnessCatalog: HarnessCatalog[] | null;
   workflows: WorkflowChoice[] | null;
   runShape: RunShapeDefaults[] | null;
 };
@@ -130,7 +153,7 @@ type WireGraphNode = {
 
 type WireGraphEdge = { from: string; to: string };
 
-type WireWorkflow = {
+export type WireWorkflow = {
   workflow_id: string;
   version: number;
   name: string;
@@ -145,6 +168,15 @@ type WireRunShape = {
   default_effort: string | null;
   default_workflow_id: string | null;
   default_max_budget_cents: number | null;
+};
+
+type WireHarnessCatalog = {
+  kind: string;
+  models: ModelChoice[];
+  /** Any strings: an effort this build does not know is dropped rather than refusing the answer. */
+  effort_levels: string[] | null;
+  source: string | null;
+  probed_at: number;
 };
 
 type WireInstanceDetail = {
@@ -162,6 +194,7 @@ type WireInstanceDetail = {
   projects: WireProject[] | null;
   live_runs: WireRunSummary[] | null;
   harnesses: string[] | null;
+  harness_catalog?: WireHarnessCatalog[] | null;
   workflows: WireWorkflow[] | null;
   run_shape: WireRunShape[] | null;
 };
@@ -232,12 +265,23 @@ function instanceDetailOf(wire: WireInstanceDetail): InstanceDetail {
     projects: wire.projects === null ? null : wire.projects.map(projectOf),
     liveRuns: wire.live_runs === null ? null : wire.live_runs.map(runSummaryOf),
     harnesses: wire.harnesses === null ? null : [...wire.harnesses],
+    harnessCatalog: wire.harness_catalog == null ? null : wire.harness_catalog.map(harnessCatalogOf),
     workflows: wire.workflows === null ? null : wire.workflows.map(workflowOf),
     runShape: wire.run_shape === null ? null : wire.run_shape.map(runShapeOf),
   };
 }
 
-function workflowOf(wire: WireWorkflow): WorkflowChoice {
+function harnessCatalogOf(wire: WireHarnessCatalog): HarnessCatalog {
+  return {
+    kind: wire.kind,
+    models: wire.models.map((model) => ({ value: model.value, name: model.name })),
+    effortLevels: wire.effort_levels === null ? null : wire.effort_levels.filter(isEffortLevel),
+    source: wire.source,
+    probedAt: wire.probed_at,
+  };
+}
+
+export function workflowOf(wire: WireWorkflow): WorkflowChoice {
   return {
     workflowId: wire.workflow_id,
     version: wire.version,
@@ -338,7 +382,7 @@ const isWireGraph: Guard<{ nodes: WireGraphNode[]; edges: WireGraphEdge[] }> = (
   return Array.isArray(nodes) && nodes.every(isWireGraphNode) && Array.isArray(edges) && edges.every(isWireGraphEdge);
 };
 
-const isWireWorkflow: Guard<WireWorkflow> = (value): value is WireWorkflow => {
+export const isWireWorkflow: Guard<WireWorkflow> = (value): value is WireWorkflow => {
   const graph = memberOf(value, 'graph');
   return (
     typeof memberOf(value, 'workflow_id') === 'string' &&
@@ -356,6 +400,21 @@ const isWireRunShape: Guard<WireRunShape> = (value): value is WireRunShape =>
   isStringOrNull(memberOf(value, 'default_workflow_id')) &&
   isNumberOrNull(memberOf(value, 'default_max_budget_cents'));
 
+const isWireModelChoice: Guard<ModelChoice> = (value): value is ModelChoice =>
+  typeof memberOf(value, 'value') === 'string' && typeof memberOf(value, 'name') === 'string';
+
+export const isHarnessCatalog: Guard<WireHarnessCatalog> = (value): value is WireHarnessCatalog => {
+  const models = memberOf(value, 'models');
+  return (
+    typeof memberOf(value, 'kind') === 'string' &&
+    Array.isArray(models) &&
+    models.every(isWireModelChoice) &&
+    isListOrNull(memberOf(value, 'effort_levels'), isString) &&
+    isStringOrNull(memberOf(value, 'source')) &&
+    typeof memberOf(value, 'probed_at') === 'number'
+  );
+};
+
 const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireInstanceDetail =>
   typeof memberOf(value, 'id') === 'string' &&
   typeof memberOf(value, 'present') === 'boolean' &&
@@ -370,6 +429,7 @@ const isWireInstanceDetail: Guard<WireInstanceDetail> = (value): value is WireIn
   isListOrNull(memberOf(value, 'projects'), isWireProject) &&
   isListOrNull(memberOf(value, 'live_runs'), isWireRunSummary) &&
   isListOrNull(memberOf(value, 'harnesses'), isString) &&
+  (memberOf(value, 'harness_catalog') === undefined || isListOrNull(memberOf(value, 'harness_catalog'), isHarnessCatalog)) &&
   isListOrNull(memberOf(value, 'workflows'), isWireWorkflow) &&
   isListOrNull(memberOf(value, 'run_shape'), isWireRunShape);
 

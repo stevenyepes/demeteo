@@ -1,5 +1,7 @@
-use crate::domain::models::ConfigOptionValue;
+use crate::adapters::agent::registry::AgentRegistry;
+use crate::domain::models::{ConfigOptionValue, ModelSource};
 use crate::ports::agent_runtime::{AgentContext, ModelListing};
+use crate::ports::execution::ExecutionPort;
 use crate::state::AppContext;
 
 pub async fn discover_models(
@@ -7,36 +9,44 @@ pub async fn discover_models(
     machine_id: String,
     agent_kind: String,
 ) -> Result<Vec<ConfigOptionValue>, String> {
-    // codex exposes neither ACP nor a `models` subcommand; its active provider
-    // and model live in ~/.codex/config.toml. Resolve it up front so (a) we
-    // don't spawn a pointless ACP probe, and (b) a user who repointed codex at
-    // a custom provider (MiniMax, a local gateway, ...) is offered *that*
-    // provider's model rather than OpenAI slugs the endpoint rejects
-    // (MiniMax answers `gpt-5.3-codex` with `unknown model`, code 2013).
-    if agent_kind == "codex" {
-        return Ok(discover_codex_models(ctx.exec.as_ref(), &machine_id).await);
-    }
-
-    // 1. Try ACP session/new probe
-    if let Ok(models) = probe_models_via_acp(ctx, &machine_id, &agent_kind).await {
-        return Ok(models);
-    }
-
-    // 2. CLI model probing for agents that declare a listing command.
-    let listing = ctx
-        .registry
-        .runtime_for(&agent_kind)
-        .and_then(|r| r.capabilities().model_listing.map(|l| (r.binary(), l)));
-    if let Some((binary, listing)) = listing {
-        if let Ok(models) =
-            probe_models_via_cli(ctx.exec.as_ref(), &machine_id, &agent_kind, binary, listing).await
-        {
+    // codex exposes neither ACP nor a `models` subcommand, so it is not
+    // spawned for a pointless ACP probe; `listed_models` reads its config.
+    if agent_kind != "codex" {
+        if let Ok(models) = probe_models_via_acp(ctx, &machine_id, &agent_kind).await {
             return Ok(models);
         }
     }
+    let (models, _) =
+        listed_models(ctx.exec.as_ref(), &ctx.registry, &machine_id, &agent_kind).await;
+    Ok(models)
+}
 
-    // 3. Fallback to hardcoded lists when dynamic probing is unavailable
-    Ok(fallback_models(&agent_kind))
+/// The models `kind` offers on `machine_id`, found without starting an agent
+/// session, and which source answered: codex's config, then the runtime's
+/// declared [`ModelListing`], then [`fallback_models`]. Never fails, because
+/// the bundled list is always an answer.
+pub async fn listed_models(
+    exec: &dyn ExecutionPort,
+    registry: &AgentRegistry,
+    machine_id: &str,
+    kind: &str,
+) -> (Vec<ConfigOptionValue>, ModelSource) {
+    // A user who repointed codex at a custom provider (MiniMax, a local
+    // gateway, ...) must be offered *that* provider's model rather than
+    // OpenAI slugs the endpoint rejects (MiniMax answers `gpt-5.3-codex`
+    // with `unknown model`, code 2013).
+    if kind == "codex" {
+        return discover_codex_models(exec, machine_id).await;
+    }
+    let listing = registry
+        .runtime_for(kind)
+        .and_then(|r| r.capabilities().model_listing.map(|l| (r.binary(), l)));
+    if let Some((binary, listing)) = listing {
+        if let Ok(models) = probe_models_via_cli(exec, machine_id, kind, binary, listing).await {
+            return (models, ModelSource::Probed);
+        }
+    }
+    (fallback_models(kind), ModelSource::Bundled)
 }
 
 async fn probe_models_via_acp(
@@ -115,7 +125,7 @@ async fn probe_models_via_acp(
 /// Run one runtime's declared [`ModelListing`] and parse its stdout. Agents
 /// declaring none fall back to [`fallback_models`].
 async fn probe_models_via_cli(
-    exec: &dyn crate::ports::execution::ExecutionPort,
+    exec: &dyn ExecutionPort,
     machine_id: &str,
     agent_kind: &str,
     binary: &str,
@@ -200,9 +210,9 @@ pub fn model_supports_images_by_name(_agent_kind: &str, model: &str) -> bool {
 /// else the provider exposes. With no custom provider (OpenAI, or no config at
 /// all) we return the bundled catalog-backed slug list unchanged.
 async fn discover_codex_models(
-    exec: &dyn crate::ports::execution::ExecutionPort,
+    exec: &dyn ExecutionPort,
     machine_id: &str,
-) -> Vec<ConfigOptionValue> {
+) -> (Vec<ConfigOptionValue>, ModelSource) {
     // `cat` (not `read_file`) so the shell expands `~` uniformly on local and
     // remote machines; a missing file yields empty output → OpenAI defaults.
     let toml = exec
@@ -215,13 +225,13 @@ async fn discover_codex_models(
         .as_deref()
         .is_some_and(|p| !p.is_empty() && p != "openai");
     if !is_custom_provider {
-        return fallback_models("codex");
+        return (fallback_models("codex"), ModelSource::Bundled);
     }
 
     // Custom provider: OpenAI slugs 404. Offer the configured default model if
     // there is one; otherwise leave the menu empty so the user types their
     // provider's slug into the custom-override field.
-    match model.filter(|m| !m.is_empty()) {
+    let models = match model.filter(|m| !m.is_empty()) {
         Some(m) => vec![ConfigOptionValue {
             supports_images: model_supports_images_by_name("codex", &m),
             description: provider.map(|p| format!("~/.codex/config.toml ({p})")),
@@ -229,7 +239,8 @@ async fn discover_codex_models(
             name: m,
         }],
         None => vec![],
-    }
+    };
+    (models, ModelSource::Config)
 }
 
 /// Extract the top-level `model_provider` and `model` string values from a

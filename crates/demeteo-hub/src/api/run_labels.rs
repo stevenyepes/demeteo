@@ -155,6 +155,7 @@ mod tests {
                 feature("f-orphan", "p-gone", None),
             ],
             harnesses: None,
+            harness_catalog: None,
         }
     }
 

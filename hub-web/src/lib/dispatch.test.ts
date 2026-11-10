@@ -238,12 +238,15 @@ describe('dispatchErrorSentence', () => {
     expect(dispatchErrorSentence(errorWith('scope_not_granted', 'spend'))).toMatch(/spend is off on this instance/i);
   });
 
-  it("reads a withheld read as the runner's source desktop, the one dispatch that asks for it", () => {
-    expect(dispatchErrorSentence(errorWith('scope_not_granted', 'read'))).toMatch(/read is off on the source desktop/i);
+  it.each(['read', 'gates'])('has no sentence for a withheld %s, which a dispatch never asks for', (scope) => {
+    expect(dispatchErrorSentence(errorWith('scope_not_granted', scope))).toBeNull();
   });
 
-  it('has no sentence for a withheld scope a dispatch never asks for', () => {
-    expect(dispatchErrorSentence(errorWith('scope_not_granted', 'gates'))).toBeNull();
+  it("names a refused Hub project's reason, never a desktop's snapshot", () => {
+    for (const code of ['unknown_project', 'unknown_workflow', 'project_not_dispatchable']) {
+      expect(dispatchErrorSentence(errorWith(code))).not.toMatch(/desktop/i);
+    }
+    expect(dispatchErrorSentence(errorWith('project_not_dispatchable'))).toMatch(/GitLab/);
   });
 
   it.each([

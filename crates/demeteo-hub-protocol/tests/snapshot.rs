@@ -1,9 +1,13 @@
 use std::collections::BTreeSet;
 
-use demeteo_hub_protocol::{FeatureSnapshot, ProjectSnapshot, Snapshot, WorkflowVersionSnapshot};
+use demeteo_hub_protocol::{
+    FeatureSnapshot, HarnessCatalogEntry, ModelChoice, ProjectSnapshot, Snapshot,
+    WorkflowVersionSnapshot,
+};
 use serde_json::{json, Value};
 
 const SNAPSHOT: &str = include_str!("fixtures/snapshot.json");
+const SNAPSHOT_WITHOUT_CATALOG: &str = include_str!("fixtures/snapshot_v1_no_catalog.json");
 
 const FORBIDDEN_KEYS: [&str; 3] = ["path", "local_path", "worktree"];
 
@@ -46,6 +50,72 @@ fn fixture_covers_the_shapes_the_ticket_names() {
     assert!(s.features.iter().any(|f| f.workflow_version.is_some()));
     assert!(s.features.iter().any(|f| f.workflow_id.is_none()));
     assert!(s.harnesses.as_ref().is_some_and(|h| !h.is_empty()));
+    let catalog = s.harness_catalog.as_ref().expect("a catalog");
+    assert!(catalog.iter().any(|e| e.models.len() >= 2));
+    assert!(catalog.iter().any(|e| e.effort_levels.is_some()));
+    assert!(catalog.iter().any(|e| e.source.is_none()));
+}
+
+/// An instance that predates `harness_catalog` still reports, and reads as
+/// not having reported one rather than as having found nothing installed.
+#[test]
+fn a_snapshot_from_before_the_catalog_reads_as_none() {
+    let older: Snapshot = serde_json::from_str(SNAPSHOT_WITHOUT_CATALOG).unwrap();
+    assert_eq!(older.harness_catalog, None);
+    assert_eq!(older.projects, parsed().projects);
+}
+
+#[test]
+fn an_empty_catalog_stays_distinct_from_none() {
+    let mut empty = parsed();
+    empty.harness_catalog = Some(Vec::new());
+    let wire = serde_json::to_value(&empty).unwrap();
+    assert_eq!(wire["harness_catalog"], json!([]));
+    let back: Snapshot = serde_json::from_value(wire).unwrap();
+    assert_eq!(back.harness_catalog, Some(Vec::new()));
+}
+
+#[test]
+fn a_catalog_entry_with_an_unknown_key_does_not_parse() {
+    let entry = json!({
+        "kind": "codex", "models": [], "effort_levels": null, "source": null,
+        "probed_at": 0, "config_file": "~/.codex/config.toml",
+    });
+    assert!(serde_json::from_value::<HarnessCatalogEntry>(entry).is_err());
+}
+
+/// A model's description may name the config file it was read from, so a
+/// `ModelChoice` has no field to carry one.
+#[test]
+fn a_model_choice_with_a_description_does_not_parse() {
+    let choice = json!({"value": "m", "name": "M", "description": "~/.codex/config.toml (x)"});
+    assert!(serde_json::from_value::<ModelChoice>(choice).is_err());
+}
+
+#[test]
+fn each_catalog_entry_and_model_has_exactly_its_keys() {
+    let value = serde_json::to_value(parsed()).unwrap();
+    for entry in value["harness_catalog"].as_array().unwrap() {
+        let keys: BTreeSet<&str> = entry
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["kind", "models", "effort_levels", "source", "probed_at"])
+        );
+        for model in entry["models"].as_array().unwrap() {
+            let keys: BTreeSet<&str> = model
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(keys, BTreeSet::from(["value", "name"]));
+        }
+    }
 }
 
 #[test]

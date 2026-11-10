@@ -69,6 +69,7 @@ use self::socket::{Sleeper, SocketConfig, SocketTask, SupervisorDeps, TokioSleep
 pub mod attachments;
 pub mod device_key;
 pub mod git_tokens;
+pub mod harness_catalog;
 #[cfg(feature = "keyring")]
 pub mod keyring_store;
 pub mod loopback;
@@ -655,6 +656,7 @@ impl HubPairing {
             )
             .with_relaying(relaying)
             .with_run_keys(config.run_keys.clone())
+            .with_harness_catalog(config.harness_catalog.clone())
             .with_requests(self.requests.clone())
             .with_connection(self.connection.clone())
             .with_snapshot_debounce(config.snapshot_debounce),

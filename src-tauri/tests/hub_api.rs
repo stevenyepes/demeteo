@@ -31,17 +31,20 @@ use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::pairing::testing::verifies_ed25519;
 use demeteo_hub::protocol::{
-    CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, ProjectSnapshot, RefusalReason,
-    RequestOutcome, RequestPayload, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings,
-    RunnerRepository, RunnerStart, RunnerWorkflow, Scope, SetStepAssignment, Snapshot,
-    StartFeature, StepOverride, WebAuthnAssertion, WorkflowVersionSnapshot,
+    CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, HarnessCatalogEntry,
+    ModelChoice, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload, RunEvent,
+    RunEventKind, RunEventPayload, RunShapeSettings, RunnerRepository, RunnerStart, RunnerWorkflow,
+    Scope, SetStepAssignment, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
+    WorkflowVersionSnapshot,
 };
 use demeteo_hub::socket::connections::Connections;
 use demeteo_hub::socket::port::SocketStore;
 use demeteo_hub::socket::requests::{self, EnqueueError, EnqueueRefusal};
+use demeteo_hub::store::hub_projects::{HubProjectFields, HubProjectId, HubProjectRow};
 use demeteo_hub::store::instances::InstanceKind;
 use demeteo_hub::store::requests::RequestStatus;
 use demeteo_hub::store::{InstanceId, StoreError, UserId};
+use demeteo_hub::workflows::{starters, Starter};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -141,6 +144,7 @@ fn with_project(id: &str) -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 
@@ -519,6 +523,7 @@ fn two_projects() -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 
@@ -600,6 +605,7 @@ fn labelled() -> Snapshot {
             },
         ],
         harnesses: Some(vec!["claude-code".to_owned(), "opencode".to_owned()]),
+        harness_catalog: None,
         ..two_projects()
     }
 }
@@ -888,6 +894,109 @@ async fn an_instance_without_read_withholds_its_workflows_and_run_shape() {
 
     assert_eq!(member(&detail, "workflows"), &Value::Null);
     assert_eq!(member(&detail, "run_shape"), &Value::Null);
+}
+
+/// [`two_projects`] with a probed catalog: codex listing two models at two
+/// effort levels, and opencode probed with nothing listed.
+fn with_catalog() -> Snapshot {
+    Snapshot {
+        harness_catalog: Some(vec![
+            HarnessCatalogEntry {
+                kind: "codex".to_owned(),
+                models: vec![
+                    ModelChoice {
+                        value: "gpt-5.5".to_owned(),
+                        name: "GPT-5.5".to_owned(),
+                    },
+                    ModelChoice {
+                        value: "minimax-m2".to_owned(),
+                        name: "MiniMax M2".to_owned(),
+                    },
+                ],
+                effort_levels: Some(vec![Effort::Low, Effort::High]),
+                source: Some("config".to_owned()),
+                probed_at: NOW as i64,
+            },
+            HarnessCatalogEntry {
+                kind: "opencode".to_owned(),
+                models: Vec::new(),
+                effort_levels: None,
+                source: None,
+                probed_at: NOW as i64 + 1,
+            },
+        ]),
+        ..two_projects()
+    }
+}
+
+#[tokio::test]
+async fn an_instance_shows_its_harness_catalog_as_the_instance_reported_it() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    fleet.snapshot_sent(instance, with_catalog()).await;
+    let api = parts.over(&fleet);
+
+    let detail = detail_json(&api, user, &instance.0.to_string()).await;
+
+    assert_eq!(
+        member(&detail, "harness_catalog"),
+        &json!([
+            {"kind": "codex",
+             "models": [
+                 {"value": "gpt-5.5", "name": "GPT-5.5"},
+                 {"value": "minimax-m2", "name": "MiniMax M2"},
+             ],
+             "effort_levels": ["low", "high"],
+             "source": "config",
+             "probed_at": NOW},
+            {"kind": "opencode", "models": [], "effort_levels": null,
+             "source": null, "probed_at": NOW + 1},
+        ])
+    );
+    let listed = &fleet_json(&api, user).await["instances"][0];
+    assert_eq!(
+        listed.get("harness_catalog"),
+        None,
+        "the fleet list is unchanged"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_probed_with_nothing_installed_shows_an_empty_catalog_not_null() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &ALL_SCOPES);
+    let api = parts.over(&fleet);
+    let id = instance.0.to_string();
+
+    let unsent = detail_json(&api, user, &id).await;
+    assert_eq!(member(&unsent, "harness_catalog"), &Value::Null);
+    fleet.snapshot_sent(instance, two_projects()).await;
+    let unprobed = detail_json(&api, user, &id).await;
+    assert_eq!(member(&unprobed, "harness_catalog"), &Value::Null);
+    let probed_empty = Snapshot {
+        harness_catalog: Some(Vec::new()),
+        ..two_projects()
+    };
+    fleet.snapshot_sent(instance, probed_empty).await;
+    let probed = detail_json(&api, user, &id).await;
+    assert_eq!(member(&probed, "harness_catalog"), &json!([]));
+}
+
+#[tokio::test]
+async fn an_instance_without_read_withholds_its_harness_catalog() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &[Scope::Spend, Scope::Gates]);
+    fleet.snapshot_sent(instance, with_catalog()).await;
+
+    let detail = detail_json(&parts.over(&fleet), user, &instance.0.to_string()).await;
+
+    assert_eq!(member(&detail, "harness_catalog"), &Value::Null);
 }
 
 #[tokio::test]
@@ -1467,32 +1576,39 @@ async fn a_dispatch_to_another_tenants_instance_reads_as_one_that_does_not_exist
     assert_eq!(t.fleet.requests(t.a_instance), a_before);
 }
 
-/// A tenant's runner beside the desktop whose snapshot it runs from, and a
-/// second tenant's desktop reporting the very same snapshot.
+/// A tenant's runner beside two of its Hub Projects, one on GitHub and one on
+/// GitLab, and a second tenant's Hub Project naming the same repository.
 struct RunnerFleet {
     fleet: MemoryFleet,
     user: UserId,
     runner: InstanceId,
-    desktop: InstanceId,
-    other_desktop: InstanceId,
+    github: HubProjectRow,
+    gitlab: HubProjectRow,
+    other_tenants: HubProjectRow,
 }
 
 impl RunnerFleet {
-    async fn new() -> Self {
+    fn new() -> Self {
         let fleet = MemoryFleet::new();
         let user = fleet.tenant();
         let runner = fleet.paired_as(user, InstanceKind::Runner, &[Scope::Spend]);
-        let desktop = fleet.paired(user, &[Scope::Read]);
-        fleet.snapshot_sent(desktop, runnable()).await;
-        let other = fleet.tenant();
-        let other_desktop = fleet.paired(other, &ALL_SCOPES);
-        fleet.snapshot_sent(other_desktop, runnable()).await;
+        let github =
+            fleet.with_hub_project(user, hub_project("github", "github.com", "acme/widgets"));
+        let gitlab = fleet.with_hub_project(
+            user,
+            hub_project("gitlab", "gitlab.example", "group/sub/repo"),
+        );
+        let other_tenants = fleet.with_hub_project(
+            fleet.tenant(),
+            hub_project("github", "github.com", "acme/widgets"),
+        );
         Self {
             fleet,
             user,
             runner,
-            desktop,
-            other_desktop,
+            github,
+            gitlab,
+            other_tenants,
         }
     }
 
@@ -1508,37 +1624,44 @@ impl RunnerFleet {
     }
 }
 
-/// `p-1` on GitHub, `p-2` with no provider, `wf-a` at three versions with the
-/// latest not last, and `wf-s`, whose definition the desktop scrubbed.
-fn runnable() -> Snapshot {
-    let mut snapshot = two_projects_with_workflows();
-    snapshot.projects[0].remote_url = Some("https://github.com/acme/widgets".to_owned());
-    snapshot.projects[0].provider_kind = Some("github".to_owned());
-    snapshot.projects[1].remote_url = Some("https://github.com/acme/other".to_owned());
-    snapshot.workflows.push(WorkflowVersionSnapshot {
-        steps_json: r#"[{"prompt_template":"push with ***"}]"#.to_owned(),
-        ..workflow_version("wf-s", 1, None)
-    });
-    snapshot
+fn hub_project(provider_kind: &str, host: &str, full_name: &str) -> HubProjectFields {
+    HubProjectFields {
+        name: "Widgets".to_owned(),
+        provider_kind: provider_kind.to_owned(),
+        host: host.to_owned(),
+        full_name: full_name.to_owned(),
+        default_agent_kind: Some("codex".to_owned()),
+        default_model: Some("gpt-5".to_owned()),
+        default_effort: Some(Effort::Xhigh),
+        default_workflow_id: None,
+        default_max_budget_cents: Some(4200),
+    }
 }
 
-fn runner_dispatch(source: &str) -> Value {
+fn a_starter() -> &'static Starter {
+    starters().first().expect("an embedded starter")
+}
+
+/// [`full_dispatch`] naming `project` and the first starter.
+fn runner_dispatch(project: &HubProjectRow) -> Value {
     let mut body = full_dispatch();
-    body["workflow_id"] = json!("wf-a");
-    body["source_instance_id"] = json!(source);
+    body["project_id"] = json!(project.id.0.to_string());
+    body["workflow_id"] = json!(a_starter().id);
     body
 }
 
 #[tokio::test]
-async fn a_runner_dispatch_signs_the_start_its_source_desktop_reported() {
-    let r = RunnerFleet::new().await;
+async fn a_runner_dispatch_signs_the_hub_projects_repository_and_the_starter() {
+    let r = RunnerFleet::new();
     let parts = Parts::new();
-    let source = r.desktop.0.to_string();
-    let desktop_before = r.fleet.requests(r.desktop);
+    let mut body = runner_dispatch(&r.github);
+    for omitted in ["agent_kind", "model", "max_budget_cents"] {
+        body.as_object_mut().map(|fields| fields.remove(omitted));
+    }
 
-    r.dispatched(&parts, runner_dispatch(&source))
+    r.dispatched(&parts, body)
         .await
-        .expect("a runnable source");
+        .expect("a runnable project");
 
     let queued = r.fleet.requests(r.runner);
     assert_eq!(queued.len(), 1);
@@ -1546,24 +1669,35 @@ async fn a_runner_dispatch_signs_the_start_its_source_desktop_reported() {
     let RequestPayload::StartFeature(start) = &envelope.payload else {
         panic!("{:?}", envelope.payload);
     };
+    let starter = a_starter();
     assert_eq!(
-        (start.project_id.as_str(), start.workflow_id.as_str()),
-        ("p-1", "wf-a")
+        (start.project_id.clone(), start.workflow_id.as_str()),
+        (r.github.id.0.to_string(), starter.id.as_str())
+    );
+    assert_eq!(
+        (
+            start.agent_kind.as_deref(),
+            start.model.as_deref(),
+            start.effort,
+            start.max_budget_cents,
+        ),
+        (Some("codex"), Some("gpt-5"), Some(Effort::High), Some(4200)),
+        "only what the body left out is the project's"
     );
     assert_eq!(
         start.runner.as_deref(),
         Some(&RunnerStart {
-            source_instance_id: source,
+            source_instance_id: "hub".to_owned(),
             repository: RunnerRepository {
                 provider_kind: "github".to_owned(),
                 host: "github.com".to_owned(),
                 full_name: "acme/widgets".to_owned(),
             },
             workflow: RunnerWorkflow {
-                workflow_id: "wf-a".to_owned(),
-                version: 3,
-                name: "Alpha".to_owned(),
-                steps_json: r#"[{"prompt_template":"SENTINEL-STEPS"}]"#.to_owned(),
+                workflow_id: starter.id.clone(),
+                version: starter.version,
+                name: starter.name.clone(),
+                steps_json: starter.steps_json.clone(),
             },
         })
     );
@@ -1582,89 +1716,53 @@ async fn a_runner_dispatch_signs_the_start_its_source_desktop_reported() {
     }
     let without = stripped.signing_bytes().expect("signing bytes");
     assert!(!verifies_ed25519(&advertised, &without, &signature));
-
-    assert_eq!(r.fleet.requests(r.desktop), desktop_before);
 }
 
 #[tokio::test]
-async fn a_runner_dispatch_its_source_cannot_resolve_is_refused_and_nothing_is_queued_or_bound() {
-    let r = RunnerFleet::new().await;
+async fn a_runner_dispatch_the_hub_cannot_resolve_is_refused_and_nothing_is_queued_or_bound() {
+    let r = RunnerFleet::new();
     let parts = Parts::new();
-    let desktop = r.desktop.0.to_string();
-    let other_runner = r
-        .fleet
-        .paired_as(r.user, InstanceKind::Runner, &ALL_SCOPES)
-        .0
-        .to_string();
-    let unread = r.fleet.paired(r.user, &[Scope::Spend, Scope::Gates]);
-    r.fleet.snapshot_sent(unread, runnable()).await;
-    let silent = r.fleet.paired(r.user, &[Scope::Read]);
     let staged = r.fleet.staged_until(r.runner, NOW + 600);
 
-    let with = |source: &str, project: &str, workflow: &str| {
-        let mut body = runner_dispatch(source);
+    let with = |project: &str, workflow: &str| {
+        let mut body = full_dispatch();
         body["project_id"] = json!(project);
         body["workflow_id"] = json!(workflow);
         body["attachment_ids"] = json!([staged.to_string()]);
         body
     };
-    let mut no_source = with(&desktop, "p-1", "wf-a");
-    if let Some(fields) = no_source.as_object_mut() {
-        fields.remove("source_instance_id");
-    }
-    let invalid = (400, json!({"error": "invalid_request"}));
-    let not_found = (404, json!({"error": "not_found"}));
+    let github = r.github.id.0.to_string();
+    let starter = a_starter().id.as_str();
     let refused = |code: &str| (409, json!({"error": code}));
     let cases = [
-        ("no source", no_source, invalid.clone()),
         (
-            "a runner as source",
-            with(&other_runner, "p-1", "wf-a"),
-            invalid,
-        ),
-        (
-            "an unparsed source",
-            with("desktop", "p-1", "wf-a"),
-            not_found.clone(),
-        ),
-        (
-            "an unknown source",
-            with(&InstanceId::generate().0.to_string(), "p-1", "wf-a"),
-            not_found.clone(),
-        ),
-        (
-            "another tenant's source",
-            with(&r.other_desktop.0.to_string(), "p-1", "wf-a"),
-            not_found,
-        ),
-        (
-            "a source without read",
-            with(&unread.0.to_string(), "p-1", "wf-a"),
-            (409, json!({"error": "scope_not_granted", "scope": "read"})),
-        ),
-        (
-            "a source with no snapshot",
-            with(&silent.0.to_string(), "p-1", "wf-a"),
+            "another tenant's project",
+            with(&r.other_tenants.id.0.to_string(), starter),
             refused("unknown_project"),
         ),
         (
             "an unknown project",
-            with(&desktop, "p-9", "wf-a"),
+            with(&HubProjectId::generate().0.to_string(), starter),
+            refused("unknown_project"),
+        ),
+        (
+            "a project id that is no UUID",
+            with("p-1", starter),
             refused("unknown_project"),
         ),
         (
             "an unknown workflow",
-            with(&desktop, "p-1", "wf-9"),
+            with(&github, "wf-starter-nope"),
             refused("unknown_workflow"),
         ),
         (
-            "a project with no provider",
-            with(&desktop, "p-2", "wf-a"),
-            refused("project_not_dispatchable"),
+            "a desktop's workflow id",
+            with(&github, "w-1"),
+            refused("unknown_workflow"),
         ),
         (
-            "a scrubbed workflow",
-            with(&desktop, "p-1", "wf-s"),
+            "a GitLab project",
+            with(&r.gitlab.id.0.to_string(), starter),
             refused("project_not_dispatchable"),
         ),
     ];
@@ -1680,27 +1778,57 @@ async fn a_runner_dispatch_its_source_cannot_resolve_is_refused_and_nothing_is_q
 }
 
 #[tokio::test]
-async fn a_desktop_dispatch_naming_a_source_is_an_invalid_request() {
-    let r = RunnerFleet::new().await;
+async fn a_runner_without_spend_is_refused_by_scope_before_its_project_is_judged() {
+    let r = RunnerFleet::new();
     let parts = Parts::new();
-    let target = r.fleet.paired(r.user, &[Scope::Spend]);
-    let before = r.fleet.requests(target);
+    r.fleet.scopes(r.runner, &[Scope::Read]);
 
-    let refusal = dispatch(
-        &parts.over(&r.fleet),
-        r.user,
-        &target.0.to_string(),
-        dispatch_body(runner_dispatch(&r.desktop.0.to_string())),
-        NOW,
-    )
-    .await
-    .expect_err("a desktop reads its own projects");
+    let refusal = r
+        .dispatched(&parts, runner_dispatch(&r.gitlab))
+        .await
+        .expect_err("spend is off");
 
     assert_eq!(
         answered(refusal).await,
-        (400, json!({"error": "invalid_request"}))
+        (409, json!({"error": "scope_not_granted", "scope": "spend"}))
     );
-    assert_eq!(r.fleet.requests(target), before);
+    assert!(r.fleet.requests(r.runner).is_empty());
+}
+
+#[tokio::test]
+async fn a_desktop_dispatch_reads_no_hub_project_and_signs_no_runner_start() {
+    let r = RunnerFleet::new();
+    let parts = Parts::new();
+    let target = r.fleet.paired(r.user, &[Scope::Spend]);
+    let mut body = runner_dispatch(&r.github);
+    body.as_object_mut().map(|fields| fields.remove("model"));
+
+    dispatch(
+        &parts.over(&r.fleet),
+        r.user,
+        &target.0.to_string(),
+        dispatch_body(body),
+        NOW,
+    )
+    .await
+    .expect("a desktop resolves its own projects");
+
+    let queued = r.fleet.requests(target);
+    assert_eq!(queued.len(), 1);
+    let RequestPayload::StartFeature(start) = &queued[0].envelope.payload else {
+        panic!("{:?}", queued[0].envelope.payload);
+    };
+    assert_eq!(
+        (start.runner.as_deref(), start.model.as_deref()),
+        (None, None)
+    );
+}
+
+#[test]
+fn a_dispatch_body_naming_a_source_instance_is_not_one() {
+    let mut body = full_dispatch();
+    body["source_instance_id"] = json!(InstanceId::generate().0.to_string());
+    assert!(serde_json::from_value::<DispatchBody>(body).is_err());
 }
 
 fn assignment_body(body: Value) -> AssignmentBody {
@@ -2678,6 +2806,7 @@ impl Populated {
                         run_shape: Vec::new(),
                         features: Vec::new(),
                         harnesses: None,
+                        harness_catalog: None,
                     },
                 )
                 .await;

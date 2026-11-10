@@ -18,14 +18,16 @@ use demeteo_core::domain::git_push::without_userinfo;
 use demeteo_core::domain::hub_pairing::HubPins;
 use demeteo_core::domain::hub_socket::RunnerHubState;
 use demeteo_core::domain::hub_socket::{
-    snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
-    MAX_REPORTED_FEATURES, MAX_TITLE_CHARS,
+    merged, outbound_catalog, probe_due, snapshot, CatalogEntry, FeatureInput, HarnessProbe,
+    HarnessProbeOutcome, ProbeTrigger, ProjectInput, SnapshotInput,
+    HARNESS_PROBE_CONNECT_FLOOR_SECS, HARNESS_PROBE_INTERVAL_SECS, MAX_CATALOG_CHARS,
+    MAX_CATALOG_MODELS, MAX_PINNED_VERSIONS, MAX_REPORTED_FEATURES, MAX_TITLE_CHARS,
 };
 use demeteo_core::domain::ids::MachineId;
 use demeteo_core::domain::models::Machine;
 use demeteo_core::domain::models::{
-    EffortLevel, Feature, Project, ProjectSettings, ProviderInstance, Repository, Workflow,
-    WorkflowVersion,
+    ConfigOptionValue, EffortLevel, Feature, ModelSource, Project, ProjectSettings,
+    ProviderInstance, Repository, Workflow, WorkflowVersion,
 };
 use demeteo_core::ports::db::{
     AppSettingsRepository, FeatureRepository, MachineHubStateRepository, MachineRepository,
@@ -157,6 +159,7 @@ fn one_project_on(host: &str) -> SnapshotInput {
         providers: vec![provider("gh", host)],
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     }
 }
@@ -175,6 +178,7 @@ fn budget_cents(usd: f64) -> Option<u64> {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     let mut shot = snapshot(&input);
@@ -209,6 +213,7 @@ fn a_missing_repository_or_provider_reports_no_remote_url() {
         providers: vec![provider("gh", "github.com")],
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     assert_eq!(snapshot(&no_repo).projects[0].remote_url, None);
@@ -236,6 +241,7 @@ fn the_first_repository_is_the_one_reported() {
         providers: vec![provider("gh", "github.com"), provider("gl", "gitlab.com")],
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     assert_eq!(
@@ -308,6 +314,7 @@ fn every_effort_level_maps_to_its_wire_effort() {
             providers: Vec::new(),
             features: Vec::new(),
             harnesses: Vec::new(),
+            harness_catalog: None,
             workflow_names: Vec::new(),
         };
         let shot = snapshot(&input);
@@ -338,6 +345,7 @@ fn run_shape_carries_its_fields_verbatim() {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     let row = &snapshot(&input).run_shape[0];
@@ -358,6 +366,7 @@ fn a_nul_in_a_project_name_drops_only_that_project() {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     let shot = snapshot(&input);
@@ -385,6 +394,7 @@ fn a_nul_in_a_run_shape_field_drops_only_that_row() {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     let shot = snapshot(&input);
@@ -412,6 +422,7 @@ fn inputs_in_a_different_order_give_equal_snapshots() {
         providers: vec![provider("gl", "gitlab.com"), provider("gh", "github.com")],
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
     let forward = snapshot(&build(["a", "b", "c"]));
@@ -441,6 +452,7 @@ fn only(workflows: Vec<WorkflowVersion>) -> SnapshotInput {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     }
 }
@@ -484,6 +496,7 @@ fn a_local_path_appears_nowhere_in_the_serialised_snapshot() {
         providers: Vec::new(),
         features: Vec::new(),
         harnesses: Vec::new(),
+        harness_catalog: None,
         workflow_names: Vec::new(),
     };
 
@@ -964,6 +977,288 @@ fn harnesses_are_reported_sorted_and_once_each() {
         shot.harnesses,
         Some(vec!["claude-code".to_owned(), "opencode".to_owned()])
     );
+}
+
+#[test]
+fn harnesses_exclude_the_noop_and_stub_runtimes() {
+    let shot = snapshot(&SnapshotInput {
+        harnesses: vec!["noop".into(), "codex".into(), "stub".into()],
+        ..only(Vec::new())
+    });
+    assert_eq!(shot.harnesses, Some(vec!["codex".to_owned()]));
+}
+
+const MINUTE_MS: i64 = 60 * 1000;
+const FLOOR_MS: i64 = HARNESS_PROBE_CONNECT_FLOOR_SECS as i64 * 1000;
+const INTERVAL_MS: i64 = HARNESS_PROBE_INTERVAL_SECS as i64 * 1000;
+
+#[test]
+fn a_harness_never_probed_is_due_on_either_trigger() {
+    assert!(probe_due(None, 0, ProbeTrigger::Connected));
+    assert!(probe_due(None, 0, ProbeTrigger::Timer));
+}
+
+#[test]
+fn a_connect_probes_once_the_floor_has_passed() {
+    let last = 1_000 * MINUTE_MS;
+    let due = |elapsed| probe_due(Some(last), last + elapsed, ProbeTrigger::Connected);
+    assert!(!due(0));
+    assert!(!due(FLOOR_MS - 1));
+    assert!(due(FLOOR_MS));
+    assert!(due(INTERVAL_MS));
+}
+
+/// The timer's ticks count from the session's start, and the connect probe
+/// finished after it: a tick an interval later must still find it due.
+#[test]
+fn a_timer_tick_probes_an_interval_less_the_floor_after_the_last() {
+    let last = 1_000 * MINUTE_MS;
+    let due = |elapsed| probe_due(Some(last), last + elapsed, ProbeTrigger::Timer);
+    assert!(!due(FLOOR_MS));
+    assert!(!due(INTERVAL_MS - FLOOR_MS - 1));
+    assert!(due(INTERVAL_MS - FLOOR_MS));
+    assert!(due(INTERVAL_MS - MINUTE_MS));
+    assert!(due(INTERVAL_MS));
+}
+
+#[test]
+fn a_clock_behind_the_last_probe_is_due() {
+    let last = 1_000 * MINUTE_MS;
+    assert!(probe_due(Some(last), last - 1, ProbeTrigger::Connected));
+    assert!(probe_due(Some(last), last - 1, ProbeTrigger::Timer));
+}
+
+fn model(value: &str, name: &str) -> ConfigOptionValue {
+    ConfigOptionValue {
+        value: value.to_owned(),
+        name: name.to_owned(),
+        description: None,
+        supports_images: false,
+    }
+}
+
+fn entry(kind: &str, models: Vec<ConfigOptionValue>) -> CatalogEntry {
+    CatalogEntry {
+        kind: kind.to_owned(),
+        models,
+        effort_levels: vec![EffortLevel::High],
+        source: Some(ModelSource::Probed),
+        probed_at_ms: 1_000,
+    }
+}
+
+fn probe(kind: &str, outcome: HarnessProbeOutcome) -> HarnessProbe {
+    HarnessProbe {
+        kind: kind.to_owned(),
+        outcome,
+        finished_ms: 9_000,
+    }
+}
+
+fn kinds_of(entries: &[CatalogEntry]) -> Vec<&str> {
+    entries.iter().map(|e| e.kind.as_str()).collect()
+}
+
+fn levels_for(kind: &str) -> Vec<EffortLevel> {
+    match kind {
+        "claude-code" => vec![EffortLevel::Low, EffortLevel::Max],
+        _ => Vec::new(),
+    }
+}
+
+#[test]
+fn a_listed_harness_replaces_its_entry() {
+    let previous = [entry("claude-code", vec![model("old", "Old")])];
+    let listed = HarnessProbeOutcome::Listed {
+        models: vec![model("new", "New")],
+        source: ModelSource::Bundled,
+    };
+    let out = merged(&previous, vec![probe("claude-code", listed)], levels_for);
+    assert_eq!(kinds_of(&out), ["claude-code"]);
+    assert_eq!(out[0].models[0].value, "new");
+    assert_eq!(out[0].source, Some(ModelSource::Bundled));
+    assert_eq!(out[0].probed_at_ms, 9_000);
+    assert_eq!(out[0].effort_levels, [EffortLevel::Low, EffortLevel::Max]);
+}
+
+#[test]
+fn a_harness_listed_for_the_first_time_is_added() {
+    let listed = HarnessProbeOutcome::Listed {
+        models: vec![model("m", "M")],
+        source: ModelSource::Probed,
+    };
+    let out = merged(&[], vec![probe("opencode", listed)], levels_for);
+    assert_eq!(kinds_of(&out), ["opencode"]);
+}
+
+#[test]
+fn an_uninstalled_harness_loses_its_entry() {
+    let previous = [
+        entry("codex", vec![model("m", "M")]),
+        entry("pi", Vec::new()),
+    ];
+    let out = merged(
+        &previous,
+        vec![probe("codex", HarnessProbeOutcome::NotInstalled)],
+        levels_for,
+    );
+    assert_eq!(kinds_of(&out), ["pi"]);
+}
+
+/// A host that is briefly unreachable must not read as having nothing
+/// installed.
+#[test]
+fn an_unreachable_harness_keeps_what_it_last_listed() {
+    let previous = [entry("codex", vec![model("m", "M")])];
+    let out = merged(
+        &previous,
+        vec![probe("codex", HarnessProbeOutcome::Unreachable)],
+        levels_for,
+    );
+    assert_eq!(kinds_of(&out), ["codex"]);
+    assert_eq!(out[0].models[0].value, "m");
+    assert_eq!(out[0].probed_at_ms, 1_000);
+}
+
+#[test]
+fn an_unreachable_harness_never_listed_is_held_with_no_models_and_no_source() {
+    let out = merged(
+        &[],
+        vec![probe("claude-code", HarnessProbeOutcome::Unreachable)],
+        levels_for,
+    );
+    assert_eq!(kinds_of(&out), ["claude-code"]);
+    assert!(out[0].models.is_empty());
+    assert_eq!(out[0].source, None);
+    assert_eq!(out[0].effort_levels, [EffortLevel::Low, EffortLevel::Max]);
+
+    let wire = outbound_catalog(&out);
+    assert_eq!(wire[0].kind, "claude-code");
+    assert_eq!(wire[0].source, None);
+}
+
+#[test]
+fn the_outbound_catalog_holds_supported_kinds_sorted() {
+    let out = outbound_catalog(&[
+        entry("opencode", Vec::new()),
+        entry("noop", vec![model("m", "M")]),
+        entry("claude-code", Vec::new()),
+        entry("stub", Vec::new()),
+    ]);
+    let kinds: Vec<&str> = out.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(kinds, ["claude-code", "opencode"]);
+    assert_eq!(out[0].source.as_deref(), Some("probed"));
+    assert_eq!(out[0].probed_at, 1);
+}
+
+#[test]
+fn outbound_models_keep_probe_order_and_the_first_of_a_repeated_value() {
+    let out = outbound_catalog(&[entry(
+        "opencode",
+        vec![model("z", "Zed"), model("a", "A"), model("z", "Zed again")],
+    )]);
+    let models: Vec<(&str, &str)> = out[0]
+        .models
+        .iter()
+        .map(|m| (m.value.as_str(), m.name.as_str()))
+        .collect();
+    assert_eq!(models, [("z", "Zed"), ("a", "A")]);
+}
+
+#[test]
+fn an_empty_value_or_a_nul_drops_only_that_model() {
+    let out = outbound_catalog(&[entry(
+        "opencode",
+        vec![
+            model("", "Empty"),
+            model("bad\0value", "B"),
+            model("c", "bad\0name"),
+            model("kept", "Kept"),
+        ],
+    )]);
+    let values: Vec<&str> = out[0].models.iter().map(|m| m.value.as_str()).collect();
+    assert_eq!(values, ["kept"]);
+}
+
+#[test]
+fn outbound_models_are_capped_in_count_and_length() {
+    let long = "x".repeat(MAX_CATALOG_CHARS + 50);
+    let mut models: Vec<ConfigOptionValue> = (0..MAX_CATALOG_MODELS + 5)
+        .map(|n| model(&format!("m-{n}"), "M"))
+        .collect();
+    models.insert(0, model(&format!("{long}v"), &format!("{long}n")));
+    let out = outbound_catalog(&[entry("opencode", models)]);
+    assert_eq!(out[0].models.len(), MAX_CATALOG_MODELS);
+    assert_eq!(out[0].models[0].value.chars().count(), MAX_CATALOG_CHARS);
+    assert_eq!(out[0].models[0].name.chars().count(), MAX_CATALOG_CHARS);
+}
+
+#[test]
+fn a_secret_shaped_model_name_is_scrubbed() {
+    let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let out = outbound_catalog(&[entry(
+        "opencode",
+        vec![model("m", &format!("proxy {token}"))],
+    )]);
+    let name = &out[0].models[0].name;
+    assert!(!name.contains(token), "{name}");
+    assert!(name.starts_with("proxy "), "{name}");
+}
+
+/// codex's description names the config file under the user's home; the
+/// value and the provider in the name may cross, the description never.
+#[test]
+fn a_codex_description_never_crosses() {
+    let mut codex = entry("codex", vec![model("MiniMax-M2", "MiniMax-M2")]);
+    codex.models[0].description = Some("~/.codex/config.toml (minimax)".to_owned());
+    codex.models[0].supports_images = true;
+    codex.source = Some(ModelSource::Config);
+    let shot = snapshot(&SnapshotInput {
+        harness_catalog: Some(vec![codex]),
+        ..only(Vec::new())
+    });
+    let value = serde_json::to_value(&shot).expect("snapshot serialises");
+    let mut keys = Vec::new();
+    collect_keys(&value, &mut keys);
+    assert!(keys.contains(&"harness_catalog".to_owned()));
+    assert!(!keys
+        .iter()
+        .any(|k| k == "description" || k == "supports_images"));
+    let wire = value.to_string();
+    assert!(!wire.contains(".codex"), "{wire}");
+    assert!(wire.contains("MiniMax-M2"), "{wire}");
+}
+
+fn collect_keys(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                out.push(key.clone());
+                collect_keys(child, out);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|i| collect_keys(i, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn no_catalog_reports_none_and_an_empty_one_reports_empty() {
+    assert_eq!(snapshot(&only(Vec::new())).harness_catalog, None);
+    let empty = snapshot(&SnapshotInput {
+        harness_catalog: Some(Vec::new()),
+        ..only(Vec::new())
+    });
+    assert_eq!(empty.harness_catalog, Some(Vec::new()));
+}
+
+#[test]
+fn an_entry_reports_its_effort_levels_on_the_wire() {
+    let mut claude = entry("claude-code", Vec::new());
+    claude.effort_levels = vec![EffortLevel::Low, EffortLevel::XHigh];
+    let out = outbound_catalog(&[claude]);
+    let wire = serde_json::to_value(&out[0].effort_levels).expect("serialises");
+    assert_eq!(wire, serde_json::json!(["low", "xhigh"]));
 }
 
 #[test]

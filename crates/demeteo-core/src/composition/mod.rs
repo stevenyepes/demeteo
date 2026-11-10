@@ -512,8 +512,10 @@ fn build_core_context_parts(
                         .runtimes()
                         .iter()
                         .map(|runtime| runtime.kind().to_owned())
+                        .filter(|kind| crate::domain::models::AgentKind::is_supported(kind))
                         .collect(),
                 ),
+                harness_catalog(&agent_registry, &exec_inner, &snapshot_wake, &runtime),
                 snapshot_wake,
                 runtime.clone(),
             ),
@@ -677,6 +679,35 @@ fn hub_run_keys(
     }
 }
 
+/// The harness catalog probe of this instance's own machine, for the Hub
+/// socket. The same on a desktop and a runner: `exec` routes
+/// [`LOCAL_MACHINE`](crate::domain::ids::LOCAL_MACHINE) to the local
+/// subprocess adapter under either [`ExecutionMode`]. Building it starts no
+/// probe; the socket asks for one once a relaying session is acked.
+fn harness_catalog(
+    registry: &Arc<adapters::agent::registry::AgentRegistry>,
+    exec: &Arc<dyn ExecutionPort>,
+    wake: &Arc<tokio::sync::Notify>,
+    runtime: &tokio::runtime::Handle,
+) -> Arc<dyn ports::hub::HarnessCatalogSource> {
+    let kinds = registry
+        .runtimes()
+        .iter()
+        .map(|runtime| runtime.kind())
+        .filter(|kind| crate::domain::models::AgentKind::is_supported(kind))
+        .map(|kind| (kind.to_owned(), registry.effort_levels_for(kind).to_vec()))
+        .collect();
+    Arc::new(adapters::hub::harness_catalog::CachedHarnessCatalog::new(
+        Arc::new(adapters::agent::model_probe::LocalModelProbe::new(
+            registry.clone(),
+            exec.clone(),
+        )),
+        kinds,
+        wake.clone(),
+        runtime.clone(),
+    ))
+}
+
 /// `run_events` and `wake` have to come from one
 /// [`WakingRunEvents`](adapters::hub::socket::wake::WakingRunEvents), and
 /// `snapshot_wake` has to be the one `ctx.projects` and `ctx.workflows` wake
@@ -689,6 +720,7 @@ fn hub_socket(
     wake: Arc<tokio::sync::Notify>,
     run_keys: Arc<dyn ports::hub::HubRunKeys>,
     snapshots: adapters::hub::snapshot_source::RepoSnapshotSource,
+    harness_catalog: Arc<dyn ports::hub::HarnessCatalogSource>,
     snapshot_wake: Arc<tokio::sync::Notify>,
     runtime: tokio::runtime::Handle,
 ) -> Option<adapters::hub::socket::SocketConfig> {
@@ -697,9 +729,14 @@ fn hub_socket(
             dialer: Arc::new(dialer),
             run_events,
             wake,
-            snapshots: Arc::new(snapshots.with_run_keys(run_keys.clone())),
+            snapshots: Arc::new(
+                snapshots
+                    .with_run_keys(run_keys.clone())
+                    .with_harness_catalog(harness_catalog.clone()),
+            ),
             snapshot_wake,
             run_keys,
+            harness_catalog,
             snapshot_debounce: std::time::Duration::from_secs(
                 crate::domain::hub_socket::SNAPSHOT_DEBOUNCE_SECS,
             ),
@@ -720,6 +757,7 @@ fn hub_socket(
     _wake: Arc<tokio::sync::Notify>,
     _run_keys: Arc<dyn ports::hub::HubRunKeys>,
     _snapshots: adapters::hub::snapshot_source::RepoSnapshotSource,
+    _harness_catalog: Arc<dyn ports::hub::HarnessCatalogSource>,
     _snapshot_wake: Arc<tokio::sync::Notify>,
     _runtime: tokio::runtime::Handle,
 ) -> Option<adapters::hub::socket::SocketConfig> {

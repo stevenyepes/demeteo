@@ -683,6 +683,7 @@ mod tests {
             run_shape: Vec::new(),
             features: Vec::new(),
             harnesses: None,
+            harness_catalog: None,
         };
         assert_eq!(
             next(Phase::Unannounced, text(&snapshot)),

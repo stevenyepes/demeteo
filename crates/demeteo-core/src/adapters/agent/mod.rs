@@ -5,6 +5,7 @@ pub mod direct_execution;
 pub mod event_stream;
 pub mod hermes;
 pub mod install;
+pub mod model_probe;
 pub mod noop;
 pub mod opencode;
 pub mod pi;

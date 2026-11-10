@@ -68,8 +68,8 @@ pub struct RunnerWorkflow {
 }
 
 /// What a runner needs to start a run that a desktop would find in its own
-/// database: the Hub resolves it from `source_instance_id`'s snapshot and
-/// signs it into the envelope, so the runner acts on nothing unsigned.
+/// database: the Hub resolves it from its own Hub Project and starter Workflow
+/// and signs it into the envelope, so the runner acts on nothing unsigned.
 ///
 /// There is no credential field, deliberately. The Hub stores every envelope
 /// it queues and redelivers it unchanged, so a Git token here would sit in
@@ -78,6 +78,10 @@ pub struct RunnerWorkflow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerStart {
+    /// An origin label no runner reads: `"hub"` from every Hub since the Hub
+    /// started owning the Projects a runner runs, and a desktop's instance id
+    /// from older Hubs. It stays, required and signed, because every deployed
+    /// runner refuses a start without it.
     pub source_instance_id: String,
     pub repository: RunnerRepository,
     pub workflow: RunnerWorkflow,
@@ -313,10 +317,11 @@ impl SignedRequest {
     /// The one exception is `StartFeature.runner`, the last field: `None`
     /// contributes **no bytes at all**, not the `0x00` of an `opt`, so a start
     /// without it signs exactly as it did before the field existed. `Some` is
-    /// `u8 1`, `str source_instance_id`, then [`RunnerRepository`]'s three
-    /// strings and [`RunnerWorkflow`]'s `str workflow_id, u32 version, str
-    /// name, str steps_json`. It cannot be confused with `None` because it is
-    /// last: the bytes either end after `attachments` or go on.
+    /// `u8 1`, `str source_instance_id` (an unread origin label, see
+    /// [`RunnerStart`]), then [`RunnerRepository`]'s three strings and
+    /// [`RunnerWorkflow`]'s `str workflow_id, u32 version, str name, str
+    /// steps_json`. It cannot be confused with `None` because it is last: the
+    /// bytes either end after `attachments` or go on.
     ///
     /// Nested, an [`AttachmentRef`] is `str id, u64 size, str sha256`; a
     /// [`StepOverride`] is `str step_id, opt<str> agent_kind, opt<str> model,

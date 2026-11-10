@@ -2,15 +2,17 @@ import { useMemo, useState } from 'react';
 
 import { WorkflowCanvas } from '../../../src/components/canvas/WorkflowCanvas';
 import { definitionOf, type StepOverrideDraft, toStepOverrides } from '../lib/dispatchForm';
-import type { WorkflowChoice } from '../lib/fleet';
+import type { InstanceDetail, WorkflowChoice } from '../lib/fleet';
 import { StepOverridePanel } from './StepOverridePanel';
 
 interface DispatchPipelineProps {
   workflow: WorkflowChoice;
   overrides: Record<string, StepOverrideDraft>;
   onOverridesChange: (next: Record<string, StepOverrideDraft>) => void;
-  /** The form's default agent, which a step's own agent inherits. */
+  /** The agent a step's own agent inherits: the form's, else the project's default. */
   defaultAgentKind: string;
+  /** The instance the run is sent to, whose catalog the step fields offer. */
+  instance: InstanceDetail;
 }
 
 /**
@@ -19,7 +21,13 @@ interface DispatchPipelineProps {
  * canvas drop its layout and run elk again, which on every keystroke in the
  * panel would re-lay the graph under the user's cursor.
  */
-export function DispatchPipeline({ workflow, overrides, onOverridesChange, defaultAgentKind }: DispatchPipelineProps) {
+export function DispatchPipeline({
+  workflow,
+  overrides,
+  onOverridesChange,
+  defaultAgentKind,
+  instance,
+}: DispatchPipelineProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const definition = useMemo(() => definitionOf(workflow), [workflow]);
   const overridden = useMemo(() => new Set(toStepOverrides(overrides).map((entry) => entry.step_id)), [overrides]);
@@ -62,6 +70,7 @@ export function DispatchPipeline({ workflow, overrides, onOverridesChange, defau
             node={selected}
             override={overrides[selected.id] ?? {}}
             defaultAgentKind={defaultAgentKind}
+            instance={instance}
             onChange={(next) => onOverridesChange({ ...overrides, [selected.id]: next })}
             onReset={() => {
               const { [selected.id]: _reset, ...rest } = overrides;

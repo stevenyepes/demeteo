@@ -610,3 +610,24 @@ pub fn workflow_save_schedule(
 #[cfg(test)]
 #[path = "../../tests/infrastructure/workflows.rs"]
 mod starter_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod hub_starter_parity {
+    use super::STARTER_FILES;
+    use crate::domain::workflow_starters::StarterDefinition;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_hub_offers_exactly_the_starters_a_desktop_seeds() {
+        let seeded: BTreeSet<String> = STARTER_FILES
+            .iter()
+            .filter_map(|file| StarterDefinition::parse(file))
+            .map(|starter| starter.id.0)
+            .collect();
+        let offered: BTreeSet<String> = demeteo_hub::workflows::starters()
+            .iter()
+            .map(|starter| starter.id.clone())
+            .collect();
+        assert_eq!(offered, seeded);
+    }
+}

@@ -786,132 +786,123 @@ describe('Dispatch with attachments', () => {
 
 describe('Dispatch to a runner', () => {
   const RUNNER = '6f1c2b3a-0000-4000-8000-000000000002';
-  const OTHER = '6f1c2b3a-0000-4000-8000-000000000003';
   const RUNNER_RUNS = `/v1/instances/${RUNNER}/runs`;
+  const GH = '0b7c8d9e-1f20-4a3b-8c4d-5e6f708192a3';
+  const GL = '0b7c8d9e-1f20-4a3b-8c4d-5e6f708192a4';
 
   const runnerDetail = () =>
     detail({ id: RUNNER, kind: 'runner', projects: [], workflows: [], scopes: ['read', 'spend'] });
 
-  const sourceDetail = (overrides: Record<string, unknown> = {}) =>
-    detail({
-      kind: 'desktop',
-      projects: [
-        { id: 'proj-gh', name: 'demeteo', remote_url: 'https://github.com/acme/demeteo', provider_kind: 'github' },
-        { id: 'proj-gl', name: 'notes', remote_url: 'https://gitlab.com/acme/notes', provider_kind: 'gitlab' },
-        { id: 'proj-none', name: 'scratch', remote_url: null, provider_kind: null },
-      ],
-      ...overrides,
+  const hubProject = (overrides: Record<string, unknown> = {}) => ({
+    id: GH,
+    name: 'widgets',
+    provider_kind: 'github',
+    host: 'github.com',
+    full_name: 'acme/widgets',
+    remote_url: 'https://github.com/acme/widgets',
+    runner_ready: true,
+    default_agent_kind: null,
+    default_model: null,
+    default_effort: null,
+    default_workflow_id: 'wf-starter-hotfix',
+    default_max_budget_cents: null,
+    created_at: NOW,
+    updated_at: NOW,
+    ...overrides,
+  });
+
+  const gitlabProject = () =>
+    hubProject({
+      id: GL,
+      name: 'notes',
+      provider_kind: 'gitlab',
+      host: 'gitlab.com',
+      full_name: 'acme/notes',
+      remote_url: 'https://gitlab.com/acme/notes',
+      runner_ready: false,
     });
 
-  const desktopRow = (overrides: Record<string, unknown> = {}) =>
-    fleetRow({ kind: 'desktop', project_count: 3, ...overrides });
+  const STARTERS = {
+    workflows: [
+      { workflow_id: 'wf-starter-feature', version: 11, name: 'Feature', description: 'Build it', graph: null },
+      { workflow_id: 'wf-starter-hotfix', version: 12, name: 'Hotfix', description: 'Fix it', graph: null },
+    ],
+  };
 
-  function renderRunner(fleet: Record<string, unknown>[], more: Scripted[] = []) {
+  function renderRunner(projects: Record<string, unknown>[], more: Scripted[] = []) {
     stubFetch([
-      { request: 'GET /v1/fleet', answer: () => json({ instances: fleet }) },
       { request: `GET /v1/instances/${RUNNER}`, answer: () => json(runnerDetail()) },
+      { request: 'GET /v1/projects', answer: () => json({ projects }) },
+      { request: 'GET /v1/workflows', answer: () => json(STARTERS) },
       ...more,
     ]);
-    render(
-      <FleetProvider readKey="dispatch">
-        <Dispatch instanceId={RUNNER} />
-      </FleetProvider>,
-    );
+    render(<Dispatch instanceId={RUNNER} />);
   }
 
-  const runnerRow = fleetRow({ id: RUNNER, kind: 'runner', label: 'build-box', project_count: 0 });
-
-  it("runs from the one desktop reporting read, offering only what a runner can start, and names it as the source", async () => {
-    renderRunner(
-      [
-        desktopRow(),
-        runnerRow,
-        desktopRow({ id: OTHER, label: 'old', read_granted: false, project_count: null }),
-      ],
-      [
-        { request: `GET ${PATH}`, answer: () => json(sourceDetail()) },
-        { request: `POST ${RUNNER_RUNS}`, answer: () => json(ENQUEUED, 202) },
-      ],
-    );
+  it("offers the Hub's projects and starters, and sends no source desktop", async () => {
+    renderRunner([hubProject(), gitlabProject()], [
+      { request: `POST ${RUNNER_RUNS}`, answer: () => json(ENQUEUED, 202) },
+    ]);
 
     await screen.findByRole('button', { name: 'Start feature' });
-    expect(screen.getByLabelText('Run from')).toHaveValue(ID);
-    expect(optionsOf('Run from')).toEqual([{ value: ID, text: 'laptop' }]);
-
+    expect(screen.queryByLabelText('Run from')).toBeNull();
     const project = screen.getByLabelText('Project') as HTMLSelectElement;
-    expect(project).toHaveValue('proj-gh');
-    const disabled = Array.from(project.options, (option) => [option.value, option.disabled]);
-    expect(disabled).toEqual([
-      ['proj-gh', false],
-      ['proj-gl', true],
-      ['proj-none', true],
+    expect(project).toHaveValue(GH);
+    expect(Array.from(project.options, (option) => [option.value, option.disabled])).toEqual([
+      [GH, false],
+      [GL, true],
     ]);
-    expect(optionsOf('Project')[1]?.text).toMatch(/GitLab/);
-    expect(optionsOf('Project')[2]?.text).toMatch(/no Git host/);
+    expect(optionsOf('Project')[1]?.text).toMatch(/Runners cannot clone GitLab projects yet/);
+    expect(screen.getByLabelText('Workflow')).toHaveValue('wf-starter-hotfix');
 
     await fillValid();
     await userEvent.click(screen.getByRole('button', { name: 'Start feature' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(/queued/i);
     expect(posts()).toEqual([`POST ${RUNNER_RUNS}`]);
-    expect(posted[0]).toMatchObject({ project_id: 'proj-gh', source_instance_id: ID });
+    expect(posted[0]).toMatchObject({ project_id: GH, workflow_id: 'wf-starter-hotfix', max_budget_cents: 1250 });
+    expect(posted[0]).not.toHaveProperty('source_instance_id');
+    expect(asked).not.toContain('GET /v1/fleet');
   });
 
-  it('chooses no desktop while several could serve, and loads only the one picked', async () => {
-    renderRunner([desktopRow(), desktopRow({ id: OTHER, label: 'desk' }), runnerRow], [
-      { request: `GET /v1/instances/${OTHER}`, answer: () => json(sourceDetail({ id: OTHER })) },
-    ]);
+  it("fills the run shape from the Hub project's defaults", async () => {
+    renderRunner([hubProject({ default_effort: 'low', default_max_budget_cents: 250, default_model: 'gpt-5.5' })]);
 
-    const picker = await screen.findByLabelText('Run from');
-    expect(picker).toHaveValue('');
+    await screen.findByRole('button', { name: 'Start feature' });
+    expect(screen.getByLabelText('Max cost (USD)')).toHaveValue('2.50');
+    expect(screen.getByLabelText('Effort')).toHaveValue('low');
+    expect(screen.getByLabelText('Model')).toHaveValue('gpt-5.5');
+  });
+
+  it('links to the Projects page, with no form, while this Hub has no project', async () => {
+    renderRunner([]);
+
+    const link = await screen.findByRole('link', { name: 'Add a project' });
+    expect(link).toHaveAttribute('href', '#/projects');
     expect(screen.queryByLabelText('Project')).toBeNull();
-
-    await userEvent.selectOptions(picker, OTHER);
-
-    expect(await screen.findByLabelText('Project')).toHaveValue('proj-gh');
-    expect([...asked].sort()).toEqual(['GET /v1/fleet', `GET /v1/instances/${OTHER}`, `GET /v1/instances/${RUNNER}`].sort());
   });
 
-  it('explains, with no form, when no desktop reports anything to run from', async () => {
-    renderRunner([runnerRow, desktopRow({ read_granted: false, project_count: null })]);
-
-    expect(await screen.findByText(/no paired desktop is reporting any with read on/)).toBeVisible();
-    expect(screen.queryByLabelText('Project')).toBeNull();
-    expect([...asked].sort()).toEqual(['GET /v1/fleet', `GET /v1/instances/${RUNNER}`].sort());
-  });
-
-  it('holds the submit when none of the desktop projects can run on a runner', async () => {
-    renderRunner([desktopRow(), runnerRow], [
-      {
-        request: `GET ${PATH}`,
-        answer: () =>
-          json(
-            sourceDetail({
-              projects: [{ id: 'proj-gl', name: 'notes', remote_url: 'https://gitlab.com/a/b', provider_kind: 'gitlab' }],
-            }),
-          ),
-      },
-    ]);
+  it('holds the submit when no project can run on a runner', async () => {
+    renderRunner([gitlabProject()]);
 
     const submit = await screen.findByRole('button', { name: 'Start feature' });
     await fillValid();
     await userEvent.click(submit);
 
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/None of this desktop's projects can run on a runner/)).toBeVisible();
+    expect(screen.getByText(/None of these projects can run on a runner/)).toBeVisible();
     expect(posts()).toEqual([]);
   });
 
-  it("shows the Hub refusing a project it cannot start on a runner as that sentence", async () => {
-    renderRunner([desktopRow(), runnerRow], [
-      { request: `GET ${PATH}`, answer: () => json(sourceDetail()) },
-      { request: `POST ${RUNNER_RUNS}`, answer: () => json({ error: 'project_not_dispatchable' }, 409) },
+  it('shows the Hub refusing a removed project as that sentence', async () => {
+    renderRunner([hubProject()], [
+      { request: `POST ${RUNNER_RUNS}`, answer: () => json({ error: 'unknown_project' }, 409) },
     ]);
 
     await screen.findByRole('button', { name: 'Start feature' });
     await fillValid();
     await userEvent.click(screen.getByRole('button', { name: 'Start feature' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/A runner cannot run this project/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/This Hub has no such project/);
   });
 });

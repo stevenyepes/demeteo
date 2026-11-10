@@ -54,10 +54,11 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 const FOREIGN_KEY_VIOLATION: &str = "23503";
-const EXPECTED_TABLES: [&str; 13] = [
+const EXPECTED_TABLES: [&str; 14] = [
     "attachments",
     "device_keys",
     "git_hosts",
+    "hub_projects",
     "instance_requests",
     "instances",
     "passkey_endorsements",
@@ -2312,6 +2313,7 @@ async fn a_socket_store_of_one_user_bound_to_another_users_instance_writes_nothi
             run_shape: Vec::new(),
             features: Vec::new(),
             harnesses: None,
+            harness_catalog: None,
         };
         let id = [7; 16];
 

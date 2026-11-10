@@ -7,7 +7,7 @@
 use super::run_labels::RunLabels;
 use super::run_state::{by_feature, fold, FeatureStatus, PendingGate, TicketProgress};
 use super::scope::read_verdict;
-use super::snapshot_view::{run_shape, workflows};
+use super::snapshot_view::{harness_catalog, run_shape, workflows};
 use super::{ApiContext, PostgresApi, SnapshotRead};
 use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::handlers::{store_failed, unix_now, ApiError, CurrentSession};
@@ -23,7 +23,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use super::snapshot_view::{
-    GraphEdgeView, GraphNodeView, GraphPosition, RunShapeView, WorkflowGraphView, WorkflowView,
+    GraphEdgeView, GraphNodeView, GraphPosition, HarnessCatalogView, ModelChoiceView, RunShapeView,
+    WorkflowGraphView, WorkflowView,
 };
 
 #[derive(Debug, Serialize)]
@@ -98,6 +99,11 @@ pub struct InstanceDetailView {
     pub live_runs: Option<Vec<RunSummary>>,
     /// As [`FleetInstanceView::harnesses`].
     pub harnesses: Option<Vec<String>>,
+    /// The harnesses the instance found installed and the models each
+    /// lists. `None` without `read`, before a snapshot, and from an instance
+    /// that predates the field or has not finished a probe; `Some([])` when it
+    /// probed and found none installed.
+    pub harness_catalog: Option<Vec<HarnessCatalogView>>,
 }
 
 /// A project as the snapshot names it. Built field by field: the snapshot is
@@ -246,14 +252,15 @@ pub async fn instance_detail(
     } else {
         (None, None)
     };
-    let (projects, workflows, run_shape, harnesses) = match reported {
+    let (projects, workflows, run_shape, harnesses, harness_catalog) = match reported {
         Some(reported) => (
             Some(reported.projects),
             Some(reported.workflows),
             Some(reported.run_shape),
             reported.harnesses,
+            reported.harness_catalog,
         ),
-        None => (None, None, None, None),
+        None => (None, None, None, None, None),
     };
     Ok(InstanceDetailView {
         id: row.id.0.to_string(),
@@ -272,6 +279,7 @@ pub async fn instance_detail(
         run_shape,
         live_runs,
         harnesses,
+        harness_catalog,
     })
 }
 
@@ -343,6 +351,7 @@ struct Reported {
     workflows: Vec<WorkflowView>,
     run_shape: Vec<RunShapeView>,
     harnesses: Option<Vec<String>>,
+    harness_catalog: Option<Vec<HarnessCatalogView>>,
 }
 
 /// The instance's snapshot, or `None` before one and while the one it sent
@@ -381,6 +390,7 @@ fn reported_of(snapshot: Option<Snapshot>) -> Reported {
         workflows: workflows(snapshot.workflows),
         run_shape: run_shape(snapshot.run_shape),
         harnesses: snapshot.harnesses,
+        harness_catalog: snapshot.harness_catalog.map(harness_catalog),
     }
 }
 
@@ -420,7 +430,7 @@ fn count(len: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use demeteo_hub_protocol::ProjectSnapshot;
+    use demeteo_hub_protocol::{Effort, HarnessCatalogEntry, ModelChoice, ProjectSnapshot};
 
     fn project(provider_kind: Option<&str>) -> ProjectSnapshot {
         ProjectSnapshot {
@@ -431,16 +441,87 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_projects_provider_kind_reaches_the_view_as_the_desktop_reported_it() {
-        let snapshot = Snapshot {
+    fn snapshot(projects: Vec<ProjectSnapshot>) -> Snapshot {
+        Snapshot {
             v: 1,
-            projects: vec![project(Some("gitlab")), project(None)],
+            projects,
             workflows: Vec::new(),
             run_shape: Vec::new(),
             features: Vec::new(),
             harnesses: None,
+            harness_catalog: None,
+        }
+    }
+
+    #[test]
+    fn a_harness_catalog_reaches_the_view_field_by_field() {
+        let snapshot = Snapshot {
+            harness_catalog: Some(vec![
+                HarnessCatalogEntry {
+                    kind: "codex".to_owned(),
+                    models: vec![ModelChoice {
+                        value: "gpt-5.5".to_owned(),
+                        name: "GPT-5.5".to_owned(),
+                    }],
+                    effort_levels: Some(vec![Effort::Low, Effort::High]),
+                    source: Some("bundled".to_owned()),
+                    probed_at: 1_700_000_000,
+                },
+                HarnessCatalogEntry {
+                    kind: "opencode".to_owned(),
+                    models: Vec::new(),
+                    effort_levels: None,
+                    source: None,
+                    probed_at: 1_700_000_001,
+                },
+            ]),
+            ..snapshot(Vec::new())
         };
+        let catalog = reported_of(Some(snapshot)).harness_catalog;
+        assert_eq!(
+            catalog,
+            Some(vec![
+                HarnessCatalogView {
+                    kind: "codex".to_owned(),
+                    models: vec![ModelChoiceView {
+                        value: "gpt-5.5".to_owned(),
+                        name: "GPT-5.5".to_owned(),
+                    }],
+                    effort_levels: Some(vec![Effort::Low, Effort::High]),
+                    source: Some("bundled".to_owned()),
+                    probed_at: 1_700_000_000,
+                },
+                HarnessCatalogView {
+                    kind: "opencode".to_owned(),
+                    models: Vec::new(),
+                    effort_levels: None,
+                    source: None,
+                    probed_at: 1_700_000_001,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn an_empty_catalog_stays_distinct_from_none() {
+        let probed_empty = Snapshot {
+            harness_catalog: Some(Vec::new()),
+            ..snapshot(Vec::new())
+        };
+        assert_eq!(
+            reported_of(Some(probed_empty)).harness_catalog,
+            Some(Vec::new())
+        );
+        assert_eq!(
+            reported_of(Some(snapshot(Vec::new()))).harness_catalog,
+            None
+        );
+        assert_eq!(reported_of(None).harness_catalog, None);
+    }
+
+    #[test]
+    fn a_projects_provider_kind_reaches_the_view_as_the_desktop_reported_it() {
+        let snapshot = snapshot(vec![project(Some("gitlab")), project(None)]);
         let kinds: Vec<Option<String>> = reported_of(Some(snapshot))
             .projects
             .into_iter()

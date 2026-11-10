@@ -59,7 +59,8 @@ use demeteo_core::domain::sync_resolver::SyncResolverChoice;
 use demeteo_core::domain::upstream_feature::DivergenceReconcile;
 use demeteo_core::error::AppError;
 use demeteo_core::ports::hub::{
-    HubLaunch, HubLaunched, HubRunControl, HubTokenEndpoint, SocketReceived, StartSupport,
+    HubLaunch, HubLaunched, HubRunControl, HubTokenEndpoint, NoHarnessCatalog, SocketReceived,
+    StartSupport,
 };
 use demeteo_core::ports::step_executor::{
     FeatureLaunch, StepExecutor, SyncOutcomeView, SyncResolverView,
@@ -385,6 +386,7 @@ impl Runner {
             snapshots: Arc::new(snapshots),
             snapshot_wake: Arc::new(tokio::sync::Notify::new()),
             run_keys,
+            harness_catalog: Arc::new(NoHarnessCatalog),
             snapshot_debounce: Duration::from_millis(10),
             runtime: tokio::runtime::Handle::current(),
             sleeper: Arc::new(Parked),

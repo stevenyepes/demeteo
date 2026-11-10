@@ -122,6 +122,14 @@ const WIRE_RUN_SHAPE = {
   default_max_budget_cents: 500,
 };
 
+const WIRE_CATALOG = {
+  kind: 'codex',
+  models: [{ value: 'gpt-5.5', name: 'GPT-5.5' }],
+  effort_levels: ['low', 'high'],
+  source: 'bundled',
+  probed_at: 1_700_000_150,
+};
+
 const WIRE_DETAIL = {
   id: INSTANCE_ID,
   kind: 'runner',
@@ -137,6 +145,7 @@ const WIRE_DETAIL = {
   projects: [WIRE_PROJECT],
   live_runs: [WIRE_RUN],
   harnesses: ['claude-code'],
+  harness_catalog: [WIRE_CATALOG],
   workflows: [WIRE_WORKFLOW],
   run_shape: [WIRE_RUN_SHAPE],
 };
@@ -386,6 +395,15 @@ describe('getInstance', () => {
         },
       ],
       harnesses: ['claude-code'],
+      harnessCatalog: [
+        {
+          kind: 'codex',
+          models: [{ value: 'gpt-5.5', name: 'GPT-5.5' }],
+          effortLevels: ['low', 'high'],
+          source: 'bundled',
+          probedAt: 1_700_000_150,
+        },
+      ],
       workflows: [
         {
           workflowId: 'wf-feature',
@@ -428,6 +446,7 @@ describe('getInstance', () => {
         projects: null,
         live_runs: null,
         harnesses: null,
+        harness_catalog: null,
         workflows: null,
         run_shape: null,
       }),
@@ -444,9 +463,45 @@ describe('getInstance', () => {
       projects: null,
       liveRuns: null,
       harnesses: null,
+      harnessCatalog: null,
       workflows: null,
       runShape: null,
     });
+  });
+
+  it('keeps an empty catalog empty, distinct from one never reported', async () => {
+    stubFetch([get(DETAIL_PATH, { ...WIRE_DETAIL, harness_catalog: [] })]);
+
+    await expect(getInstance(INSTANCE_ID)).resolves.toMatchObject({ harnessCatalog: [] });
+  });
+
+  it('reads a detail from a Hub that predates harness_catalog as reporting none', async () => {
+    const { harness_catalog: _omitted, ...older } = WIRE_DETAIL;
+    stubFetch([get(DETAIL_PATH, older)]);
+
+    await expect(getInstance(INSTANCE_ID)).resolves.toMatchObject({ harnessCatalog: null });
+  });
+
+  it('drops an effort this build does not know instead of refusing the catalog', async () => {
+    const entry = { ...WIRE_CATALOG, effort_levels: ['low', 'ultra', 'max'], source: null };
+    stubFetch([get(DETAIL_PATH, { ...WIRE_DETAIL, harness_catalog: [entry, { ...entry, effort_levels: null }] })]);
+
+    const detail = await getInstance(INSTANCE_ID);
+
+    expect(detail.harnessCatalog?.map((catalog) => catalog.effortLevels)).toEqual([['low', 'max'], null]);
+    expect(detail.harnessCatalog?.[0]?.source).toBeNull();
+  });
+
+  it('carries no member of a catalog entry or model it does not name', async () => {
+    const entry = {
+      ...WIRE_CATALOG,
+      config_path: '/home/u/.codex/config.toml',
+      models: [{ value: 'm', name: 'M', description: '~/.codex/config.toml (minimax)' }],
+    };
+    stubFetch([get(DETAIL_PATH, { ...WIRE_DETAIL, harness_catalog: [entry] })]);
+
+    const text = JSON.stringify(await getInstance(INSTANCE_ID));
+    expect(text).not.toContain('.codex');
   });
 
   it('keeps an empty project, run, workflow and run-shape list empty, distinct from withheld', async () => {
@@ -570,6 +625,19 @@ describe('getInstance', () => {
     ['no cost_cents', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, cost_cents: undefined }] }],
     ['harnesses that are no list', { ...WIRE_DETAIL, harnesses: 'claude-code' }],
     ['no harnesses', { ...WIRE_DETAIL, harnesses: undefined }],
+    ['a harness_catalog that is no list', { ...WIRE_DETAIL, harness_catalog: WIRE_CATALOG }],
+    ['a catalog entry with no kind', { ...WIRE_DETAIL, harness_catalog: [{ ...WIRE_CATALOG, kind: undefined }] }],
+    ['a catalog entry with no models', { ...WIRE_DETAIL, harness_catalog: [{ ...WIRE_CATALOG, models: undefined }] }],
+    [
+      'a catalog model with no name',
+      { ...WIRE_DETAIL, harness_catalog: [{ ...WIRE_CATALOG, models: [{ value: 'gpt-5.5' }] }] },
+    ],
+    [
+      'a numeric effort level',
+      { ...WIRE_DETAIL, harness_catalog: [{ ...WIRE_CATALOG, effort_levels: [3] }] },
+    ],
+    ['a catalog entry with a string probed_at', { ...WIRE_DETAIL, harness_catalog: [{ ...WIRE_CATALOG, probed_at: '1' }] }],
+    ['a catalog entry with no source', { ...WIRE_DETAIL, harness_catalog: [{ ...WIRE_CATALOG, source: undefined }] }],
     ['a run with no tickets', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, tickets: undefined }] }],
     ['a run with no title', { ...WIRE_DETAIL, live_runs: [{ ...WIRE_RUN, title: undefined }] }],
     ['a project with no name', { ...WIRE_DETAIL, projects: [{ ...WIRE_PROJECT, name: undefined }] }],

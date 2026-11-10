@@ -1,19 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
+import { EFFORT_LEVELS } from '../../../src/lib/effortLevels';
 import {
+  agentChoicesFor,
   buildDispatchRequest,
+  catalogOf,
   type DispatchForm,
   definitionOf,
   dispatchBlocker,
-  dispatchSources,
+  effortsFor,
+  hubCatalog,
   isOverridable,
+  modelChoicesFor,
+  type Prefill,
+  prefillFor,
   parseMaxCostCents,
   parseWallClockSecs,
-  runnerProjectProblem,
   toStepOverrides,
+  unofferedDefaultAgent,
   usdOfCents,
 } from './dispatchForm';
-import type { FleetInstance, InstanceDetail, ProjectSummary, WorkflowChoice } from './fleet';
+import type { HarnessCatalog, InstanceDetail, WorkflowChoice } from './fleet';
+import type { HubProject } from './projects';
 
 const INSTANCE: InstanceDetail = {
   id: '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21',
@@ -30,8 +38,31 @@ const INSTANCE: InstanceDetail = {
   projects: [{ id: 'p-1', name: 'demeteo', remoteUrl: null, providerKind: null }],
   liveRuns: [],
   harnesses: null,
+  harnessCatalog: null,
   workflows: [{ workflowId: 'wf-1', version: 3, name: 'Default', graph: null }],
   runShape: [],
+};
+
+const CODEX: HarnessCatalog = {
+  kind: 'codex',
+  models: [{ value: 'gpt-5.5', name: 'GPT-5.5' }],
+  effortLevels: ['low', 'medium'],
+  source: 'bundled',
+  probedAt: 1_700_000_000,
+};
+
+const OPENCODE: HarnessCatalog = {
+  kind: 'opencode',
+  models: [{ value: 'anthropic/claude-opus', name: 'Claude Opus' }],
+  effortLevels: null,
+  source: 'probed',
+  probedAt: 1_700_000_000,
+};
+
+const CATALOGUED: InstanceDetail = {
+  ...INSTANCE,
+  harnesses: ['claude-code', 'codex', 'opencode'],
+  harnessCatalog: [CODEX, OPENCODE],
 };
 
 const CHOICE: WorkflowChoice = {
@@ -59,6 +90,180 @@ const FORM: DispatchForm = {
   maxBudgetCents: 500,
   maxWallClockSecs: undefined,
 };
+
+describe('agentChoicesFor', () => {
+  it('offers the harnesses the instance found installed', () => {
+    expect(agentChoicesFor(CATALOGUED)).toEqual(['codex', 'opencode']);
+  });
+
+  it('offers none when the instance probed and found none installed', () => {
+    expect(agentChoicesFor({ ...CATALOGUED, harnessCatalog: [] })).toEqual([]);
+  });
+
+  it('falls back to the registered harnesses, never a test runtime, from an instance with no catalog', () => {
+    expect(agentChoicesFor({ ...INSTANCE, harnesses: ['noop', 'claude-code', 'stub', 'pi'] })).toEqual([
+      'claude-code',
+      'pi',
+    ]);
+  });
+
+  it('falls back to every kind this build knows from an instance reporting neither', () => {
+    expect(agentChoicesFor(INSTANCE)).toEqual(['claude-code', 'codex', 'opencode', 'hermes']);
+  });
+});
+
+describe('modelChoicesFor', () => {
+  it("lists the kind's models and where they came from", () => {
+    expect(modelChoicesFor(CATALOGUED, 'codex')).toEqual({ models: CODEX.models, source: 'bundled' });
+  });
+
+  it('is free text for a kind the catalog has no entry for, or with no catalog at all', () => {
+    expect(modelChoicesFor(CATALOGUED, 'claude-code')).toBeNull();
+    expect(modelChoicesFor(CATALOGUED, '')).toBeNull();
+    expect(modelChoicesFor(INSTANCE, 'codex')).toBeNull();
+  });
+
+  it('is an empty list, not free text, for an entry that lists no model', () => {
+    const empty = { ...CATALOGUED, harnessCatalog: [{ ...CODEX, models: [] }] };
+    expect(modelChoicesFor(empty, 'codex')).toEqual({ models: [], source: 'bundled' });
+  });
+
+  it('is free text for an entry that has not yet answered a listing', () => {
+    const unanswered = { ...CATALOGUED, harnessCatalog: [{ ...CODEX, models: [], source: null }] };
+    expect(modelChoicesFor(unanswered, 'codex')).toBeNull();
+    expect(agentChoicesFor(unanswered)).toEqual(['codex']);
+  });
+});
+
+describe('unofferedDefaultAgent', () => {
+  it('names a project default the instance reports it cannot run, while the agent is left blank', () => {
+    const codexOnly = { ...CATALOGUED, harnessCatalog: [CODEX] };
+    expect(unofferedDefaultAgent(codexOnly, '', 'claude-code')).toBe('claude-code');
+    expect(unofferedDefaultAgent({ ...INSTANCE, harnesses: ['codex'] }, '', 'claude-code')).toBe('claude-code');
+  });
+
+  it('is null once an agent is picked, for an offered default, with no default, or with nothing reported', () => {
+    const codexOnly = { ...CATALOGUED, harnessCatalog: [CODEX] };
+    expect(unofferedDefaultAgent(codexOnly, 'codex', 'claude-code')).toBeNull();
+    expect(unofferedDefaultAgent(codexOnly, '', 'codex')).toBeNull();
+    expect(unofferedDefaultAgent(codexOnly, '', '')).toBeNull();
+    expect(unofferedDefaultAgent(INSTANCE, '', 'my-harness')).toBeNull();
+  });
+});
+
+describe('effortsFor', () => {
+  it("takes the instance's levels for a kind it reports them for", () => {
+    expect(effortsFor(CATALOGUED, 'codex')).toEqual(['low', 'medium']);
+  });
+
+  it("falls back to this build's table where the instance gives none", () => {
+    expect(effortsFor(CATALOGUED, 'opencode')).toEqual(EFFORT_LEVELS);
+    expect(effortsFor(INSTANCE, 'codex')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(effortsFor(CATALOGUED, 'hermes')).toEqual([]);
+  });
+});
+
+const HUB_PROJECT: HubProject = {
+  id: '0b7c8d9e-1f20-4a3b-8c4d-5e6f708192a3',
+  name: 'widgets',
+  providerKind: 'github',
+  host: 'github.com',
+  fullName: 'acme/widgets',
+  remoteUrl: 'https://github.com/acme/widgets',
+  runnerReady: true,
+  defaultAgentKind: 'codex',
+  defaultModel: 'gpt-5.5',
+  defaultEffort: 'high',
+  defaultWorkflowId: 'wf-starter-hotfix',
+  defaultMaxBudgetCents: 250,
+  createdAt: 1_700_000_000,
+  updatedAt: 1_700_000_000,
+};
+
+const STARTERS: WorkflowChoice[] = [
+  { workflowId: 'wf-starter-feature', version: 11, name: 'Feature', graph: null },
+  { workflowId: 'wf-starter-hotfix', version: 12, name: 'Hotfix', graph: null },
+];
+
+describe('catalogOf', () => {
+  it("offers every project of the desktop's snapshot, with its run shape", () => {
+    const row = { projectId: 'p-1', agentKind: 'codex', model: null, effort: null, workflowId: null, maxBudgetCents: 100 };
+    expect(catalogOf({ ...INSTANCE, runShape: [row] })).toEqual({
+      projects: [{ id: 'p-1', name: 'demeteo', problem: null }],
+      workflows: INSTANCE.workflows,
+      runShape: [row],
+    });
+  });
+
+  it('is empty for lists the snapshot withholds', () => {
+    expect(catalogOf({ ...INSTANCE, projects: null, workflows: null, runShape: null })).toEqual({
+      projects: [],
+      workflows: [],
+      runShape: [],
+    });
+  });
+});
+
+describe('hubCatalog', () => {
+  it("offers the Hub's projects with their defaults as run shape, and the starters as workflows", () => {
+    expect(hubCatalog([HUB_PROJECT], STARTERS)).toEqual({
+      projects: [{ id: HUB_PROJECT.id, name: 'widgets', problem: null }],
+      workflows: STARTERS,
+      runShape: [
+        {
+          projectId: HUB_PROJECT.id,
+          agentKind: 'codex',
+          model: 'gpt-5.5',
+          effort: 'high',
+          workflowId: 'wf-starter-hotfix',
+          maxBudgetCents: 250,
+        },
+      ],
+    });
+  });
+
+  it('lists a project a runner cannot clone with its reason', () => {
+    const gitlab = { ...HUB_PROJECT, providerKind: 'gitlab', runnerReady: false };
+    expect(hubCatalog([gitlab], STARTERS).projects[0]?.problem).toMatch(/GitLab/);
+  });
+});
+
+describe('prefillFor', () => {
+  const UNFILLED: Prefill = { agentKind: '', model: '', effort: '', workflowId: '', maxCostUsd: '' };
+  const withDefaults = (agentKind: string) =>
+    catalogOf({
+      ...INSTANCE,
+      runShape: [{ projectId: 'p-1', agentKind, model: 'm', effort: 'high', workflowId: null, maxBudgetCents: 500 }],
+    });
+
+  it("fills the project's default agent when the target can run it, clamping effort to the target's levels", () => {
+    const filled = prefillFor(withDefaults('codex'), 'p-1', UNFILLED, new Set(), CATALOGUED);
+    expect(filled).toMatchObject({ agentKind: 'codex', model: 'm', effort: 'medium' });
+  });
+
+  it('leaves the agent blank when the target does not offer it', () => {
+    const filled = prefillFor(withDefaults('claude-code'), 'p-1', UNFILLED, new Set(), CATALOGUED);
+    expect(filled.agentKind).toBe('');
+  });
+
+  it("fills a runner dispatch from the Hub project's defaults, judged against the runner", () => {
+    const filled = prefillFor(hubCatalog([HUB_PROJECT], STARTERS), HUB_PROJECT.id, UNFILLED, new Set(), CATALOGUED);
+    expect(filled).toEqual({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      effort: 'medium',
+      workflowId: 'wf-starter-hotfix',
+      maxCostUsd: '2.50',
+    });
+  });
+
+  it('takes the first workflow for a default no starter carries any more, and keeps edited fields', () => {
+    const stale = { ...HUB_PROJECT, defaultWorkflowId: 'wf-starter-gone' };
+    const held: Prefill = { ...UNFILLED, model: 'typed', maxCostUsd: '9.00' };
+    const filled = prefillFor(hubCatalog([stale], STARTERS), stale.id, held, new Set(['maxCostUsd', 'model'] as const), CATALOGUED);
+    expect(filled).toMatchObject({ workflowId: 'wf-starter-feature', model: 'typed', maxCostUsd: '9.00' });
+  });
+});
 
 describe('parseMaxCostCents', () => {
   it.each(['', '   ', '-1', '0', '0.00', '1e2', 'abc', '1.234', '1.', '.5', '+1', '0x10', '1,5', '12 5'])(
@@ -232,7 +437,6 @@ describe('buildDispatchRequest', () => {
         effort: 'medium',
         overrides: { 's-implement': { model: 'opus' }, 's-gate': {} },
         maxWallClockSecs: 5400,
-        sourceInstanceId: 'src-1',
       },
       ['att-1', 'att-2'],
     );
@@ -246,7 +450,6 @@ describe('buildDispatchRequest', () => {
         'max_wall_clock_secs',
         'model',
         'project_id',
-        'source_instance_id',
         'step_overrides',
         'title',
         'workflow_id',
@@ -264,73 +467,6 @@ describe('buildDispatchRequest', () => {
       max_budget_cents: 500,
       max_wall_clock_secs: 5400,
       attachment_ids: ['att-1', 'att-2'],
-      source_instance_id: 'src-1',
     });
-  });
-});
-
-function project(remoteUrl: string | null, providerKind: string | null): ProjectSummary {
-  return { id: 'p', name: 'widgets', remoteUrl, providerKind };
-}
-
-describe('runnerProjectProblem', () => {
-  it('offers a GitHub project whose remote is https://host/owner/repo, a nested group included', () => {
-    expect(runnerProjectProblem(project('https://github.com/acme/widgets', 'github'))).toBeNull();
-    expect(runnerProjectProblem(project('https://ghe.example.com/org/team/widgets', 'github'))).toBeNull();
-  });
-
-  it('refuses a project with no Git host, as the Hub would', () => {
-    expect(runnerProjectProblem(project('https://github.com/acme/widgets', null))).toMatch(/no Git host/);
-    expect(runnerProjectProblem(project('https://github.com/acme/widgets', ''))).toMatch(/no Git host/);
-  });
-
-  it('refuses GitLab, which the Hub accepts but no runner can fetch a token for', () => {
-    expect(runnerProjectProblem(project('https://gitlab.com/acme/widgets', 'gitlab'))).toMatch(/GitLab/);
-  });
-
-  it.each([
-    null,
-    'git@github.com:acme/widgets.git',
-    'http://github.com/acme/widgets',
-    'https://github.com/widgets',
-    'https:///acme/widgets',
-    'https://github.com/acme//widgets',
-    'https://github.com/acme/widgets/',
-    'https://user@github.com/acme/widgets',
-    'https://github.com/acme/wid gets',
-    'https://github.com/acme/wid\u0085gets',
-  ])('refuses the remote %j, whose shape the Hub would not read', (remoteUrl) => {
-    expect(runnerProjectProblem(project(remoteUrl, 'github'))).toMatch(/remote/);
-  });
-});
-
-describe('dispatchSources', () => {
-  const desktop: FleetInstance = {
-    id: 'd-1',
-    kind: 'desktop',
-    label: 'laptop',
-    present: true,
-    os: 'linux',
-    arch: 'x86_64',
-    version: '1.0.0',
-    scopes: ['read'],
-    readGranted: true,
-    lastSeen: null,
-    liveRuns: 0,
-    needsYou: [],
-    harnesses: null,
-    projectCount: 2,
-  };
-
-  it('keeps only desktops reporting read with projects, whatever their spend', () => {
-    const fleet: FleetInstance[] = [
-      desktop,
-      { ...desktop, id: 'd-spend', scopes: ['read', 'spend'] },
-      { ...desktop, id: 'r-1', kind: 'runner' },
-      { ...desktop, id: 'd-no-read', readGranted: false },
-      { ...desktop, id: 'd-empty', projectCount: 0 },
-      { ...desktop, id: 'd-unknown-kind', kind: null },
-    ];
-    expect(dispatchSources(fleet).map((instance) => instance.id)).toEqual(['d-1', 'd-spend']);
   });
 });

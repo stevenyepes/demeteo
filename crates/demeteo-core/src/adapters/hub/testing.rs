@@ -27,6 +27,11 @@
 //! with an `Err` for any page that holds another, so no row is reported
 //! under an id the test did not choose.
 //!
+//! [`ScriptedModelProbe`] answers for the harnesses it was scripted with, and
+//! reports every other kind unreachable, counted; a gate can hold its
+//! listings until the test releases them. [`ScriptedHarnessCatalog`] records
+//! each probe it is asked for and starts none.
+//!
 //! [`ScriptedGatePresenter`] accepts the one gate decision it was scripted
 //! with, once, and refuses everything else with an `Err` — other arguments, a
 //! repeat, and every `gate_pending_for_run` — counting each for a test to
@@ -45,13 +50,14 @@ use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, HubSecret, KeyringStatus, PairingAnswer, RefreshAnswer,
 };
-use crate::domain::hub_socket::RefreshEnd;
-use crate::domain::models::GateDecision;
+use crate::domain::hub_socket::{CatalogEntry, ProbeTrigger, RefreshEnd};
+use crate::domain::models::{Availability, ConfigOptionValue, GateDecision, ModelSource};
 use crate::error::AppError;
 use crate::ports::hub::{
-    AttachmentFetchError, DialFailure, HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository,
-    HubRefreshEndpoint, HubRunKeys, HubSecretStore, HubSnapshotSource, HubSocketConnection,
-    HubSocketDialer, SocketGone, SocketReceived, SocketUpgrade,
+    AttachmentFetchError, DialFailure, HarnessCatalogSource, HarnessModelProbe,
+    HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository, HubRefreshEndpoint, HubRunKeys,
+    HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer, SocketGone,
+    SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::ports::step_executor::GatePresenter;
@@ -836,6 +842,131 @@ impl HubRunKeys for ScriptedRunKeys {
             }
         }
         Ok(out)
+    }
+}
+
+/// A harness as [`ScriptedModelProbe`] reports it.
+#[derive(Clone)]
+enum ScriptedHarness {
+    Listed(Vec<ConfigOptionValue>, ModelSource),
+    Missing,
+}
+
+/// A model probe that knows only the harnesses it was scripted with. Any
+/// other kind is [`Availability::Unknown`] and lists nothing, each such
+/// answer counted by [`Self::unscripted`]. With a gate, every listing waits
+/// for one `notify_one` of it before answering.
+#[derive(Default)]
+pub struct ScriptedModelProbe {
+    script: HashMap<String, ScriptedHarness>,
+    gate: Option<Arc<Notify>>,
+    listed: Mutex<HashMap<String, usize>>,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedModelProbe {
+    pub fn listing(
+        mut self,
+        kind: &str,
+        models: Vec<ConfigOptionValue>,
+        source: ModelSource,
+    ) -> Self {
+        self.script
+            .insert(kind.to_owned(), ScriptedHarness::Listed(models, source));
+        self
+    }
+
+    pub fn missing(mut self, kind: &str) -> Self {
+        self.script
+            .insert(kind.to_owned(), ScriptedHarness::Missing);
+        self
+    }
+
+    pub fn gated(mut self, gate: Arc<Notify>) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// How many times `kind` was asked for its models.
+    pub fn listings_of(&self, kind: &str) -> usize {
+        locked(&self.listed).get(kind).copied().unwrap_or(0)
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl HarnessModelProbe for ScriptedModelProbe {
+    async fn availability(&self, kinds: &[String]) -> Vec<(String, Availability)> {
+        kinds
+            .iter()
+            .map(|kind| {
+                let availability = match self.script.get(kind) {
+                    Some(ScriptedHarness::Listed(..)) => Availability::Installed,
+                    Some(ScriptedHarness::Missing) => Availability::Missing,
+                    None => {
+                        self.unscripted.fetch_add(1, Ordering::SeqCst);
+                        Availability::Unknown
+                    }
+                };
+                (kind.clone(), availability)
+            })
+            .collect()
+    }
+
+    async fn models(&self, kind: &str) -> Option<(Vec<ConfigOptionValue>, ModelSource)> {
+        *locked(&self.listed).entry(kind.to_owned()).or_default() += 1;
+        if let Some(gate) = &self.gate {
+            gate.notified().await;
+        }
+        match self.script.get(kind) {
+            Some(ScriptedHarness::Listed(models, source)) => Some((models.clone(), *source)),
+            Some(ScriptedHarness::Missing) | None => {
+                self.unscripted.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+        }
+    }
+}
+
+/// A harness catalog that records every probe asked of it and runs none. It
+/// answers [`HarnessCatalogSource::current`] with what [`Self::set`] chose,
+/// and otherwise with `None`, counted by [`Self::unscripted`].
+#[derive(Default)]
+pub struct ScriptedHarnessCatalog {
+    current: Mutex<Option<Vec<CatalogEntry>>>,
+    triggers: Mutex<Vec<ProbeTrigger>>,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedHarnessCatalog {
+    pub fn set(&self, entries: Vec<CatalogEntry>) {
+        *locked(&self.current) = Some(entries);
+    }
+
+    /// Every probe asked for, in order.
+    pub fn triggers(&self) -> Vec<ProbeTrigger> {
+        locked(&self.triggers).clone()
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+impl HarnessCatalogSource for ScriptedHarnessCatalog {
+    fn current(&self) -> Option<Vec<CatalogEntry>> {
+        let current = locked(&self.current).clone();
+        if current.is_none() {
+            self.unscripted.fetch_add(1, Ordering::SeqCst);
+        }
+        current
+    }
+
+    fn request_probe(&self, trigger: ProbeTrigger) {
+        locked(&self.triggers).push(trigger);
     }
 }
 

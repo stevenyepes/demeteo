@@ -9,6 +9,7 @@
 
 use demeteo_core::adapters::database::SqliteAdapter;
 use demeteo_core::adapters::hub::device_key::DeviceKey;
+use demeteo_core::adapters::hub::harness_catalog::CachedHarnessCatalog;
 use demeteo_core::adapters::hub::run_keys::DesktopRunKeys;
 use demeteo_core::adapters::hub::snapshot_source::RepoSnapshotSource;
 use demeteo_core::adapters::hub::socket::session::{
@@ -19,8 +20,8 @@ use demeteo_core::adapters::hub::socket::wake::WakingRunEvents;
 use demeteo_core::adapters::hub::socket::{supervise, Sleeper, SupervisorDeps};
 use demeteo_core::adapters::hub::testing::{
     ConnectionLog, Exchange, MemorySecretStore, ScriptedAttachments, ScriptedConnection,
-    ScriptedRefreshEndpoint, ScriptedRunKeys, ScriptedSnapshotSource, ScriptedSocketDialer,
-    UnreadableRunEvents,
+    ScriptedHarnessCatalog, ScriptedModelProbe, ScriptedRefreshEndpoint, ScriptedRunKeys,
+    ScriptedSnapshotSource, ScriptedSocketDialer, UnreadableRunEvents,
 };
 use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
@@ -33,12 +34,14 @@ use demeteo_core::domain::hub_pairing::{
 };
 use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogEntry, LogKind, LogOutcome};
 use demeteo_core::domain::hub_socket::{
-    sends_events, RunnerHubState, SocketEnd, StopReason, LIVENESS_DEADLINE_SECS,
+    sends_events, ProbeTrigger, RunnerHubState, SocketEnd, StopReason, LIVENESS_DEADLINE_SECS,
     MAX_SNAPSHOT_BYTES, MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS,
     SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 use demeteo_core::domain::ids::MachineId;
-use demeteo_core::domain::models::{Feature, Machine, Project, Workflow, WorkflowVersion};
+use demeteo_core::domain::models::{
+    Feature, Machine, ModelSource, Project, Workflow, WorkflowVersion,
+};
 use demeteo_core::error::AppError;
 use demeteo_core::ports::db::{
     FeatureRepository, MachineHubStateRepository, MachineRepository, ProjectRepository,
@@ -1766,6 +1769,7 @@ fn one_project(name: &str) -> Snapshot {
         run_shape: Vec::new(),
         features: Vec::new(),
         harnesses: None,
+        harness_catalog: None,
     }
 }
 
@@ -1913,6 +1917,148 @@ async fn pins_without_read_send_no_snapshot() {
     assert_eq!(hello.scopes, [Scope::Gates]);
     assert_eq!(snapshots.calls(), 0);
     assert_eq!(log.unscripted(), 0);
+}
+
+/// The harness catalog is asked for a probe once the Hub has acked, never
+/// before, and the timer adds nothing within its interval.
+#[tokio::test]
+async fn a_relaying_session_asks_for_one_probe_after_the_first_ack() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let catalog = Arc::new(ScriptedHarnessCatalog::default());
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
+        .with_harness_catalog(catalog.clone());
+    let (conn, release) = ScriptedConnection::new([]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+
+    timeout(BOUND, log.sent_times(1))
+        .await
+        .expect("a hello sent");
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(catalog.triggers(), [], "no probe before the ack");
+
+    release.send(cursor_ack(0)).expect("the session reads");
+    timeout(BOUND, log.sent_times(2))
+        .await
+        .expect("a snapshot sent");
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(catalog.triggers(), [ProbeTrigger::Connected]);
+
+    stop.send_replace(true);
+    let end = timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+    assert_eq!(end, (SessionEnd::Stopped, true));
+}
+
+#[tokio::test]
+async fn pins_without_read_ask_for_no_probe() {
+    let (run_events, _) = progress_log(0);
+    let catalog = Arc::new(ScriptedHarnessCatalog::default());
+    let mut ctx = snapshot_context(run_events.clone(), run_events.wake(), Arc::default())
+        .with_harness_catalog(catalog.clone())
+        .with_harness_probe_interval(SHORT_LIVENESS / 10)
+        .with_liveness(SHORT_LIVENESS);
+    ctx.pinned_scopes = vec!["gates".to_owned()];
+    ctx.relaying = false;
+    let conn = ScriptedConnection::new([cursor_ack(0)]).then_silent();
+
+    let end = scripted_session(conn, &ctx).await;
+
+    assert_eq!(end, (SessionEnd::Ended(SocketEnd::Silent), true));
+    assert_eq!(catalog.triggers(), []);
+}
+
+#[tokio::test]
+async fn each_tick_of_the_probe_interval_asks_for_a_timer_probe() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let catalog = Arc::new(ScriptedHarnessCatalog::default());
+    let interval = Duration::from_millis(400);
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots)
+        .with_harness_catalog(catalog.clone())
+        .with_harness_probe_interval(interval);
+    let (conn, _release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+    timeout(BOUND, log.sent_times(2))
+        .await
+        .expect("a snapshot sent");
+
+    tokio::time::sleep(interval / 2).await;
+    assert_eq!(
+        catalog.triggers(),
+        [ProbeTrigger::Connected],
+        "no tick at once"
+    );
+    tokio::time::sleep(interval).await;
+    assert_eq!(
+        catalog.triggers(),
+        [ProbeTrigger::Connected, ProbeTrigger::Timer]
+    );
+
+    stop.send_replace(true);
+    timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+}
+
+/// The first snapshot does not wait for the probe it asked for; the probe's
+/// end wakes the one that carries its catalog.
+#[tokio::test]
+async fn the_first_snapshot_is_sent_while_the_probe_is_held() {
+    let (run_events, _) = progress_log(0);
+    let snapshots = Arc::new(ScriptedSnapshotSource::default());
+    snapshots.set(one_project("alpha"));
+    let gate = Arc::new(Notify::new());
+    let probe = Arc::new(
+        ScriptedModelProbe::default()
+            .listing("opencode", Vec::new(), ModelSource::Probed)
+            .gated(gate.clone()),
+    );
+    let ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
+        .with_snapshot_debounce(EDIT_GAP);
+    let catalog = Arc::new(CachedHarnessCatalog::new(
+        probe.clone(),
+        vec![("opencode".to_owned(), Vec::new())],
+        ctx.snapshot_wake.clone(),
+        tokio::runtime::Handle::current(),
+    ));
+    let ctx = ctx.with_harness_catalog(catalog);
+    let (conn, _release) = ScriptedConnection::new([cursor_ack(0)]).then_held();
+    let log = conn.log();
+    let (stop, mut stopped) = watch::channel(false);
+    let task = tokio::spawn(async move { run_session(Box::new(conn), &ctx, &mut stopped).await });
+
+    timeout(BOUND, log.sent_times(2))
+        .await
+        .expect("a snapshot sent while the probe is held");
+    assert_eq!(probe.listings_of("opencode"), 1);
+    assert_eq!(snapshots_in(&log.sent()), [one_project("alpha")]);
+
+    snapshots.set(one_project("beta"));
+    gate.notify_one();
+    timeout(BOUND, log.sent_times(3))
+        .await
+        .expect("the probe's end wakes a snapshot");
+    assert_eq!(
+        snapshots_in(&log.sent()),
+        [one_project("alpha"), one_project("beta")]
+    );
+
+    stop.send_replace(true);
+    timeout(BOUND, task)
+        .await
+        .expect("the session stops")
+        .expect("the session did not panic");
+    assert_eq!(probe.unscripted(), 0);
 }
 
 /// AC4: the Hub's own session takes the frame as a snapshot, after the

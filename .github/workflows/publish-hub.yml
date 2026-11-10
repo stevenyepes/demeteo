@@ -19,6 +19,7 @@ on:
       - crates/demeteo-hub-protocol/**
       - hub-web/**
       - src/**
+      - src-tauri/workflows/**
       - deploy/hub/Dockerfile
       - deploy/hub/Dockerfile.dockerignore
       - Cargo.lock

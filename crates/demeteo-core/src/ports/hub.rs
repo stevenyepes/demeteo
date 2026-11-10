@@ -1,7 +1,7 @@
 //! What pairing with the Demeteo Hub, and the requests it relays, need from
 //! the outside world: the OS keyring (or a runner's sealed store), SQLite,
 //! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`
-//! and `/git-token`, and a browser.
+//! and `/git-token`, a browser, and the harnesses installed on this machine.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
@@ -18,7 +18,8 @@ use crate::domain::hub_request::passkeys::{HubTrustedPasskey, TrustWrite, Truste
 use crate::domain::hub_request::{
     Consumption, HubLocalPolicy, HubRequestLogEntry, HubRequestLogRow,
 };
-use crate::domain::hub_socket::RefreshEnd;
+use crate::domain::hub_socket::{CatalogEntry, ProbeTrigger, RefreshEnd};
+use crate::domain::models::{Availability, ConfigOptionValue, ModelSource};
 use crate::error::AppError;
 
 /// The OS keyring on a desktop, the sealed store on a runner; addressed by
@@ -447,4 +448,38 @@ pub trait HubRunKeys: Send + Sync {
         &self,
         keys: &std::collections::BTreeSet<String>,
     ) -> Result<std::collections::HashMap<String, String>, String>;
+}
+
+/// Asks the harnesses of this instance's own machine what they offer. Never
+/// another machine's: a desktop's catalog describes the desktop, whichever
+/// machines its Projects run on.
+#[async_trait]
+pub trait HarnessModelProbe: Send + Sync {
+    /// Each of `kinds` with its answer, in the order given.
+    async fn availability(&self, kinds: &[String]) -> Vec<(String, Availability)>;
+    /// `None` when the harness gave no answer at all.
+    async fn models(&self, kind: &str) -> Option<(Vec<ConfigOptionValue>, ModelSource)>;
+}
+
+/// The harness catalog a snapshot reports. Both calls are synchronous and
+/// return at once: a snapshot is built inside `spawn_blocking` and the
+/// socket's loop must not stall, so a probe is only ever asked for, and its
+/// result read on a later build.
+pub trait HarnessCatalogSource: Send + Sync {
+    /// `None` until a probe has finished.
+    fn current(&self) -> Option<Vec<CatalogEntry>>;
+    /// Starts a probe if [`probe_due`](crate::domain::hub_socket::probe_due)
+    /// says one is due and none is running, and never waits for it.
+    fn request_probe(&self, trigger: ProbeTrigger);
+}
+
+/// Reports no catalog and never probes.
+pub struct NoHarnessCatalog;
+
+impl HarnessCatalogSource for NoHarnessCatalog {
+    fn current(&self) -> Option<Vec<CatalogEntry>> {
+        None
+    }
+
+    fn request_probe(&self, _trigger: ProbeTrigger) {}
 }

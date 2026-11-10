@@ -4,8 +4,9 @@
 //! host and repo path, so nothing here asks git or an `ExecutionPort`.
 //!
 //! The harness kinds are the agent registry's, fixed at construction: the
-//! registry is built once per process, and nothing about a harness beyond
-//! its kind is read here or anywhere on the way to the Hub.
+//! registry is built once per process. What each harness offers is the
+//! [`HarnessCatalogSource`]'s last probe, read as it stands: a build never
+//! waits for a probe, and one that finishes wakes the next build.
 //!
 //! A Feature is listed under the id its [`HubRunKeys`] reports it under,
 //! the one the run log's rows go out under, or left out with them.
@@ -20,7 +21,7 @@ use crate::domain::hub_socket::{snapshot, FeatureInput, ProjectInput, SnapshotIn
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, ProjectRepository, WorkflowRepository,
 };
-use crate::ports::hub::{HubRunKeys, HubSnapshotSource};
+use crate::ports::hub::{HarnessCatalogSource, HubRunKeys, HubSnapshotSource, NoHarnessCatalog};
 
 pub struct RepoSnapshotSource {
     projects: Arc<dyn ProjectRepository>,
@@ -29,6 +30,7 @@ pub struct RepoSnapshotSource {
     features: Arc<dyn FeatureRepository>,
     harnesses: Vec<String>,
     run_keys: Arc<dyn HubRunKeys>,
+    harness_catalog: Arc<dyn HarnessCatalogSource>,
 }
 
 impl RepoSnapshotSource {
@@ -46,12 +48,19 @@ impl RepoSnapshotSource {
             features,
             harnesses,
             run_keys: Arc::new(ReportedAsIs),
+            harness_catalog: Arc::new(NoHarnessCatalog),
         }
     }
 
     /// Every Feature is listed as itself until this says otherwise.
     pub fn with_run_keys(mut self, run_keys: Arc<dyn HubRunKeys>) -> Self {
         self.run_keys = run_keys;
+        self
+    }
+
+    /// No catalog is reported until this says otherwise.
+    pub fn with_harness_catalog(mut self, harness_catalog: Arc<dyn HarnessCatalogSource>) -> Self {
+        self.harness_catalog = harness_catalog;
         self
     }
 
@@ -105,6 +114,7 @@ impl RepoSnapshotSource {
             providers: self.settings.get_provider_instances()?,
             features,
             harnesses: self.harnesses.clone(),
+            harness_catalog: self.harness_catalog.current(),
             workflow_names,
         })
     }

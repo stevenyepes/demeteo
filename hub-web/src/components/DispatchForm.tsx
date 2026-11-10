@@ -1,32 +1,28 @@
 import { type FormEvent, useId, useState } from 'react';
 
-import {
-  EFFORT_LABELS,
-  EFFORT_SUPPORT,
-  type EffortLevel,
-  isEffortLevel,
-  reconcileEffort,
-  supportedEffortsFor,
-} from '../../../src/lib/effortLevels';
+import { type EffortLevel, reconcileEffort } from '../../../src/lib/effortLevels';
 import { HubApiError } from '../lib/api';
 import { dispatchErrorSentence, dispatchFeature, type Enqueued } from '../lib/dispatch';
 import {
   buildDispatchRequest,
+  type Catalog,
+  effortsFor,
   parseMaxCostCents,
   type Prefill,
   type PrefillField,
   parseWallClockSecs,
   prefillFor,
-  runnerProjectProblem,
   type StepOverrideDraft,
   toStepOverrides,
+  unofferedDefaultAgent,
 } from '../lib/dispatchForm';
-import type { InstanceDetail, ProjectSummary } from '../lib/fleet';
+import type { InstanceDetail } from '../lib/fleet';
 import { useStagedAttachments } from '../lib/useStagedAttachments';
 import { AttachmentPicker } from './AttachmentPicker';
 import { CeremonyError } from './CeremonyError';
 import { DispatchCapsFields } from './DispatchCapsFields';
 import { DispatchPipeline } from './DispatchPipeline';
+import { DispatchRunShapeFields } from './DispatchRunShapeFields';
 import { RequestStatusCard } from './RequestStatusCard';
 import { Button } from '../../../src/components/ui/Button';
 
@@ -34,19 +30,13 @@ interface DispatchFormProps {
   /** An instance `dispatchBlocker` passed, or blocked only on `no-spend`. */
   instance: InstanceDetail;
   spendGranted: boolean;
-  /**
-   * Set exactly when `instance` is a runner: the desktop whose snapshot the
-   * Hub resolves the start from, so its projects, workflows and run-shape
-   * defaults are the ones offered (docs/HUB.md §6.4).
-   */
-  source?: InstanceDetail;
+  /** `instance`'s own snapshot for a desktop; this Hub's projects and workflows for a runner. */
+  catalog: Catalog;
 }
 
 type Errors = { title?: string; cost?: string; wallClock?: string };
 
 type Send = { state: 'editing' } | { state: 'sending' } | { state: 'sent'; enqueued: Enqueued };
-
-const AGENT_KINDS = Object.keys(EFFORT_SUPPORT);
 
 const FIELD_CLASS =
   'input-field disabled:cursor-not-allowed disabled:opacity-40';
@@ -56,13 +46,12 @@ const LABEL_CLASS = 'text-xs font-medium text-slate-300';
 const UNFILLED: Prefill = { agentKind: '', model: '', effort: '', workflowId: '', maxCostUsd: '' };
 
 /**
- * Projects and workflows are offered only from a snapshot, never typed: an id
- * the instance does not hold is refused as `unknown_project` /
- * `unknown_workflow` after a round trip through the queue. For a runner that
- * snapshot is the source desktop's, and a project the Hub would refuse to
- * start there is shown but not offered.
+ * Projects and workflows are offered only from `catalog`, never typed: an id
+ * nobody holds is refused as `unknown_project` / `unknown_workflow`. A
+ * project the Hub would refuse to start is shown with its reason but not
+ * offered.
  */
-export function DispatchForm({ instance, spendGranted, source }: DispatchFormProps) {
+export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormProps) {
   const ids = {
     project: useId(),
     workflow: useId(),
@@ -71,14 +60,10 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
     what: useId(),
     how: useId(),
   };
-  const agentIds = { agent: useId(), model: useId(), effort: useId() };
-  const catalog = source ?? instance;
-  const projects = catalog.projects ?? [];
-  const workflows = catalog.workflows ?? [];
-  const problemOf = (project: ProjectSummary) => (source === undefined ? null : runnerProjectProblem(project));
-  const firstProjectId = projects.find((project) => problemOf(project) === null)?.id ?? '';
+  const { projects, workflows } = catalog;
+  const firstProjectId = projects.find((project) => project.problem === null)?.id ?? '';
 
-  const [initial] = useState(() => prefillFor(catalog, firstProjectId, UNFILLED, new Set()));
+  const [initial] = useState(() => prefillFor(catalog, firstProjectId, UNFILLED, new Set(), instance));
   const [projectId, setProjectId] = useState(firstProjectId);
   const [workflowId, setWorkflowId] = useState(initial.workflowId);
   const [title, setTitle] = useState('');
@@ -95,8 +80,13 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
   const [failure, setFailure] = useState<unknown>(null);
   const attachments = useStagedAttachments();
 
-  const efforts = supportedEffortsFor(agentKind);
+  const projectAgentKind = catalog.runShape.find((row) => row.projectId === projectId)?.agentKind ?? '';
   const workflow = workflows.find((choice) => choice.workflowId === workflowId);
+  const unoffered = unofferedDefaultAgent(instance, agentKind, projectAgentKind);
+  const agentProblem =
+    unoffered === null
+      ? null
+      : `This project's default agent, ${unoffered}, is not installed on this instance. Pick an agent it has.`;
 
   const edit = (field: PrefillField) => setEdited((held) => new Set(held).add(field));
 
@@ -111,12 +101,12 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
     edit('agentKind');
     setAgentKind(next);
     setModel('');
-    setEffort((held) => reconcileEffort(held, supportedEffortsFor(next)));
+    setEffort((held) => reconcileEffort(held, effortsFor(instance, next)));
   };
 
   const changeProject = (next: string) => {
     setProjectId(next);
-    const filled = prefillFor(catalog, next, { agentKind, model, effort, workflowId, maxCostUsd }, edited);
+    const filled = prefillFor(catalog, next, { agentKind, model, effort, workflowId, maxCostUsd }, edited, instance);
     setAgentKind(filled.agentKind);
     setModel(filled.model);
     setEffort(filled.effort);
@@ -126,7 +116,7 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!spendGranted || projectId === '' || send.state !== 'editing') return;
+    if (!spendGranted || projectId === '' || agentProblem !== null || send.state !== 'editing') return;
     const cost = parseMaxCostCents(maxCostUsd);
     const wallClock = parseWallClockSecs(maxWallClockMins);
     const next: Errors = {
@@ -149,7 +139,6 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
       overrides,
       maxBudgetCents: cost.value,
       maxWallClockSecs: wallClock.value,
-      ...(source === undefined ? {} : { sourceInstanceId: source.id }),
     };
     setSend({ state: 'sending' });
     attachments
@@ -227,14 +216,11 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
                 className={FIELD_CLASS}
               >
                 {projectId === '' && <option value="">No project a runner can start</option>}
-                {projects.map((project) => {
-                  const problem = problemOf(project);
-                  return (
-                    <option key={project.id} value={project.id} disabled={problem !== null}>
-                      {problem === null ? project.name : `${project.name} — ${problem}`}
-                    </option>
-                  );
-                })}
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id} disabled={project.problem !== null}>
+                    {project.problem === null ? project.name : `${project.name} — ${project.problem}`}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="flex flex-col gap-1.5">
@@ -266,72 +252,31 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
           <h2 id={ids.how} className="font-heading text-sm font-semibold text-slate-200">
             How
           </h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={agentIds.agent} className={LABEL_CLASS}>
-                Default agent
-              </label>
-              <select
-                id={agentIds.agent}
-                value={agentKind}
-                onChange={(event) => changeAgent(event.target.value)}
-                className={`${FIELD_CLASS} font-mono`}
-              >
-                <option value="">Project default</option>
-                {AGENT_KINDS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {kind}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={agentIds.model} className={LABEL_CLASS}>
-                Model
-              </label>
-              <input
-                id={agentIds.model}
-                type="text"
-                value={model}
-                onChange={(event) => {
-                  edit('model');
-                  setModel(event.target.value);
-                }}
-                placeholder="Project default"
-                autoComplete="off"
-                className={`${FIELD_CLASS} font-mono`}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={agentIds.effort} className={LABEL_CLASS}>
-                Effort
-              </label>
-              <select
-                id={agentIds.effort}
-                value={effort}
-                onChange={(event) => {
-                  edit('effort');
-                  setEffort(isEffortLevel(event.target.value) ? event.target.value : '');
-                }}
-                disabled={efforts.length === 0}
-                className={FIELD_CLASS}
-              >
-                <option value="">Project default</option>
-                {efforts.map((level) => (
-                  <option key={level} value={level}>
-                    {EFFORT_LABELS[level]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          <DispatchRunShapeFields
+            instance={instance}
+            agentKind={agentKind}
+            projectAgentKind={projectAgentKind}
+            model={model}
+            effort={effort}
+            onAgentChange={changeAgent}
+            onModelChange={(next) => {
+              edit('model');
+              setModel(next);
+            }}
+            onEffortChange={(next) => {
+              edit('effort');
+              setEffort(next);
+            }}
+            agentProblem={agentProblem}
+          />
           {workflow !== undefined && (
             <DispatchPipeline
               key={workflow.workflowId}
               workflow={workflow}
               overrides={overrides}
               onOverridesChange={setOverrides}
-              defaultAgentKind={agentKind}
+              defaultAgentKind={agentKind || projectAgentKind}
+              instance={instance}
             />
           )}
           <DispatchCapsFields
@@ -351,7 +296,7 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
         {failure !== null && <DispatchFailure error={failure} />}
         {projectId === '' && (
           <p className="text-sm text-slate-300">
-            None of this desktop's projects can run on a runner: each is listed with the reason.
+            None of these projects can run on a runner: each is listed with the reason.
           </p>
         )}
         {!spendGranted && (
@@ -364,7 +309,7 @@ export function DispatchForm({ instance, spendGranted, source }: DispatchFormPro
           <span className="font-mono text-xs text-slate-400">
             {overrideSummary(overrideCount)}
           </span>
-          <Button variant="primary" type="submit" disabled={!spendGranted || projectId === '' || sending}>
+          <Button variant="primary" type="submit" disabled={!spendGranted || projectId === '' || agentProblem !== null || sending}>
             {instance.present ? 'Start feature' : 'Queue feature'}
           </Button>
         </div>

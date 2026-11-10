@@ -13,16 +13,17 @@ use demeteo_hub::auth::policy::Status;
 use demeteo_hub::auth::session::SessionSecret;
 use demeteo_hub::auth::testing::SoftAuthenticator;
 use demeteo_hub::protocol::{
-    gate_challenge, Decision, GateDecision, ProjectSnapshot, RequestPayload, RunEvent,
-    RunEventKind, RunEventPayload, Snapshot, WebAuthnAssertion, WorkflowVersionSnapshot,
+    gate_challenge, Decision, GateDecision, RequestPayload, RunEvent, RunEventKind,
+    RunEventPayload, WebAuthnAssertion,
 };
 use demeteo_hub::routes::AppState;
+use demeteo_hub::store::hub_projects::{insert_hub_project, HubProjectFields, HubProjectId};
 use demeteo_hub::store::instances::{insert_instance, InstanceKind, NewInstance};
 use demeteo_hub::store::pool::create_user;
 use demeteo_hub::store::requests::{list_queued_requests, QueuedEnvelope};
 use demeteo_hub::store::run_mirror::{mirror_event, NewEvent};
-use demeteo_hub::store::snapshots::replace_snapshot;
 use demeteo_hub::store::{Db, InstanceId, UserId};
+use demeteo_hub::workflows::starters;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use support::http::{enrol, get_as, open_session, post_as, rp, serve_state};
@@ -99,35 +100,23 @@ async fn instance_of(db: &Db, user: UserId, kind: InstanceKind, scopes: &[&str])
     new.id
 }
 
-/// A snapshot naming project `p` on GitHub and workflow `w` at version 2.
-async fn reported(db: &Db, user: UserId, instance: InstanceId) {
-    let snapshot = Snapshot {
-        v: 1,
-        projects: vec![ProjectSnapshot {
-            id: "p".to_owned(),
-            name: "Widgets".to_owned(),
-            remote_url: Some("https://github.com/acme/widgets".to_owned()),
-            provider_kind: Some("github".to_owned()),
-        }],
-        workflows: vec![WorkflowVersionSnapshot {
-            id: "w@2".to_owned(),
-            workflow_id: "w".to_owned(),
-            version: 2,
-            steps_json: "[]".to_owned(),
-            definition_json: None,
-            note: None,
-            created_at: 1_700_000_000,
-        }],
-        run_shape: Vec::new(),
-        features: Vec::new(),
-        harnesses: None,
+/// A Hub Project of `user`'s on GitHub, with a default model.
+async fn hub_project_of(db: &Db, user: UserId) -> HubProjectId {
+    let fields = HubProjectFields {
+        name: "Widgets".to_owned(),
+        provider_kind: "github".to_owned(),
+        host: "github.com".to_owned(),
+        full_name: "acme/widgets".to_owned(),
+        default_agent_kind: None,
+        default_model: Some("gpt-5".to_owned()),
+        default_effort: None,
+        default_workflow_id: None,
+        default_max_budget_cents: None,
     };
-    let body = serde_json::to_string(&snapshot).unwrap();
-    assert!(
-        replace_snapshot(user, db, instance, "full", &body, 1_700_000_000)
-            .await
-            .unwrap()
-    );
+    insert_hub_project(user, db, HubProjectId::generate(), &fields)
+        .await
+        .unwrap()
+        .id
 }
 
 fn minimal_dispatch() -> Value {
@@ -380,28 +369,34 @@ async fn a_gate_decision_naming_feedback_is_refused_without_spending_its_challen
 
 #[tokio::test]
 #[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
-async fn a_runner_dispatch_reads_only_its_own_tenants_desktop_and_signs_what_it_reported() {
+async fn a_runner_dispatch_reads_only_its_own_tenants_hub_project_and_signs_a_starter() {
     in_fresh_schema(|db| async move {
         let a = Tenant::new(&db, &["read"]).await;
         let b = Tenant::new(&db, &ALL_SCOPES).await;
-        reported(&db, a.user, a.instance).await;
-        reported(&db, b.user, b.instance).await;
+        let own = hub_project_of(&db, a.user).await;
+        let other = hub_project_of(&db, b.user).await;
         let runner = instance_of(&db, a.user, InstanceKind::Runner, &["spend"]).await;
         let base = serve_state(state_over(db.clone())).await;
         let path = format!("/v1/instances/{}/runs", runner.0);
-        let from = |source: InstanceId| {
-            let mut body = minimal_dispatch();
-            body["source_instance_id"] = json!(source.0.to_string());
-            body
+        let starter = &starters()[0];
+        let naming = |project: HubProjectId| {
+            json!({
+                "project_id": project.0.to_string(),
+                "workflow_id": starter.id,
+                "title": "t",
+                "description": "",
+            })
         };
 
-        let refused = post_as(&base, &path, &a.session, &minimal_dispatch()).await;
+        let refused = post_as(&base, &path, &a.session, &naming(other)).await;
+        assert_eq!(refused, (409, json!({"error": "unknown_project"})));
+        let mut sourced = naming(own);
+        sourced["source_instance_id"] = json!(a.instance.0.to_string());
+        let refused = post_as(&base, &path, &a.session, &sourced).await;
         assert_eq!(refused, (400, json!({"error": "invalid_request"})));
-        let refused = post_as(&base, &path, &a.session, &from(b.instance)).await;
-        assert_eq!(refused, (404, json!({"error": "not_found"})));
         assert_eq!(request_rows(&db).await, 0);
 
-        let (status, queued) = post_as(&base, &path, &a.session, &from(a.instance)).await;
+        let (status, queued) = post_as(&base, &path, &a.session, &naming(own)).await;
         assert_eq!(status, 202, "{queued}");
         let rows = list_queued_requests(a.user, &db, runner).await.unwrap();
         assert_eq!(rows.len(), 1);
@@ -411,10 +406,22 @@ async fn a_runner_dispatch_reads_only_its_own_tenants_desktop_and_signs_what_it_
         let RequestPayload::StartFeature(start) = &envelope.payload else {
             panic!("{:?}", envelope.payload);
         };
+        assert_eq!(start.model.as_deref(), Some("gpt-5"));
         let runner_start = start.runner.as_deref().expect("a runner start");
-        assert_eq!(runner_start.source_instance_id, a.instance.0.to_string());
+        assert_eq!(runner_start.source_instance_id, "hub");
         assert_eq!(runner_start.repository.full_name, "acme/widgets");
-        assert_eq!(runner_start.workflow.version, 2);
+        assert_eq!(
+            (
+                runner_start.workflow.workflow_id.as_str(),
+                runner_start.workflow.version,
+                runner_start.workflow.steps_json.as_str(),
+            ),
+            (
+                starter.id.as_str(),
+                starter.version,
+                starter.steps_json.as_str()
+            )
+        );
     })
     .await;
 }

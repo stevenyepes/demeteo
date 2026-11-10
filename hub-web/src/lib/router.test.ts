@@ -16,6 +16,7 @@ const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/sign-up', { name: 'sign-up' }],
   ['#/sign-in', { name: 'sign-in' }],
   ['#/passkeys', { name: 'passkeys' }],
+  ['#/projects', { name: 'projects' }],
   ['#/git-hosts', { name: 'git-hosts' }],
   ['#/git-hosts/connected/3f2b1c3e-6a1f-4b8e-9c3d-2a1b0c9d8e7f', { name: 'git-hosts', connected: '3f2b1c3e-6a1f-4b8e-9c3d-2a1b0c9d8e7f' }],
   ['#/git-hosts/failed/import_forbidden', { name: 'git-hosts', failed: 'import_forbidden' }],
@@ -106,7 +107,7 @@ describe('parseRoute', () => {
     expect(parseRoute(hash).name).toBe('not-found');
   });
 
-  it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/signin', '#/Sign-In'])(
+  it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/projects/p-1', '#/signin', '#/Sign-In'])(
     'reports %s as not-found rather than as an auth route',
     (hash) => {
       expect(parseRoute(hash).name).toBe('not-found');

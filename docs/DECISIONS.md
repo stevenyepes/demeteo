@@ -73,13 +73,14 @@
 | 62 | Web companion is in scope | **A browser control plane, the Demeteo Hub, is in scope** over many Demeteo instances. This **reverses** the position in [OPEN_QUESTIONS.md §17](OPEN_QUESTIONS.md#17-other-captured-items) ("Mobile / web companion — explicitly out of scope"). **Rejected:** keeping it out of scope — the design in [hub-design/](hub-design/README.md) answers a need the desktop cannot (one view over a fleet, a gate decided away from the machine), and the invariants it must not break are recorded below instead. Detail: [HUB.md §1](HUB.md#1-summary). | 2026-10-02 |
 | 63 | Hub tenancy | **Single tenant: one Hub serves one person, who also operates it.** A Hub that mints git tokens ([decision 71](#1-the-locked-decisions)) would, deployed for many tenants, be one breach away from write access to every tenant's repositories. **Rejected:** a hosted multi-tenant service (the 2026-10-02 answer, kept in [§2](#63--hub-tenancy)); teams, for the unchanged reason that the passkey endorsement chain of [decision 66](#66--hub-gate-decisions-detail) has no notion of membership. Detail: [71](#71--runner-git-credentials-detail). | 2026-10-29 |
 | 64 | Hub instances | **Desktops and `demeteo-runner` hosts both pair with the Hub, and each holds one outbound `wss`; the Hub never dials either.** A paired runner is an instance in its own right: it verifies requests and gate assertions against keys it pinned, enforces its own scopes and ceilings, and reports its own runs, so a run the Hub starts on it needs no desktop online. Its Hub device key and refresh token are stored in its SQLite, encrypted under a key sealed by `systemd-creds`; a host that cannot seal one is refused pairing. It pairs by **device code**, approved on the Hub with a passkey, and its scopes and ceilings are set **on the runner**, by its CLI or by a desktop over SSH. **Rejected:** unpaired runners with a desktop relaying for them (no run could start while the desktop is off, which is what remote runs are for); the Hub dialing runners over SSH (it cannot reach a runner behind NAT, and it would put an SSH client and the power to run code on every runner into the Hub); the Hub storing PATs or long-lived SSH keys. The 2026-10-02 answer is kept in [§2](#64--hub-instances). Detail: [64](#64--hub-instances-detail). | 2026-10-29 |
-| 65 | Run source for future runner runs | **Paired desktops report Project and Workflow snapshots with local paths stripped, and the Hub builds a `RunSpec` from the last reported snapshot.** **Rejected:** Hub-side authoring of Projects and Workflows — a second editor, plus drift from the desktop's copy; and Workflows read from repo files — a new concept. Detail: [HUB.md §5](HUB.md#5-the-socket). | 2026-10-02 |
+| 65 | Run source for Hub-started runner runs | **The Hub is another client of runners: it owns its own Projects and Workflows, never synced with a desktop's, and builds a dispatch to a runner from those alone.** A Hub Project holds a repository's identity (`provider_kind`, `host`, `full_name`) and run-shape defaults, and no path, URL userinfo or secret; the Hub fills each run-shape field a dispatch omits from them before it signs, since a runner has no project settings. The Hub's Workflows are the desktop's bundled starters, embedded in its build, chosen and never edited, each versioned by its content. A dispatch to a desktop still names that desktop's own reported Projects and Workflows. **Rejected:** syncing Hub Projects with a desktop's copy — two writers of one record, and a sync that needs the desktop online; dispatch through a source desktop's snapshot (the 2026-10-02 answer, kept in [§2](#65--run-source-for-runner-runs)) — a runner run would need a desktop paired with `read` that holds the Project; Hub-authored Workflows in v1 — a second editor, and the starters cover what a runner is sent today. Detail: [HUB.md §6.4](HUB.md#64-the-session-api). | 2026-11-09 |
 | 66 | Gate decisions from the Hub are allowed | **A Gate may be decided from the Hub, but only by a WebAuthn assertion the desktop verifies itself** against passkey public keys it has pinned; the Hub relays and cannot forge an approval, and **no token can approve**. [Decision 50](#1-the-locked-decisions) is unchanged for MCP. **Rejected:** a Hub session plus a passkey step-up only for merge-to-default and over-budget gates (a compromised Hub or hijacked session could approve ordinary gates); read-only gates on the Hub; accepting each new passkey by hand on every desktop. Detail: [66](#66--hub-gate-decisions-detail). | 2026-10-02 |
 | 67 | Hub scopes | **Three scopes — `read`, `spend`, `gates` — toggled and enforced on the instance; no Hub action can turn one on.** Hub-started runs are bounded by **local ceilings** set on the desktop. **Rejected:** a `logs` scope — transcripts and diffs never leave an instance; MCP's `configure` — not offered; toggle-only scopes — they trust Hub-supplied caps. Detail: [67](#67--hub-scopes-and-ceilings-detail). | 2026-10-02 |
 | 68 | Hub storage and custody | **Postgres, plus OpenBao (MPL-2.0, the Linux Foundation fork of Vault) with its Transit engine for envelope encryption, shipped as Docker Compose: `hub`, `postgres`, `openbao`, `caddy`.** Hub server secrets live in OpenBao or are encrypted under Transit, never plaintext in Postgres. **Rejected:** HashiCorp Vault — BSL, not open source; Cosmian/Eviden KMS — source-available licensing. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
 | 69 | Hub code layout | **`crates/demeteo-hub` (axum server), `crates/demeteo-hub-protocol` (serde-only wire types shared by the desktop client and the Hub), and `hub-web/` (a second Vite entry in this repo reusing `src/components/canvas` and the `src/App.css` tokens).** **Rejected:** the Hub linking `demeteo-core` in v1 — it would ship `libssh2`, git plumbing and `rusqlite` in a hosted container for code v1 never calls. Detail: [HUB.md §9](HUB.md#9-storage-custody-and-layout). | 2026-10-02 |
-| 70 | Feature labels on the Hub | **A paired desktop's snapshot names its newest Features — id, Project, the Workflow version pinned, and the title the user gave it, scrubbed and cut to 200 characters — and its registered harness kinds, behind `read` like the rest of the snapshot.** The title is the second piece of user-authored content on the Hub after attachments, and unlike them it is kept until the next snapshot replaces it. The launch description, the PR title and body, prompts, transcripts and diffs still never leave an instance. **Rejected:** a per-Feature frame on the event stream — a second cursor-less channel the Hub would have to merge, where the snapshot is already replaced wholesale and already gated on `read`; ids alone — the fleet and runs views were unreadable as `f-1793…` and `s-gate-review`; carrying the description — it is the run's prompt body, not a label. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-10-29 |
+| 70 | Feature labels on the Hub | **A paired desktop's snapshot names its newest Features — id, Project, the Workflow version pinned, and the title the user gave it, scrubbed and cut to 200 characters — and its registered harness kinds, behind `read` like the rest of the snapshot.** The title is the second piece of user-authored content on the Hub after attachments, and unlike them it is kept until the next snapshot replaces it. The launch description, the PR title and body, prompts, transcripts and diffs still never leave an instance. **Rejected:** a per-Feature frame on the event stream — a second cursor-less channel the Hub would have to merge, where the snapshot is already replaced wholesale and already gated on `read`; ids alone — the fleet and runs views were unreadable as `f-1793…` and `s-gate-review`; carrying the description — it is the run's prompt body, not a label. Amended 2026-11-09 by [decision 72](#1-the-locked-decisions): beside the kinds, every instance now reports the models each installed harness lists. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-10-29 |
 | 71 | Git credentials for Hub-started runner runs | **The Hub mints one per run, short-lived, and stores none.** GitHub first: a Demeteo GitHub App whose private key is held and used inside OpenBao Transit. For each run the Hub requests an installation token limited to the run's one repository and to `contents: write` and `pull_requests: write`, which GitHub expires after an hour. The runner fetches it from the Hub's `POST /git-token` once it has accepted the start, never inside the signed request, whose stored envelope would keep it (amended 2026-11-03; [decision 64](#1-the-locked-decisions)), and not over the socket, which the Hub closes every 15 minutes (amended 2026-11-04); the runner fetches a fresh one before the one it holds expires, and holds it only in its per-run memory store. The App's bot account pushes and opens the pull request. **GitLab:** a dedicated bot user, a member of only the chosen projects, authorizes an OAuth application with `write_repository` alone; the Hub keeps its rotating refresh token under Transit and mints a two-hour access token per run, and the merge request is opened by git push options. **Rejected:** a runner storing its own git credential (a standing secret on an idle runner, rotated host by host); the Hub storing PATs; per-tenant SSH certificate authorities. **Accepted:** a compromised Hub can mint write tokens for every repository the App is installed on and every project the GitLab bot belongs to, bounded by single tenancy ([decision 63](#1-the-locked-decisions)) and by installing the App on selected repositories only. Detail: [71](#71--runner-git-credentials-detail). | 2026-10-29 |
+| 72 | Instance-probed harness catalog | **Every instance, desktop or runner, probes its registered harnesses for their models on its own machine, caches the answer, and reports it as the snapshot's `harness_catalog`, behind `read`.** It probes when its socket is acked, at most once per 15 minutes, and every 6 hours after; a snapshot build reads the cache and never waits on a probe, and a finished probe wakes a rebuild. An entry is a harness kind, each model's value and name (scrubbed, cut to 200 characters, at most 500 per harness), its effort levels, where the list came from and when. A model's description never crosses. The Hub offers the target instance's models in a select, and free text only where that instance reports no list for the harness. Amends [decision 70](#1-the-locked-decisions). **Rejected:** probing a runner from the Hub or from a desktop — either reads the wrong machine and needs that machine's credentials; free text only — the user guesses a slug, and the run fails on it after it has started. **Accepted:** the model slug configured in codex's `config.toml` crosses, and a custom provider's slug usually names that provider; the file and the description that names it do not. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-11-09 |
 
 ### 44 — Harness baseline (detail)
 
@@ -480,12 +481,20 @@ the per-client ownership a runner enforces on its control socket
 **Hub-started runner runs (decided 2026-11-03).** How a `start_feature`
 becomes a run on a runner that has no Project or Workflow of its own:
 
-- **The Hub builds what the run needs, and signs it.** The Hub resolves the
-  repository and the Workflow, at its highest version, from the snapshot of a
-  source desktop the dispatch names, and signs them into the request as its
+- **The Hub builds what the run needs, and signs it.** The Hub reads the
+  repository from the Hub Project the dispatch names and the Workflow from
+  the embedded starter it names, and signs them into the request as its
   optional `runner` part; the runner maps that onto a `RunSpec` in core
-  `domain/`. **Rejected:** the runner fetching the snapshot itself, which
-  would be unsigned and need a new route.
+  `domain/`. **Rejected:** the runner fetching either itself, which would be
+  unsigned and need a new route. *Amended 2026-11-09:* until then both were
+  read from the snapshot of a source desktop the dispatch named
+  ([decision 65](#65--run-source-for-runner-runs) as it was).
+- **The run shape is signed whole.** A runner runs with no project settings,
+  so the Hub fills each of `agent_kind`, `model`, `effort` and
+  `max_budget_cents` the dispatch leaves out from the Hub Project's defaults
+  before it signs (added 2026-11-09), the default model and effort only
+  under the default agent. What the runner is sent is the effective value,
+  and no default is applied after the signature.
 - **No start until the run can reach its repository.** A runner's `starts`
   answers that it launches only when a seam for the run's git credential is
   composed. Without one every start is refused `unknown_kind` with nothing
@@ -498,10 +507,12 @@ becomes a run on a runner that has no Project or Workflow of its own:
   starts, and sums those rows for its rolling total. **Rejected:** counting
   Feature rows, as a desktop does, because a run that fails before its Feature
   exists would then have committed nothing.
-- **A Workflow holding the scrub mask is not dispatched.** A snapshot reports
-  secrets as `***`, and a Workflow signed with the mask in it would run with
-  the mask in place of the secret, so the Hub refuses the dispatch as `409
-  project_not_dispatchable` instead.
+- **A Project a runner cannot clone is not dispatched.** A GitLab Hub Project
+  can be kept, and a dispatch to a runner naming it is refused `409
+  project_not_dispatchable` before anything is signed, until decision 71's
+  GitLab leg exists. *Amended 2026-11-09:* the same refusal used to answer a
+  desktop Workflow holding the scrub mask `***`, which a snapshot writes in
+  place of a secret; a starter holds none, so that case is gone.
 
 [HUB.md §6.1 *On a runner*](HUB.md#61-the-envelope) has the mechanism, and §10
 and §11 what is not built and not decided about it.
@@ -705,6 +716,33 @@ A decision you silently overwrite stops being a decision *record*. When a
 locked answer changes, the row above is updated **and** the original is kept
 here with the reason it moved, so the next reader can tell "we thought hard and
 changed our minds" from "nobody ever considered this".
+
+### 65 — Run source for runner runs
+
+| | |
+|---|---|
+| **Was** | **Paired desktops report Project and Workflow snapshots with local paths stripped, and the Hub builds a `RunSpec` from the last reported snapshot.** **Rejected:** Hub-side authoring of Projects and Workflows — a second editor, plus drift from the desktop's copy; and Workflows read from repo files — a new concept. Detail: [HUB.md §5](HUB.md#5-the-socket). |
+| **Now** | The Hub owns its own Projects and Workflows (embedded starters), and a dispatch to a runner is built from those alone; a dispatch to a desktop still names that desktop's own. |
+| **Changed** | 2026-11-09 |
+
+**Why it changed.** The source-desktop path had two costs:
+
+- **A runner run depended on a desktop.** Every dispatch to a runner had to
+  name a desktop, paired with `read` on, whose last snapshot held the
+  Project and the Workflow. A runner pairs so that runs start while the desktop is
+  off ([decision 64](#64--hub-instances-detail)); reading the run from a
+  desktop's snapshot brought that dependency back one step removed.
+- **The Hub signed whatever a desktop's scrubber left.** A snapshot's
+  Workflow carries every step's commands and prompts, scrubbed of the secret
+  shapes the desktop knows. The Hub refused one holding the scrub mask, and
+  signed and stored the rest in the request envelope for good ([HUB.md §11
+  item 21](HUB.md#11-what-is-not-decided)), including a secret of a shape the
+  scrubber did not know.
+
+The original objection to Hub-side Projects was drift from the desktop's
+copy. A Hub Project holds a repository's identity and run-shape defaults and
+nothing a desktop edits, so there is no copy to drift from; Workflows are
+still not authored on the Hub, since its starters ship in its build.
 
 ### 63 — Hub tenancy
 

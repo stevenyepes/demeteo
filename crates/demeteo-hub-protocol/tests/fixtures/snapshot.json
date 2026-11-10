@@ -52,5 +52,24 @@
       "workflow_version": null
     }
   ],
-  "harnesses": ["claude-code", "opencode"]
+  "harnesses": ["claude-code", "opencode"],
+  "harness_catalog": [
+    {
+      "kind": "claude-code",
+      "models": [
+        { "value": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5" },
+        { "value": "claude-opus-5-5", "name": "Claude Opus 5.5" }
+      ],
+      "effort_levels": ["low", "medium", "high", "xhigh", "max"],
+      "source": "bundled",
+      "probed_at": 1790213899
+    },
+    {
+      "kind": "opencode",
+      "models": [{ "value": "anthropic/claude-sonnet-5-5", "name": "anthropic/claude-sonnet-5-5" }],
+      "effort_levels": null,
+      "source": null,
+      "probed_at": 1790213899
+    }
+  ]
 }

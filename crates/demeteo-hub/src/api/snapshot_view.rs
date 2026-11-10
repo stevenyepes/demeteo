@@ -1,6 +1,6 @@
-//! What `GET /v1/instances/{instance_id}` shows of a snapshot's workflows and
-//! run shape: enough to choose a workflow, draw its graph and pre-fill a
-//! dispatch, and nothing a step runs.
+//! What `GET /v1/instances/{instance_id}` shows of a snapshot's workflows,
+//! run shape and harness catalog: enough to choose a workflow, draw its graph
+//! and pre-fill a dispatch, and nothing a step runs.
 //!
 //! The snapshot carries each step's prompt templates and commands
 //! (`docs/HUB.md` §11 item 11 asks whether they may reach the Hub at all).
@@ -10,7 +10,9 @@
 //! do not give them `deny_unknown_fields` — a document carrying those must
 //! still project.
 
-use demeteo_hub_protocol::{Effort, RunShapeSettings, WorkflowVersionSnapshot};
+use demeteo_hub_protocol::{
+    Effort, HarnessCatalogEntry, RunShapeSettings, WorkflowVersionSnapshot,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -69,6 +71,25 @@ pub struct RunShapeView {
     pub default_max_budget_cents: Option<u64>,
 }
 
+/// One harness the instance probed, built field by field like
+/// [`RunShapeView`]: a field the protocol gains later reaches no browser until
+/// it is added here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HarnessCatalogView {
+    pub kind: String,
+    pub models: Vec<ModelChoiceView>,
+    pub effort_levels: Option<Vec<Effort>>,
+    pub source: Option<String>,
+    /// Unix seconds.
+    pub probed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelChoiceView {
+    pub value: String,
+    pub name: String,
+}
+
 #[derive(Deserialize)]
 struct Definition {
     name: Option<String>,
@@ -125,6 +146,26 @@ pub(super) fn run_shape(settings: Vec<RunShapeSettings>) -> Vec<RunShapeView> {
         .collect()
 }
 
+pub(super) fn harness_catalog(entries: Vec<HarnessCatalogEntry>) -> Vec<HarnessCatalogView> {
+    entries
+        .into_iter()
+        .map(|entry| HarnessCatalogView {
+            kind: entry.kind,
+            models: entry
+                .models
+                .into_iter()
+                .map(|model| ModelChoiceView {
+                    value: model.value,
+                    name: model.name,
+                })
+                .collect(),
+            effort_levels: entry.effort_levels,
+            source: entry.source,
+            probed_at: entry.probed_at,
+        })
+        .collect()
+}
+
 fn workflow(version: WorkflowVersionSnapshot) -> WorkflowView {
     let definition = parsed(&version);
     let name = name_of(definition.as_ref(), &version);
@@ -144,12 +185,6 @@ pub(super) fn definition_of(
     let definition = parsed(version)?;
     let name = name_of(Some(&definition), version);
     Some((name, graph(definition)))
-}
-
-/// The version's name by the rule [`workflow`] applies, read whether or not
-/// its definition carries a graph.
-pub(super) fn version_name(version: &WorkflowVersionSnapshot) -> String {
-    name_of(parsed(version).as_ref(), version)
 }
 
 fn parsed(version: &WorkflowVersionSnapshot) -> Option<Definition> {

@@ -3,15 +3,16 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use demeteo_hub_protocol::{
-    Effort, FeatureSnapshot, ProjectSnapshot, RunShapeSettings, Snapshot, WorkflowVersionSnapshot,
+    FeatureSnapshot, ProjectSnapshot, RunShapeSettings, Snapshot, WorkflowVersionSnapshot,
     PROTOCOL_VERSION,
 };
 use serde_json::Value;
 
+use super::harness_catalog::{effort, outbound_catalog, CatalogEntry};
 use crate::domain::git_push::without_userinfo;
 use crate::domain::ids::WorkflowId;
 use crate::domain::models::{
-    EffortLevel, Feature, Project, ProjectSettings, ProviderInstance, Repository, WorkflowVersion,
+    AgentKind, Feature, Project, ProjectSettings, ProviderInstance, Repository, WorkflowVersion,
 };
 use crate::shared::secret_scrub::scrub_secrets;
 
@@ -54,6 +55,9 @@ pub struct SnapshotInput {
     pub features: Vec<FeatureInput>,
     /// The kinds the agent registry holds, and nothing read about them.
     pub harnesses: Vec<String>,
+    /// The cached probe of what is installed here; `None` until one has
+    /// finished, which is not the same as one that found nothing.
+    pub harness_catalog: Option<Vec<CatalogEntry>>,
     /// Each Workflow's own name. A version stored without a schema-v2
     /// document is reported as the one [`WorkflowVersion::definition`]
     /// migrates, and that document names the Workflow.
@@ -115,6 +119,7 @@ pub fn snapshot(input: &SnapshotInput) -> Snapshot {
         run_shape,
         features,
         harnesses: Some(harnesses(&input.harnesses)),
+        harness_catalog: input.harness_catalog.as_deref().map(outbound_catalog),
     }
 }
 
@@ -181,12 +186,13 @@ fn outbound_title(title: &str) -> String {
     scrub_secrets(title).chars().take(MAX_TITLE_CHARS).collect()
 }
 
-/// Sorted and deduplicated, so a registry order change is not a new
-/// snapshot.
+/// Supported kinds only, sorted and deduplicated, so a registry order change
+/// is not a new snapshot. The registry also holds the `noop` and `stub`
+/// runtimes, which no one can pick.
 fn harnesses(kinds: &[String]) -> Vec<String> {
     let mut out: Vec<String> = kinds
         .iter()
-        .filter(|kind| !kind.contains('\0'))
+        .filter(|kind| AgentKind::is_supported(kind))
         .cloned()
         .collect();
     out.sort();
@@ -335,20 +341,6 @@ fn run_shape(settings: &ProjectSettings) -> Option<RunShapeSettings> {
         out.default_workflow_id.as_ref(),
     ];
     no_nul(strings).then_some(out)
-}
-
-/// Exhaustive rather than a serde round-trip: the protocol crate mirrors
-/// core's spellings without sharing them, and a level added to
-/// `EffortLevel` must fail to compile here instead of failing to parse at
-/// runtime and silently dropping.
-fn effort(level: EffortLevel) -> Effort {
-    match level {
-        EffortLevel::Low => Effort::Low,
-        EffortLevel::Medium => Effort::Medium,
-        EffortLevel::High => Effort::High,
-        EffortLevel::XHigh => Effort::Xhigh,
-        EffortLevel::Max => Effort::Max,
-    }
 }
 
 /// `None` for a stored budget no launch could honour; the `as` saturates.

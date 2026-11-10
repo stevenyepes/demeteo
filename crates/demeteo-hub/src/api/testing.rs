@@ -22,6 +22,7 @@ use crate::socket::port::SocketStore;
 use crate::socket::requests::OutcomeChange;
 use crate::socket::testing::{MemoryHub, MemoryStore, RequestView};
 use crate::store::attachments::{AttachmentMeta, NewAttachment, StagedAttachment, WrappedKey};
+use crate::store::hub_projects::{HubProjectFields, HubProjectId, HubProjectRow};
 use crate::store::instances::{Instance, InstanceKind, NewInstanceLabels};
 use crate::store::requests::{NewRequest, QueuedRequest, RequestId, RequestRecord, RequestState};
 use crate::store::run_mirror::MirrorRecord;
@@ -59,6 +60,8 @@ struct Fleet {
     /// In pairing order.
     held: Vec<Held>,
     trusted: HashMap<UserId, Vec<String>>,
+    /// `None` until a test scripts its first Hub Project.
+    hub_projects: Option<HashMap<UserId, Vec<HubProjectRow>>>,
     git_token_problems: HashMap<(UserId, InstanceId, String), String>,
 }
 
@@ -148,6 +151,26 @@ impl MemoryFleet {
     /// passkeys from here on.
     pub fn trusted(&self, user: UserId, credential_ids: Vec<String>) {
         self.fleet().trusted.insert(user, credential_ids);
+    }
+
+    /// A Hub Project of `user`'s holding `fields` from here on, under a fresh
+    /// id. Until a test scripts one, any read of a Hub Project is a call with
+    /// no answer.
+    pub fn with_hub_project(&self, user: UserId, fields: HubProjectFields) -> HubProjectRow {
+        let now = OffsetDateTime::now_utc();
+        let row = HubProjectRow {
+            id: HubProjectId::generate(),
+            fields,
+            created_at: now,
+            updated_at: now,
+        };
+        self.fleet()
+            .hub_projects
+            .get_or_insert_with(HashMap::new)
+            .entry(user)
+            .or_default()
+            .push(row.clone());
+        row
     }
 
     pub fn scopes(&self, instance: InstanceId, scopes: &[Scope]) {
@@ -341,6 +364,21 @@ impl ApiStore for MemoryFleet {
             Some(ids) => Ok(ids.clone()),
             None => panic!("memory fleet: the passkeys of a tenant no test said it trusted"),
         }
+    }
+
+    async fn hub_project(
+        &self,
+        user: UserId,
+        id: HubProjectId,
+    ) -> Result<Option<HubProjectRow>, StoreError> {
+        let fleet = self.fleet();
+        let Some(projects) = fleet.hub_projects.as_ref() else {
+            panic!("memory fleet: a Hub Project read before a test scripted any");
+        };
+        Ok(projects
+            .get(&user)
+            .and_then(|rows| rows.iter().find(|row| row.id == id))
+            .cloned())
     }
 
     async fn requests_of(
