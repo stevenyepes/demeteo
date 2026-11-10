@@ -282,9 +282,10 @@ impl DagStepExecutor {
                     cache_read_input_tokens: None,
                     cache_creation_input_tokens: None,
                 });
-                if s.step_kind == "gate" {
-                    let _ = self.gates.reset_for_step_execution(&s.id);
-                }
+                // Every kind, not only `gate`: a park hangs its question off
+                // a non-gate node, and a rewound node is asked afresh. Left
+                // undecided, it is a "needs you" no driver is waiting on.
+                let _ = self.gates.reset_for_step_execution(&s.id);
                 // A no-op for any node that never checkpointed, so this
                 // needs no step-kind branch (and `sequence` answers to two
                 // kind strings anyway).

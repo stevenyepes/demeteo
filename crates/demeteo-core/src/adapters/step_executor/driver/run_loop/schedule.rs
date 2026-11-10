@@ -33,7 +33,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::NodeState;
 use crate::adapters::step_executor::step_status::{try_update_step_status, StepTransition};
 use crate::domain::ids::StepId;
-use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::models::StepExecution;
 use crate::domain::workflow_graph::WorkflowGraph;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
@@ -76,15 +76,6 @@ pub(crate) fn derive_states(
             (id.clone(), state)
         })
         .collect()
-}
-
-/// Whether `node` is a gate, per the run's own step list.
-///
-/// Asked of the configured node rather than the `step_executions` row's
-/// `step_kind`: the row's copy is a snapshot taken at seed time, and a rewind
-/// is precisely the moment a stale copy would be trusted.
-pub(crate) fn is_gate(steps: &[StepConfig], node: &StepId) -> bool {
-    steps.iter().any(|s| s.id == *node && s.kind == "gate")
 }
 
 /// The nodes a redirect to `target` rewinds: the target plus all its
@@ -143,14 +134,17 @@ impl ExecutionDriver {
     /// budget unattended. A gate-*initiated* redirect already clears its own
     /// row (`reset_gate_target`); this closes the same hole for every other
     /// way a gate gets rewound.
+    ///
+    /// The row goes for every rewound node, not only `gate`s: a synthetic
+    /// park hangs its question off an agent or sequence node, and one left
+    /// undecided after its node re-ran without parking is a "needs you" that
+    /// no driver is waiting on.
     pub(crate) fn reset_for_redirect(&self, step_execs: &[StepExecution], target: &StepId) {
         for id in redirect_reset_set(&self.graph, target) {
             let Some(row) = step_execs.iter().find(|s| s.step_id == id) else {
                 continue;
             };
-            if is_gate(&self.steps, &id) {
-                let _ = self.gates.reset_for_step_execution(&row.id);
-            }
+            let _ = self.gates.reset_for_step_execution(&row.id);
             if row.status == "pending" {
                 continue;
             }

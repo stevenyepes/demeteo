@@ -333,7 +333,10 @@ async fn one_feature_with_a_pending_gate_is_named_and_the_other_active_feature_i
     ctx.features.add(feature("f-clean", &project_id)).unwrap();
     let step_execution_id = StepExecutionId::from("se-gate".to_string());
     ctx.features
-        .step_create(step("se-gate", &gated_feature_id, 0))
+        .step_create(StepExecution {
+            status: "awaiting_gate".to_string(),
+            ..step("se-gate", &gated_feature_id, 0)
+        })
         .unwrap();
     ctx.gates
         .create(GateDecision {

@@ -1,7 +1,7 @@
 use super::{
     backfill_local_path, declared_remote_paths, hydrate_shadow_feature, mime_for_path,
-    sequence_state_needs_fetch, shadow_feature_patch, shadow_feature_status, shadow_mr_state,
-    shadow_step_artifacts_stale,
+    mirrored_run_status, sequence_state_needs_fetch, shadow_feature_patch, shadow_feature_status,
+    shadow_mr_state, shadow_step_artifacts_stale,
 };
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
@@ -783,6 +783,39 @@ fn a_credential_park_overrides_a_runner_feature_that_already_finished() {
         shadow_feature_status("pending", "needs-credentials"),
         "needs-credentials"
     );
+}
+
+#[test]
+fn a_pending_gate_parks_a_run_in_flight() {
+    assert_eq!(
+        mirrored_run_status(Some("running"), true, "running"),
+        "parked"
+    );
+    assert_eq!(mirrored_run_status(None, true, "running"), "parked");
+    assert_eq!(
+        mirrored_run_status(Some("running"), false, "parked"),
+        "running"
+    );
+}
+
+/// f-6c495fbbc2cbfd79: the runner reported `needs-credentials` beside a
+/// gate row nobody could answer, and the card said "Gate needs you".
+#[test]
+fn a_pending_gate_never_hides_a_blocked_or_ended_run() {
+    for reported in [
+        "needs-credentials",
+        "over-budget",
+        "completed",
+        "awaiting_mr",
+        "failed",
+        "cancelled",
+    ] {
+        assert_eq!(
+            mirrored_run_status(Some(reported), true, "running"),
+            reported,
+            "{reported}"
+        );
+    }
 }
 
 #[test]
