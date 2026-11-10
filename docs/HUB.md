@@ -1386,6 +1386,7 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | `POST /v1/projects/{id}` | none | `200`, the Hub Project replaced whole by the body |
 | `POST /v1/projects/{id}/remove` | none | `204`, the Hub Project removed |
 | `GET /v1/workflows` | none | `200 {workflows}`, the embedded starters as `{workflow_id, version, name, description, graph}`, ordered by name |
+| `GET /v1/git-hosts/repositories` | none | `200 {repositories, unlisted, truncated}`, every repository the tenant's Apps are installed on, the picker hub-web adds a Hub Project from (§6.5 *Listing repositories*) |
 
 **An instance's workflows are graph-only.** `workflows` holds one entry per
 `workflow_id`, at its highest `version`, as `{workflow_id, version, name,
@@ -1653,6 +1654,21 @@ records the App's public facts in `git_hosts`, and redirects to Git hosts with
 a link for choosing the repositories the App is installed on. Removing an App
 deletes its row; its Transit key stays, since deleting one needs
 `deletion_allowed`, which the Hub's policy does not grant.
+
+**Listing repositories.** Adding a Hub Project in the web app picks its
+repository from `GET /v1/git-hosts/repositories` rather than taking a typed
+URL, so a project names only a repository a run can be minted a token for.
+The Apps asked are exactly the ones that could mint, host by host
+(`listing_targets` in
+[`git_hosts/minter.rs`](../crates/demeteo-hub/src/git_hosts/minter.rs)). Each
+App's installations are listed with its JWT, and each installation's
+repositories with a token asked for `metadata: read` alone, less than a run's
+token, never stored and dropped once read
+([`adapters/github_repos.rs`](../crates/demeteo-hub/src/adapters/github_repos.rs)).
+An App that does not answer is named by host and App id in `unlisted`, never
+by GitHub's error text, and the others' repositories are still listed; a
+listing stops at ten pages of a hundred and says so in `truncated`. Editing a
+project keeps its repository.
 
 **What the Hub trusts.** The repository comes from the start's stored,
 Hub-signed envelope, never from the body. The first fetch binds the Feature

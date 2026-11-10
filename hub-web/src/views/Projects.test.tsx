@@ -2,23 +2,18 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { HubApiError } from '../lib/api';
-import type { HubProject, ProjectFields } from '../lib/projects';
+import type { HubProject } from '../lib/projects';
 import type { HubWorkflow } from '../lib/workflows';
 import { Projects } from './Projects';
 
 const api = vi.hoisted(() => ({
   listProjects: vi.fn<() => Promise<HubProject[]>>(),
-  createProject: vi.fn<(fields: ProjectFields) => Promise<HubProject>>(),
-  updateProject: vi.fn<(id: string, fields: ProjectFields) => Promise<HubProject>>(),
   removeProject: vi.fn<(id: string) => Promise<void>>(),
   listWorkflows: vi.fn<() => Promise<HubWorkflow[]>>(),
 }));
 
 vi.mock('../lib/projects', () => ({
   listProjects: api.listProjects,
-  createProject: api.createProject,
-  updateProject: api.updateProject,
   removeProject: api.removeProject,
 }));
 vi.mock('../lib/workflows', () => ({ listWorkflows: api.listWorkflows }));
@@ -97,80 +92,13 @@ describe('Projects', () => {
     expect(within(rowOf('notes')).getByText('No defaults')).toBeVisible();
   });
 
-  it('adds a project from a pasted remote, with its defaults, and reads the list again', async () => {
-    listing([]);
-    api.createProject.mockResolvedValue(WIDGETS);
-    render(<Projects />);
-
-    await userEvent.type(await screen.findByLabelText('Name'), 'widgets');
-    await userEvent.type(screen.getByLabelText('Repository'), 'https://GitHub.com/acme/widgets');
-    await userEvent.selectOptions(screen.getByLabelText('Default workflow'), 'wf-starter-hotfix');
-    await userEvent.selectOptions(screen.getByLabelText('Default agent'), 'codex');
-    await userEvent.selectOptions(screen.getByLabelText('Default effort'), 'high');
-    await userEvent.type(screen.getByLabelText('Default max cost (USD)'), '2.50');
+  it('adds from its own page, and edits each project on its page', async () => {
     listing([WIDGETS]);
-    await userEvent.click(screen.getByRole('button', { name: 'Add project' }));
-
-    expect(api.createProject).toHaveBeenCalledWith({
-      name: 'widgets',
-      providerKind: 'github',
-      host: 'github.com',
-      fullName: 'acme/widgets',
-      defaultAgentKind: 'codex',
-      defaultModel: null,
-      defaultEffort: 'high',
-      defaultWorkflowId: 'wf-starter-hotfix',
-      defaultMaxBudgetCents: 250,
-    });
-    expect(await screen.findByText('github.com/acme/widgets')).toBeVisible();
-    expect(screen.getByLabelText('Name')).toHaveValue('');
-  });
-
-  it('sends nothing for a remote the Hub would refuse, and says why', async () => {
-    listing([]);
-    render(<Projects />);
-
-    await userEvent.type(await screen.findByLabelText('Name'), 'widgets');
-    await userEvent.type(screen.getByLabelText('Repository'), 'git@github.com:acme/widgets.git');
-    await userEvent.click(screen.getByRole('button', { name: 'Add project' }));
-
-    expect(api.createProject).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Repository')).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByText(/https:\/\/host\/owner\/repo/)).toBeVisible();
-  });
-
-  it('edits a project in place, starting from what it holds', async () => {
-    listing([WIDGETS]);
-    api.updateProject.mockResolvedValue({ ...WIDGETS, name: 'gadgets' });
     render(<Projects />);
 
     await screen.findByText('widgets');
-    await userEvent.click(within(rowOf('widgets')).getByRole('button', { name: 'Edit' }));
-    expect(screen.getByRole('heading', { name: 'Edit widgets' })).toBeVisible();
-    expect(screen.getByLabelText('Repository')).toHaveValue('https://github.com/acme/widgets');
-    expect(screen.getByLabelText('Default effort')).toHaveValue('high');
-
-    const name = screen.getByLabelText('Name');
-    await userEvent.clear(name);
-    await userEvent.type(name, 'gadgets');
-    await userEvent.click(screen.getByRole('button', { name: 'Save project' }));
-
-    expect(api.updateProject).toHaveBeenCalledWith('p-1', expect.objectContaining({ name: 'gadgets', host: 'github.com' }));
-    expect(api.createProject).not.toHaveBeenCalled();
-    expect(await screen.findByRole('heading', { name: 'Add a project' })).toBeVisible();
-  });
-
-  it('says a duplicate repository in words', async () => {
-    listing([WIDGETS]);
-    api.createProject.mockRejectedValue(new HubApiError('refused', '/v1/projects', 409, 'project_exists'));
-    render(<Projects />);
-
-    await userEvent.type(await screen.findByLabelText('Name'), 'again');
-    await userEvent.type(screen.getByLabelText('Repository'), 'https://github.com/acme/widgets');
-    await userEvent.click(screen.getByRole('button', { name: 'Add project' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('already has a project for that repository');
-    expect(screen.getByLabelText('Name')).toHaveValue('again');
+    expect(screen.getByRole('link', { name: 'Add project' })).toHaveAttribute('href', '#/projects/new');
+    expect(within(rowOf('widgets')).getByRole('link', { name: 'Edit' })).toHaveAttribute('href', '#/projects/p-1');
   });
 
   it('removes a project only once the removal is confirmed', async () => {

@@ -10,7 +10,7 @@ use crate::git_token;
 use crate::pairing;
 use crate::pairing::pending::Pairings;
 use crate::pairing::signing_key::SigningKey;
-use crate::ports::{GitTokenMinter, KeyService};
+use crate::ports::{GitTokenMinter, KeyService, RepositoryLister};
 use crate::projects;
 use crate::socket;
 use crate::socket::connections::Connections;
@@ -56,6 +56,9 @@ pub struct AppState {
     /// `None` until the composition root sets it: the git-host routes then
     /// answer `503`, as a Hub with no Transit import would.
     git_hosts: Option<Arc<GitHostsSetup>>,
+    /// `None` until the composition root sets it: the repository picker
+    /// then answers `503`, as the git-host routes do.
+    repositories: Option<Arc<dyn RepositoryLister>>,
 }
 
 impl AppState {
@@ -87,6 +90,7 @@ impl AppState {
             git_tokens: None,
             git_token_window_secs: crate::config::DEFAULT_GIT_TOKEN_WINDOW_SECS,
             git_hosts: None,
+            repositories: None,
         })
     }
 
@@ -119,6 +123,16 @@ impl AppState {
 
     pub fn git_hosts(&self) -> Option<&GitHostsSetup> {
         self.git_hosts.as_deref()
+    }
+
+    /// The state with `lister` serving `GET /v1/git-hosts/repositories`.
+    pub fn with_repositories(mut self, lister: Arc<dyn RepositoryLister>) -> Self {
+        self.repositories = Some(lister);
+        self
+    }
+
+    pub fn repositories(&self) -> Option<&dyn RepositoryLister> {
+        self.repositories.as_deref()
     }
 
     pub fn db(&self) -> &Db {
@@ -273,6 +287,10 @@ fn v1(state: AppState) -> Router {
             post(pairing::handlers::deny_device),
         )
         .route("/v1/git-hosts", get(git_hosts::handlers::get_git_hosts))
+        .route(
+            "/v1/git-hosts/repositories",
+            get(git_hosts::handlers::get_repositories),
+        )
         .route(
             "/v1/git-hosts/github/manifest",
             post(git_hosts::handlers::post_manifest),

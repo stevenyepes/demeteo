@@ -21,6 +21,8 @@ export type Route =
   | { name: 'sign-in' }
   | { name: 'passkeys' }
   | { name: 'projects' }
+  /** The page that adds a project, or edits the one `projectId` names. `new` is never an id: ids are UUIDs. */
+  | { name: 'project'; projectId?: string }
   /**
    * `connected` and `failed` are where the Hub sends the browser back from
    * GitHub's App manifest flow: the new host's id, or why it did not connect.
@@ -50,6 +52,8 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
     case 'passkeys':
     case 'projects':
       return [route.name];
+    case 'project':
+      return ['projects', route.projectId ?? 'new'];
     case 'git-hosts':
       if (route.connected !== undefined) return ['git-hosts', 'connected', route.connected];
       if (route.failed !== undefined) return ['git-hosts', 'failed', route.failed];
@@ -105,6 +109,10 @@ function matchSegments(segments: string[] | null): Route | null {
   if (head === 'pair') return segments.length === 2 ? { name: 'pair', request: segments[1] } : null;
   if (head === 'device') return segments.length === 2 ? { name: 'device', userCode: segments[1] } : null;
   if (head === 'git-hosts') return gitHostsOutcome(segments);
+  if (head === 'projects') {
+    if (segments.length !== 2) return null;
+    return segments[1] === 'new' ? { name: 'project' } : { name: 'project', projectId: segments[1] };
+  }
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };
   if (segments.length === 3 && tail === 'dispatch') return { name: 'dispatch', instanceId };

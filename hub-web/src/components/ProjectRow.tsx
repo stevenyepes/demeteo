@@ -1,21 +1,21 @@
 import { useState } from 'react';
 
-import { Button } from '../../../src/components/ui/Button';
+import { Button, buttonClasses } from '../../../src/components/ui/Button';
 import { EFFORT_LABELS } from '../../../src/lib/effortLevels';
 import { GITLAB_RUNNER_PROBLEM, usdOfCents } from '../lib/dispatchForm';
 import type { HubProject } from '../lib/projects';
+import { routeHref } from '../lib/router';
 import type { HubWorkflow } from '../lib/workflows';
 
 interface ProjectRowProps {
   project: HubProject;
   workflows: HubWorkflow[];
   disabled: boolean;
-  onEdit: (id: string) => void;
   onRemove: (id: string) => void;
 }
 
 /** Removing asks twice, as a Git host does; a run already sent from the project is not stopped by it. */
-export function ProjectRow({ project, workflows, disabled, onEdit, onRemove }: ProjectRowProps) {
+export function ProjectRow({ project, workflows, disabled, onRemove }: ProjectRowProps) {
   const [confirming, setConfirming] = useState(false);
   const defaults = defaultsOf(project, workflows);
   return (
@@ -39,9 +39,9 @@ export function ProjectRow({ project, workflows, disabled, onEdit, onRemove }: P
         </>
       ) : (
         <>
-          <Button variant="secondary" size="sm" disabled={disabled} onClick={() => onEdit(project.id)}>
+          <a href={routeHref({ name: 'project', projectId: project.id })} className={buttonClasses('secondary', 'sm')}>
             Edit
-          </Button>
+          </a>
           <Button variant="danger-subtle" size="sm" disabled={disabled} onClick={() => setConfirming(true)}>
             Remove
           </Button>

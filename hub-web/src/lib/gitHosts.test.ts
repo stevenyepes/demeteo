@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { dropSession, HubApiError } from './api';
-import { listGitHosts, removeGitHost, startManifest, submitManifest } from './gitHosts';
+import { listGitHosts, listRepositories, removeGitHost, startManifest, submitManifest } from './gitHosts';
 
 type Exchange = { method: 'GET' | 'POST'; path: string; answer: Response };
 type Sent = { path: string; body: unknown };
@@ -80,6 +80,34 @@ describe('listGitHosts', () => {
     ]);
 
     await expect(listGitHosts()).rejects.toBeInstanceOf(HubApiError);
+  });
+});
+
+describe('listRepositories', () => {
+  it('reads the repositories and the Apps that did not answer', async () => {
+    stubFetch([
+      answer('GET', '/v1/git-hosts/repositories', {
+        repositories: [
+          { host: 'github.com', full_name: 'acme/widgets', private: true, default_branch: 'main', description: null },
+        ],
+        unlisted: [{ host: 'ghe.example', app_id: 11 }],
+        truncated: false,
+      }),
+    ]);
+
+    await expect(listRepositories()).resolves.toEqual({
+      repositories: [
+        { host: 'github.com', fullName: 'acme/widgets', private: true, defaultBranch: 'main', description: null },
+      ],
+      unlisted: [{ host: 'ghe.example', appId: 11 }],
+      truncated: false,
+    });
+  });
+
+  it('refuses a listing missing its unlisted Apps', async () => {
+    stubFetch([answer('GET', '/v1/git-hosts/repositories', { repositories: [], truncated: false })]);
+
+    await expect(listRepositories()).rejects.toBeInstanceOf(HubApiError);
   });
 });
 

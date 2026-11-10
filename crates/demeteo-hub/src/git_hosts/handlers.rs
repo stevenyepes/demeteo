@@ -10,6 +10,7 @@ use super::manifest::{
 use crate::auth::handlers::{
     ceremony_not_held, store_failed, unix_now, ApiError, CurrentSession, JsonBody,
 };
+use crate::ports::{ReachableRepository, UnlistedApp};
 use crate::routes::AppState;
 use crate::store::git_hosts::GitHostId;
 use axum::extract::rejection::{PathRejection, QueryRejection};
@@ -41,6 +42,38 @@ struct HostView {
     install_url: String,
     /// Unix seconds.
     connected_at: i64,
+}
+
+#[derive(Serialize)]
+pub struct RepositoriesView {
+    repositories: Vec<ReachableRepository>,
+    /// Apps that did not answer: their repositories are missing from the
+    /// list, and the page says so instead of implying the list is whole.
+    unlisted: Vec<UnlistedApp>,
+    truncated: bool,
+}
+
+/// `GET /v1/git-hosts/repositories`: what the project picker offers.
+/// Never cached, since installing an App on one more repository should
+/// show the next time the page asks.
+pub async fn get_repositories(
+    State(state): State<AppState>,
+    current: CurrentSession,
+) -> Result<Response, ApiError> {
+    let lister = state.repositories().ok_or(GIT_HOSTS_UNAVAILABLE)?;
+    let listing = lister
+        .repositories(current.user, unix_now())
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the connected git hosts could not be read");
+            ApiError::INTERNAL
+        })?;
+    let view = RepositoriesView {
+        repositories: listing.repositories,
+        unlisted: listing.unlisted,
+        truncated: listing.truncated,
+    };
+    Ok(([(CACHE_CONTROL, "no-store")], Json(view)).into_response())
 }
 
 fn setup(state: &AppState) -> Result<&GitHostsSetup, ApiError> {
