@@ -1747,7 +1747,10 @@ the instance's decision.
 **The Hub's uses of that copy are informational.** Queueing a request whose
 scope the instance last reported as off is declined — `409 scope_not_granted`
 naming the scope, and nothing is queued (§6.4) — because the request would only
-come back `refused`. That spares a round trip and is not the enforcement: the
+come back `refused`. The web app then says, for that instance's kind, where the
+toggle is turned on (`InstanceSettingsHelp` in
+[`hub-web/src/components/`](../hub-web/src/components/InstanceSettingsHelp.tsx)), and does the same
+for a `scope_off` or ceiling refusal that arrives anyway. That spares a round trip and is not the enforcement: the
 instance checks its own toggles against every request it receives (§6.1), and
 nothing may come to depend on the Hub's gate holding. `passkey_endorsement` and
 `passkey_revocation` need no scope (§6.2) and are queued for an instance with
@@ -2670,11 +2673,13 @@ is decided; each is what the desktop does today.
 - **No `ticket_*` kind is sent.** No desktop `run_events` row records a ticket's
   lifecycle, so [`projection.rs`](../crates/demeteo-core/src/domain/hub_socket/projection.rs)
   has nothing to map onto one.
-- **`Hello` reports the pinned scopes as granted, and events and snapshots go
-  only when `read` is pinned and its toggle is on.** It does not narrow them by the toggles of §7, so the Hub's
-  copy can list a scope whose toggle is off; a request for it is queued and comes
-  back `refused: scope_off`. With `read` off, the Hub's copy still lists
-  `read` while the socket sends nothing past its `hello`.
+- **`Hello` announces `read` whenever it is pinned, even with its toggle
+  off.** `spend` and `gates` are announced only while their toggles are on
+  (`announced_scopes` in
+  [`domain/hub_socket/mod.rs`](../crates/demeteo-core/src/domain/hub_socket/mod.rs)),
+  and flipping either restarts the socket so the Hub hears it at once. `read`
+  is not narrowed: with it off the socket sends nothing past its `hello`, and
+  the Hub's copy still lists `read`.
 - **A run can be reported twice for a while.** A desktop goes on reporting
   its shadows of a runner that has just paired to the same Hub until it next
   asks that runner: at once when the pairing is made from its Settings ›

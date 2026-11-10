@@ -16,6 +16,7 @@
 //! under, and whether this instance reports it at all, is
 //! [`reported_feature_id`].
 
+use crate::domain::hub_request::HubLocalPolicy;
 use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
 pub mod connection;
@@ -67,12 +68,34 @@ pub fn hello(
     }
 }
 
+/// The scopes a `Hello` announces: the pinned ones, less `spend` and `gates`
+/// while their local toggle is off. The Hub declines to queue a request for
+/// a scope this did not announce (`409 scope_not_granted`, docs/HUB.md §7),
+/// so its web app can say a scope is off before a dispatch is sent rather
+/// than after the instance refuses it. That is a courtesy to the person
+/// dispatching, never the enforcement: [`crate::domain::hub_request::precheck`]
+/// still judges every request against the toggles.
+///
+/// `read` is announced whenever it is pinned, toggle or not: with it off the
+/// socket relays nothing ([`sends_events`]), which is this instance
+/// withholding, not a narrower pairing.
+pub fn announced_scopes(pinned_scopes: &[String], policy: &HubLocalPolicy) -> Vec<String> {
+    pinned_scopes
+        .iter()
+        .filter(|name| match scope(name) {
+            Some(Scope::Spend) => policy.spend_enabled,
+            Some(Scope::Gates) => policy.gates_enabled,
+            Some(Scope::Read) | None => true,
+        })
+        .cloned()
+        .collect()
+}
+
 /// Whether the run log and the snapshot are relayed at all: only while
 /// `read` is both pinned and left on in the local policy. Without it the
 /// Hub may not see a Feature's progress, so the session sends its `Hello`
-/// and nothing else of its own. [`hello`] still announces `read` while it
-/// is pinned: the toggle is this desktop's withholding, not a narrower
-/// pairing.
+/// and nothing else of its own. [`announced_scopes`] still announces `read`
+/// while it is pinned.
 pub fn sends_events(pinned_scopes: &[String], read_enabled: bool) -> bool {
     read_enabled && pinned_scopes.iter().any(|s| scope(s) == Some(Scope::Read))
 }

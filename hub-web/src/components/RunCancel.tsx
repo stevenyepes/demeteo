@@ -6,6 +6,7 @@ import { cancelRun, type RequestTicket } from '../lib/requests';
 import type { RunStatus } from '../lib/runs';
 import { isScopeNotGranted } from '../lib/useRunDetail';
 import { CeremonyError } from './CeremonyError';
+import { InstanceSettingsHelp } from './InstanceSettingsHelp';
 import { RequestStatus } from './RequestStatus';
 
 interface RunCancelProps {
@@ -63,17 +64,21 @@ export function RunCancel({ instanceId, featureId, status, scopes }: RunCancelPr
         Cancel run
       </Button>
       {spendOff && (
-        <p className="max-w-xs text-right text-xs text-slate-400">
-          Spend is off on this instance, so it would refuse a cancel sent from the Hub.
-        </p>
+        <div className="flex max-w-md flex-col gap-2">
+          <p className="text-right text-xs text-slate-400">
+            Spend is off on this instance, so it would refuse a cancel sent from the Hub.
+          </p>
+          <InstanceSettingsHelp kind={null} need="spend" />
+        </div>
       )}
       {send.state === 'failed' && (
         <div className="flex max-w-sm flex-col gap-1">
           <CeremonyError error={send.error} />
           {isScopeNotGranted(send.error) && (
-            <p className="text-sm text-slate-300">
-              The Hub says this instance has not granted the <span className="font-mono">spend</span> scope.
-            </p>
+            <>
+              <p className="text-sm text-slate-300">The Hub says spend is off on this instance.</p>
+              <InstanceSettingsHelp kind={null} need="spend" />
+            </>
           )}
         </div>
       )}

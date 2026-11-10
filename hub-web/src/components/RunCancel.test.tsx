@@ -160,7 +160,8 @@ describe('RunCancel', () => {
     await advance(0);
 
     expect(screen.getByRole('alert')).toHaveTextContent(/^scope_not_granted$/);
-    expect(screen.getByText(/has not granted the/)).toHaveTextContent('spend');
+    expect(screen.getByText('The Hub says spend is off on this instance.')).toBeVisible();
+    expect(screen.getByText(/demeteo-runner hub policy --spend on/)).toBeVisible();
   });
 
   it.each(['completed', 'failed', 'cancelled'] as const)('offers nothing on a run that is %s', (status) => {
