@@ -212,43 +212,10 @@ fn an_unpersistable_skip_reads_as_a_run_blocker() {
     assert!(rendered.contains("forever"), "{rendered}");
 }
 
-/// A rewind clears a gate's decision row, and the run's own step list is what
-/// says which nodes those are. The predicate is the whole decision — the write
-/// beside it is one repository call.
+/// A rewind clears the decision row of every node it rewinds, so the rewind
+/// set is the whole decision — the write beside it is one repository call.
 mod rewound_gates {
     use super::*;
-    use crate::adapters::step_executor::driver::run_loop::schedule::is_gate;
-    use crate::domain::models::StepConfig;
-
-    fn steps() -> Vec<StepConfig> {
-        vec![
-            StepConfig {
-                id: StepId::from("s-implement"),
-                kind: "sequence".to_string(),
-                ..Default::default()
-            },
-            StepConfig {
-                id: StepId::from("s-gate-review"),
-                kind: "gate".to_string(),
-                ..Default::default()
-            },
-        ]
-    }
-
-    #[test]
-    fn a_gate_in_the_rewind_set_is_recognised() {
-        assert!(is_gate(&steps(), &StepId::from("s-gate-review")));
-    }
-
-    #[test]
-    fn a_non_gate_is_not() {
-        assert!(!is_gate(&steps(), &StepId::from("s-implement")));
-    }
-
-    #[test]
-    fn a_node_the_run_does_not_configure_is_not() {
-        assert!(!is_gate(&steps(), &StepId::from("s-gate-ship")));
-    }
 
     /// The case that made an `on_failure` chain re-approve itself: the failing
     /// step's rewind set contains the gate it points back at, so that gate's
@@ -266,6 +233,5 @@ mod rewound_gates {
         let rewound = redirect_reset_set(&g, &StepId::from("s-gate-review"));
 
         assert!(rewound.contains(&StepId::from("s-gate-review")));
-        assert!(rewound.iter().any(|id| is_gate(&steps(), id)));
     }
 }

@@ -464,7 +464,10 @@ async fn list_pending_gates_paginates_to_exhaustion() {
             .unwrap();
         let step_execution_id = StepExecutionId::from(format!("se-{i:03}"));
         ctx.features
-            .step_create(step(&format!("se-{i:03}"), &feature_id, 0))
+            .step_create(StepExecution {
+                status: "awaiting_gate".to_string(),
+                ..step(&format!("se-{i:03}"), &feature_id, 0)
+            })
             .unwrap();
         ctx.gates
             .create(GateDecision {

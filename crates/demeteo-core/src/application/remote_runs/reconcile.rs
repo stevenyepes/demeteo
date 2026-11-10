@@ -107,6 +107,31 @@ pub(super) fn shadow_feature_status(feature_status: &str, run_status: &str) -> S
     .to_string()
 }
 
+/// The run status the mirror records, given what the runner's `get_status`
+/// reported and the status the mirror held before.
+///
+/// A pending gate wins only over a run that reports itself in flight. A run
+/// that has ended, or that is blocked on something other than a gate, says
+/// what the human has to do, and a gate row cannot say it better. Letting the
+/// gate win everywhere let one stale row turn a `needs-credentials` run into
+/// "Gate needs you", which offered an Approve the runner refused while the
+/// actual block went unreported.
+pub(super) fn mirrored_run_status(
+    reported: Option<&str>,
+    gate_pending: bool,
+    previous: &str,
+) -> String {
+    let reported = reported.unwrap_or(previous);
+    let outranks_a_gate = HARD_TERMINAL.contains(&reported)
+        || matches!(reported, "needs-credentials" | "over-budget");
+    if gate_pending && !outranks_a_gate {
+        "parked"
+    } else {
+        reported
+    }
+    .to_string()
+}
+
 /// Puts the run-level block onto a shadow row the runner has no feature
 /// for yet — the pre-clone credential park, which stops before the runner
 /// bootstraps one, so `get_feature` has nothing to hydrate from.
@@ -508,11 +533,11 @@ pub(super) async fn reconcile_one_run(
     .await;
     match result {
         Ok(value) => {
-            let status = if json_str(&value, "parked_gate_id").is_some() {
-                "parked".to_string()
-            } else {
-                json_str(&value, "status").unwrap_or_else(|| row.status.clone())
-            };
+            let status = mirrored_run_status(
+                json_str(&value, "status").as_deref(),
+                json_str(&value, "parked_gate_id").is_some(),
+                &row.status,
+            );
             let error = json_str(&value, "error");
             let remote_feature_id = json_str(&value, "feature_id");
             let mr_url = json_str(&value, "mr_url");

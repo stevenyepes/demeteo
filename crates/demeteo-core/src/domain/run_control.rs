@@ -173,6 +173,18 @@ pub fn retry_refusal(status: &str) -> Option<String> {
     ))
 }
 
+/// The step statuses under which a gate row is no longer a question: nothing
+/// may decide it ([`gate_decision_refusal`]) and so nothing may report it as
+/// pending either.
+///
+/// The second half is the one that went wrong. A synthetic park's row on a
+/// non-gate node outlives the park when the process dies under it and the node
+/// later passes without parking again. Read as pending, that row reported a
+/// detached run as "Gate needs you" after every step had completed, and it
+/// masked the run's real `needs-credentials` block. The Approve it offered was
+/// refused by this same guard.
+pub const SETTLED_STEP_STATUSES: [&str; 3] = ["completed", "failed", "cancelled"];
+
 /// Whether the gate on a step is still open, given the step's status and its
 /// `gate_decisions` row. `Some` is the refusal.
 ///
@@ -210,7 +222,7 @@ pub fn gate_decision_refusal(step_status: &str, recorded: Option<&GateDecision>)
             "No gate on this step is awaiting a decision; the run has moved past it.".to_string(),
         );
     };
-    if !matches!(step_status, "completed" | "failed" | "cancelled") {
+    if !SETTLED_STEP_STATUSES.contains(&step_status) {
         return None;
     }
     Some(match row.decision.as_deref() {

@@ -2,6 +2,7 @@ use rusqlite::params;
 
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::GateDecision;
+use crate::domain::run_control::SETTLED_STEP_STATUSES;
 use crate::ports::db::GateRepository;
 
 use super::super::SqliteAdapter;
@@ -145,6 +146,8 @@ impl GateRepository for SqliteAdapter {
         }
     }
 
+    /// An undecided row under a settled step is not pending: see
+    /// [`SETTLED_STEP_STATUSES`].
     fn pending_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
@@ -153,20 +156,25 @@ impl GateRepository for SqliteAdapter {
                  FROM gate_decisions gd
                  JOIN step_executions se ON se.id = gd.step_execution_id
                  WHERE se.feature_id=?1 AND gd.decision IS NULL
+                   AND se.status NOT IN (?2,?3,?4)
                  ORDER BY gd.created_at DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
+        let [settled_a, settled_b, settled_c] = SETTLED_STEP_STATUSES;
         let mut iter = stmt
-            .query_map(params![feature_id.0], |row| {
-                Ok(GateDecision {
-                    id: row.get(0)?,
-                    step_execution_id: row.get(1)?,
-                    decision: row.get(2)?,
-                    feedback: row.get(3)?,
-                    created_at: row.get(4)?,
-                    auto_approved: row.get::<_, i64>(5)? != 0,
-                })
-            })
+            .query_map(
+                params![feature_id.0, settled_a, settled_b, settled_c],
+                |row| {
+                    Ok(GateDecision {
+                        id: row.get(0)?,
+                        step_execution_id: row.get(1)?,
+                        decision: row.get(2)?,
+                        feedback: row.get(3)?,
+                        created_at: row.get(4)?,
+                        auto_approved: row.get::<_, i64>(5)? != 0,
+                    })
+                },
+            )
             .map_err(|e| e.to_string())?;
         match iter.next() {
             Some(Ok(g)) => Ok(Some(g)),

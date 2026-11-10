@@ -229,3 +229,46 @@ fn a_human_decision_clears_the_policy_mark() {
         );
     });
 }
+
+/// The stuck run's shape: a park question left undecided on a node that later
+/// completed without parking again. SQLite only, because the double has no
+/// step status to read.
+#[test]
+fn an_undecided_row_under_a_settled_step_is_not_pending() {
+    let sqlite = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+    {
+        let conn = sqlite.conn.lock().unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0);
+             INSERT INTO features (id, project_id, title, created_at)
+             VALUES ('f-1', 'p-1', 'parked, then passed', 0);
+             INSERT INTO step_executions
+                 (id, feature_id, step_id, step_index, step_kind, status, created_at, updated_at)
+             VALUES ('{SE}', 'f-1', 's-implement', 0, 'agent', 'awaiting_gate', 0, 0);"
+        ))
+        .unwrap();
+    }
+    let gates: &dyn GateRepository = &sqlite;
+    let feature = FeatureId::from("f-1".to_string());
+    gates.create(question(1)).unwrap();
+    assert!(
+        gates.pending_for_feature(&feature).unwrap().is_some(),
+        "a parked step's question is pending"
+    );
+
+    for settled in crate::domain::run_control::SETTLED_STEP_STATUSES {
+        sqlite
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE step_executions SET status=?1 WHERE id=?2",
+                rusqlite::params![settled, SE],
+            )
+            .unwrap();
+        assert!(
+            gates.pending_for_feature(&feature).unwrap().is_none(),
+            "a question under a '{settled}' step can be decided by nobody"
+        );
+    }
+}
