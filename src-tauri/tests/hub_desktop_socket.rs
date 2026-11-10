@@ -1892,7 +1892,7 @@ async fn pins_without_read_send_no_snapshot() {
     let mut ctx = snapshot_context(run_events.clone(), run_events.wake(), snapshots.clone())
         .with_liveness(SHORT_LIVENESS)
         .with_snapshot_debounce(SHORT_LIVENESS / 5);
-    ctx.pinned_scopes = vec!["gates".to_owned()];
+    ctx.announced_scopes = vec!["gates".to_owned()];
     ctx.relaying = false;
     ctx.snapshot_wake = workflows.wake();
     ctx.snapshot_wake.notify_one();
@@ -1963,7 +1963,7 @@ async fn pins_without_read_ask_for_no_probe() {
         .with_harness_catalog(catalog.clone())
         .with_harness_probe_interval(SHORT_LIVENESS / 10)
         .with_liveness(SHORT_LIVENESS);
-    ctx.pinned_scopes = vec!["gates".to_owned()];
+    ctx.announced_scopes = vec!["gates".to_owned()];
     ctx.relaying = false;
     let conn = ScriptedConnection::new([cursor_ack(0)]).then_silent();
 

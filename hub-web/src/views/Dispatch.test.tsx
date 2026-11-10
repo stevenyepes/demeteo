@@ -213,13 +213,14 @@ describe('Dispatch', () => {
     expect(screen.getByText(/^A max cost is required/)).toBeVisible();
   });
 
-  it('disables the submit, says spend has not been granted, and posts nothing without spend', async () => {
+  it('disables the submit, says spend is off and where to turn it on, and posts nothing without spend', async () => {
     await renderLoaded(detail({ scopes: ['read', 'gates'] }));
     await fillValid();
 
     const submit = screen.getByRole('button', { name: 'Start feature' });
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/spend has not been granted on this instance/i)).toBeVisible();
+    expect(screen.getByText(/Spend is off on this instance, so it would refuse a Feature/)).toBeVisible();
+    expect(screen.getByText(/open Settings › Hub, turn on Spend/)).toBeVisible();
     await userEvent.click(submit);
     expect(posts()).toEqual([]);
   });
@@ -583,7 +584,9 @@ describe('Dispatch after the 202', () => {
 
     expect(card).toHaveClass(TONE_CHIP.ruby);
     expect(card).toHaveTextContent(/Refused by the instance/);
-    expect(within(card).getByText("The max cost is above this instance's per-run ceiling.")).toBeVisible();
+    expect(
+      within(card).getByText("The max cost is above this instance's per-run ceiling, or it has no per-run ceiling set."),
+    ).toBeVisible();
     expect(within(card).getByText('over_run_ceiling')).toHaveClass('font-mono');
   });
 

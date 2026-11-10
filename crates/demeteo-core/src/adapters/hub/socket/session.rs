@@ -66,10 +66,12 @@ pub type RequestHandlerSlot = Arc<OnceLock<Arc<dyn HubRequestHandler>>>;
 pub struct SessionContext {
     pub install_id: String,
     pub app_version: String,
-    pub pinned_scopes: Vec<String>,
+    /// What the `Hello` announces: the pinned scopes as
+    /// [`crate::domain::hub_socket::announced_scopes`] narrows them.
+    pub announced_scopes: Vec<String>,
     /// Whether this session sends events and snapshots at all, decided by
     /// [`crate::domain::hub_socket::sends_events`] when the socket is
-    /// started; [`Self::pinned_scopes`] alone decide only the `Hello`. Off
+    /// started from the pinned scopes, not [`Self::announced_scopes`]. Off
     /// until [`Self::with_relaying`] says otherwise.
     pub relaying: bool,
     pub run_events: Arc<dyn RunEventsPort>,
@@ -142,7 +144,7 @@ impl SessionContext {
     pub fn new(
         install_id: String,
         app_version: String,
-        pinned_scopes: Vec<String>,
+        announced_scopes: Vec<String>,
         run_events: Arc<dyn RunEventsPort>,
         wake: Arc<Notify>,
         snapshots: Arc<dyn HubSnapshotSource>,
@@ -151,7 +153,7 @@ impl SessionContext {
         Self {
             install_id,
             app_version,
-            pinned_scopes,
+            announced_scopes,
             relaying: false,
             run_events,
             wake,
@@ -292,7 +294,7 @@ impl Session {
             &ctx.app_version,
             std::env::consts::OS,
             std::env::consts::ARCH,
-            &ctx.pinned_scopes,
+            &ctx.announced_scopes,
         );
         self.send(encoded(&hello).ok_or(Exit::Failed)?, stop)
             .await?;

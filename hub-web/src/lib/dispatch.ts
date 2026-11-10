@@ -72,8 +72,11 @@ export async function getRequestStatus(instanceId: string, requestId: string): P
  */
 const REFUSAL_SENTENCES = new Map<string, string>([
   ['scope_off', 'Spend is off on this instance, so it does not start Features sent from the Hub.'],
-  ['over_run_ceiling', "The max cost is above this instance's per-run ceiling."],
-  ['over_rolling_ceiling', "This run would take the instance past its rolling spend ceiling."],
+  ['over_run_ceiling', "The max cost is above this instance's per-run ceiling, or it has no per-run ceiling set."],
+  [
+    'over_rolling_ceiling',
+    'This run would take the instance past its daily spend ceiling, or it has no daily ceiling set.',
+  ],
   ['unknown_project', 'The instance has no project with this id.'],
   ['unknown_workflow', 'The instance has no workflow with this id.'],
   ['harness_not_registered', 'An agent this run names is not registered on the instance.'],

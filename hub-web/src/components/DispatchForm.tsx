@@ -16,13 +16,14 @@ import {
   toStepOverrides,
   unofferedDefaultAgent,
 } from '../lib/dispatchForm';
-import type { InstanceDetail } from '../lib/fleet';
+import type { InstanceDetail, InstanceKind } from '../lib/fleet';
 import { useStagedAttachments } from '../lib/useStagedAttachments';
 import { AttachmentPicker } from './AttachmentPicker';
 import { CeremonyError } from './CeremonyError';
 import { DispatchCapsFields } from './DispatchCapsFields';
 import { DispatchPipeline } from './DispatchPipeline';
 import { DispatchRunShapeFields } from './DispatchRunShapeFields';
+import { InstanceSettingsHelp } from './InstanceSettingsHelp';
 import { RequestStatusCard } from './RequestStatusCard';
 import { Button } from '../../../src/components/ui/Button';
 
@@ -155,7 +156,14 @@ export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormPr
   };
 
   if (send.state === 'sent') {
-    return <RequestStatusCard instanceId={instance.id} enqueued={send.enqueued} present={instance.present} />;
+    return (
+      <RequestStatusCard
+        instanceId={instance.id}
+        kind={instance.kind}
+        enqueued={send.enqueued}
+        present={instance.present}
+      />
+    );
   }
 
   const sending = send.state === 'sending';
@@ -293,17 +301,21 @@ export function DispatchForm({ instance, spendGranted, catalog }: DispatchFormPr
         </section>
       </div>
       <div className="flex flex-col gap-3 border-t border-hairline px-5 py-4">
-        {failure !== null && <DispatchFailure error={failure} />}
+        {failure !== null && <DispatchFailure error={failure} kind={instance.kind} />}
         {projectId === '' && (
           <p className="text-sm text-slate-300">
             None of these projects can run on a runner: each is listed with the reason.
           </p>
         )}
         {!spendGranted && (
-          <p className="text-sm text-ruby-300">
-            Spend has not been granted on this instance, so it would refuse a Feature sent from the Hub. Grant spend for
-            this Hub on the machine to dispatch here.
-          </p>
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-slate-200">
+              {instance.kind === 'runner'
+                ? 'Spend is off on this runner, so it would refuse a Feature sent from the Hub.'
+                : 'Spend is off on this instance, so it would refuse a Feature sent from the Hub.'}
+            </p>
+            <InstanceSettingsHelp kind={instance.kind} need="spend" />
+          </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="font-mono text-xs text-slate-400">
@@ -323,15 +335,19 @@ function overrideSummary(count: number): string {
 }
 
 /** The Hub's refusal as a sentence where there is one; otherwise its code, as `CeremonyError` shows it. */
-function DispatchFailure({ error }: { error: unknown }) {
+function DispatchFailure({ error, kind }: { error: unknown; kind: InstanceKind }) {
   const sentence = error instanceof HubApiError ? dispatchErrorSentence(error) : null;
   if (sentence === null) return <CeremonyError error={error} />;
+  const spendOff = error instanceof HubApiError && error.code === 'scope_not_granted' && error.scope === 'spend';
   return (
-    <p
-      role="alert"
-      className="rounded-lg border border-ruby-500/30 bg-ruby-500/10 px-3 py-2 text-sm text-ruby-200 break-words"
-    >
-      {sentence}
-    </p>
+    <div className="flex flex-col gap-2">
+      <p
+        role="alert"
+        className="rounded-lg border border-ruby-500/30 bg-ruby-500/10 px-3 py-2 text-sm text-ruby-200 break-words"
+      >
+        {sentence}
+      </p>
+      {spendOff && <InstanceSettingsHelp kind={kind} need="spend" />}
+    </div>
   );
 }

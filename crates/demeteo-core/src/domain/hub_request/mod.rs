@@ -102,11 +102,19 @@ pub fn effective_scopes(pinned: &[Scope], policy: &HubLocalPolicy) -> Vec<Scope>
         .collect()
 }
 
-/// Whether saving `new` over `old` changes what a running socket relays,
-/// which it reads only when it starts. `None` is a previous policy that could
-/// not be read: it may have said anything, so it counts as a change.
-pub fn read_changed(old: Option<&HubLocalPolicy>, new: &HubLocalPolicy) -> bool {
-    old.is_none_or(|old| old.read_enabled != new.read_enabled)
+/// Whether saving `new` over `old` changes what a running socket sends,
+/// which it reads only when it starts: `read` decides whether events and
+/// snapshots are relayed, and `spend` and `gates` decide which scopes its
+/// `Hello` announces (`hub_socket::announced_scopes`). The ceilings are read
+/// per request, so changing one restarts nothing. `None` is a previous policy
+/// that could not be read: it may have said anything, so it counts as a
+/// change.
+pub fn socket_policy_changed(old: Option<&HubLocalPolicy>, new: &HubLocalPolicy) -> bool {
+    old.is_none_or(|old| {
+        old.read_enabled != new.read_enabled
+            || old.spend_enabled != new.spend_enabled
+            || old.gates_enabled != new.gates_enabled
+    })
 }
 
 /// The result of checking the Hub's signature over `signing_bytes()`.

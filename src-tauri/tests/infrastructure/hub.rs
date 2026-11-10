@@ -46,16 +46,17 @@ use crate::domain::hub_pairing::{
 use crate::domain::hub_request::log::{parse_scope, scope_as_str, MAX_LOG_PAGE};
 use crate::domain::hub_request::passkeys::{passkey_origin, PasskeyOrigin, TrustWrite};
 use crate::domain::hub_request::{
-    effective_scopes, read_changed, Consumption, HubLocalPolicy, HubRequestLogEntry,
+    effective_scopes, socket_policy_changed, Consumption, HubLocalPolicy, HubRequestLogEntry,
     HubRequestLogRow, LogKind, LogOutcome,
 };
 use crate::domain::hub_socket::connection::{
     sync_state, view, ConnectionFacts, ConnectionState, HubConnection, SyncState,
 };
 use crate::domain::hub_socket::{
-    after, after_close, after_refresh, backoff, hello, hub_event, refresh_refusal, resets_backoff,
-    sends_events, snapshot, Reconnect, RefreshEnd, SnapshotInput, SocketEnd, StopReason,
-    BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
+    after, after_close, after_refresh, announced_scopes as narrowed_scopes, backoff, hello,
+    hub_event, refresh_refusal, resets_backoff, sends_events, snapshot, Reconnect, RefreshEnd,
+    SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES,
+    PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, Project, Workflow, WorkflowVersion};
@@ -2214,10 +2215,11 @@ fn a_policy_row_written_before_v67_reads_back_with_read_on() {
     );
 }
 
-/// Only `read` is read once per socket; every other field is read per
-/// request, so a change to one of those restarts nothing.
+/// `read`, `spend` and `gates` are read once per socket (relaying, and the
+/// scopes `Hello` announces); the ceilings are read per request, so a
+/// change to one of those restarts nothing.
 #[test]
-fn only_a_read_flip_or_an_unreadable_old_policy_counts_as_a_read_change() {
+fn a_toggle_flip_or_an_unreadable_old_policy_restarts_the_socket_and_a_ceiling_does_not() {
     let on = HubLocalPolicy::default();
     let off = HubLocalPolicy {
         read_enabled: false,
@@ -2225,22 +2227,65 @@ fn only_a_read_flip_or_an_unreadable_old_policy_counts_as_a_read_change() {
     };
     let spend_on = HubLocalPolicy {
         spend_enabled: true,
+        ..on.clone()
+    };
+    let gates_on = HubLocalPolicy {
         gates_enabled: true,
+        ..on.clone()
+    };
+    let ceilings = HubLocalPolicy {
         run_ceiling_cents: Some(500),
         daily_ceiling_cents: Some(5_000),
-        ..on.clone()
+        ..spend_on.clone()
     };
     let cases = [
         (Some(&on), &off, true),
         (Some(&off), &on, true),
         (Some(&on), &on, false),
-        (Some(&on), &spend_on, false),
+        (Some(&on), &spend_on, true),
+        (Some(&spend_on), &on, true),
+        (Some(&on), &gates_on, true),
+        (Some(&spend_on), &ceilings, false),
         (None, &on, true),
         (None, &off, true),
     ];
     for (old, new, changed) in cases {
-        assert_eq!(read_changed(old, new), changed, "{old:?} -> {new:?}");
+        assert_eq!(
+            socket_policy_changed(old, new),
+            changed,
+            "{old:?} -> {new:?}"
+        );
     }
+}
+
+/// The incident this exists for: a runner paired with `read spend gates`
+/// and its spend toggle never turned on was offered by the Hub, dispatched
+/// to, and only then refused `scope_off`.
+#[test]
+fn hello_announces_spend_and_gates_only_while_their_toggles_are_on() {
+    let pins = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    let pinned = pins(&["read", "spend", "gates", "logs"]);
+    let policy = |read, spend, gates| HubLocalPolicy {
+        read_enabled: read,
+        spend_enabled: spend,
+        gates_enabled: gates,
+        ..HubLocalPolicy::default()
+    };
+
+    assert_eq!(
+        narrowed_scopes(&pinned, &policy(true, false, false)),
+        pins(&["read", "logs"])
+    );
+    assert_eq!(
+        narrowed_scopes(&pinned, &policy(false, true, false)),
+        pins(&["read", "spend", "logs"])
+    );
+    assert_eq!(narrowed_scopes(&pinned, &policy(true, true, true)), pinned);
+    assert_eq!(
+        narrowed_scopes(&pins(&["read"]), &policy(true, true, true)),
+        pins(&["read"]),
+        "a toggle never announces a scope pairing did not approve"
+    );
 }
 
 #[test]
@@ -4401,6 +4446,9 @@ async fn a_re_pairing_replaces_the_running_socket_with_one_on_its_scopes() {
         .unwrap();
     let idle = Arc::strong_count(&dialer);
 
+    policy_set_core(rig.db.as_ref(), rig.db.as_ref(), None, &toggles_on())
+        .await
+        .expect("turn spend and gates on");
     rig.pair(HUB_URL).await.expect("a pairing");
     let relayed = traffic_until(&mut first_traffic, "the run event", |t| t.sent.len() >= 2).await;
     assert_eq!(announced_scopes(&relayed.sent[0]), json!(["read", "gates"]));
@@ -4433,6 +4481,16 @@ async fn a_re_pairing_replaces_the_running_socket_with_one_on_its_scopes() {
     assert_eq!(dialer.unscripted(), 0);
 }
 
+/// `spend` and `gates` on: a `Hello` then announces every pinned scope, so a
+/// test about what a pairing grants is not narrowed by the toggles.
+fn toggles_on() -> HubLocalPolicy {
+    HubLocalPolicy {
+        spend_enabled: true,
+        gates_enabled: true,
+        ..HubLocalPolicy::default()
+    }
+}
+
 /// What a socket started on a pairing that pins `read`, under a local policy
 /// with `read_enabled`, sent before its second read, with how often it asked
 /// for a snapshot. Its run log holds one row and its snapshot source always
@@ -4442,7 +4500,7 @@ async fn relayed_with_read(tag: &str, read_enabled: bool) -> (Vec<String>, usize
     rig.endpoint.answer("dha_a1", "dhr_r1", 900);
     let policy = HubLocalPolicy {
         read_enabled,
-        ..HubLocalPolicy::default()
+        ..toggles_on()
     };
     policy_set_core(rig.db.as_ref(), rig.db.as_ref(), None, &policy)
         .await
@@ -4626,14 +4684,45 @@ async fn saving_a_read_flip_redials_the_running_socket() {
     saved.disconnect().await;
 }
 
+/// Turning `spend` on changes what the `Hello` announces, so the save
+/// replaces the running socket and the Hub hears it at once instead of
+/// offering the instance a dispatch it would refuse.
 #[tokio::test]
-async fn saving_a_spend_change_leaves_the_running_socket_alone() {
-    let saved = SavedOver::running("hub_policy_spend_only").await;
+async fn saving_a_spend_flip_redials_so_the_hello_announces_it() {
+    let mut saved = SavedOver::running("hub_policy_spend_flip").await;
 
     saved
         .save(&HubLocalPolicy {
             spend_enabled: true,
+            ..SavedOver::BEFORE
+        })
+        .await;
+
+    assert_eq!(saved.first.borrow().closed_with, Some(1001));
+    let hello = traffic_until(&mut saved.second, "the second Hello", |t| {
+        !t.sent.is_empty()
+    })
+    .await;
+    assert!(
+        announced_scopes(&hello.sent[0])
+            .as_array()
+            .expect("a list")
+            .contains(&json!("spend")),
+        "{:?}",
+        hello.sent[0]
+    );
+    saved.disconnect().await;
+}
+
+/// The ceilings are read per request, so changing one restarts nothing.
+#[tokio::test]
+async fn saving_a_ceiling_change_leaves_the_running_socket_alone() {
+    let saved = SavedOver::running("hub_policy_ceiling_only").await;
+
+    saved
+        .save(&HubLocalPolicy {
             run_ceiling_cents: Some(500),
+            daily_ceiling_cents: Some(5_000),
             ..SavedOver::BEFORE
         })
         .await;
@@ -4669,6 +4758,9 @@ async fn a_re_pairing_drops_the_sockets_refresh_queued_behind_it() {
     .with_socket(socket_config(&rig.db, &dialer, &ParkedSleeper::new()));
     rig.hub = Arc::new(hub);
     let idle = Arc::strong_count(&dialer);
+    policy_set_core(rig.db.as_ref(), rig.db.as_ref(), None, &toggles_on())
+        .await
+        .expect("turn spend and gates on");
     rig.pair(HUB_URL).await.expect("a pairing");
     traffic_until(&mut first_traffic, "the Hello", |t| !t.sent.is_empty()).await;
 

@@ -49,7 +49,7 @@ use crate::domain::hub_pairing::{
 use crate::domain::hub_socket::connection::{
     after_local_restart, view, ConnectionFacts, HubConnection,
 };
-use crate::domain::hub_socket::{sends_events, RefreshEnd};
+use crate::domain::hub_socket::{announced_scopes, sends_events, RefreshEnd};
 use crate::error::AppError;
 use crate::ports::hub::{
     BrowserLauncher, HubAttachmentFetcher, HubDeviceEndpoint, HubGitTokenFetcher, HubPinRepository,
@@ -84,7 +84,8 @@ pub mod token_client;
 pub struct HubPairing {
     token: Arc<dyn HubTokenEndpoint>,
     /// Read each time a socket starts, for whether it relays (see
-    /// [`sends_events`]).
+    /// [`sends_events`]) and which scopes its `Hello` announces (see
+    /// [`announced_scopes`]).
     policy: Arc<dyn HubPolicyReader>,
     app_version: AppVersion,
     instance_fallback: &'static str,
@@ -638,8 +639,9 @@ impl HubPairing {
         let Some(key) = self.refresher.stored_device_key(&install_id)? else {
             return Ok(None);
         };
-        let read_enabled = self.policy.load().map_err(storage)?.read_enabled;
-        let relaying = sends_events(&paired.scopes, read_enabled);
+        let policy = self.policy.load().map_err(storage)?;
+        let relaying = sends_events(&paired.scopes, policy.read_enabled);
+        let announced = announced_scopes(&paired.scopes, &policy);
         Ok(Some(SupervisorDeps {
             tokens: Arc::new(self.refresher.clone()),
             origin: paired.hub_origin,
@@ -648,7 +650,7 @@ impl HubPairing {
             session: SessionContext::new(
                 install_id,
                 self.app_version.get().to_owned(),
-                paired.scopes,
+                announced,
                 config.run_events.clone(),
                 config.wake.clone(),
                 config.snapshots.clone(),

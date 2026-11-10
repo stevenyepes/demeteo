@@ -270,13 +270,15 @@ describe('GatePanel', () => {
     expect(onDecided).toHaveBeenCalledTimes(1);
   });
 
-  it('is disabled, naming the gates scope, when the instance has not granted it', () => {
+  it('is disabled when gates is off, and says how to turn it on', () => {
     stubHub({});
     renderPanel({ scopes: ['read', 'spend'] });
 
     expect(button('Approve')).toBeDisabled();
     expect(button('Abort feature')).toBeDisabled();
-    expect(screen.getByRole('group')).toHaveAccessibleDescription(/needs the gates scope/i);
+    expect(screen.getByRole('group')).toHaveAccessibleDescription(/Gates is off on this instance/);
+    expect(screen.getByText('demeteo-runner hub policy --gates on')).toBeVisible();
+    expect(screen.getByText(/open Settings › Hub and turn on Gates/)).toBeVisible();
   });
 
   it('holds both decisions, saying why, while a sent decision waits for the instance', async () => {

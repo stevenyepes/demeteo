@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { TONE_CHIP, type RunStatusTone } from '../../../src/lib/runStatus';
 import { HubApiError } from '../lib/api';
 import { type Enqueued, getRequestStatus, type RequestStatus, refusalSentence } from '../lib/dispatch';
+import type { InstanceKind } from '../lib/fleet';
+import { InstanceSettingsHelp, type InstanceSettingNeed } from './InstanceSettingsHelp';
 
 const FIRST_POLL_MS = 2_000;
 const MAX_POLL_MS = 10_000;
@@ -33,12 +35,14 @@ type Poll =
 
 interface RequestStatusCardProps {
   instanceId: string;
+  /** Which instance's settings a refusal points at. */
+  kind: InstanceKind;
   enqueued: Enqueued;
   /** The instance's presence when the request was sent; offline reads as queued until it reconnects. */
   present: boolean;
 }
 
-export function RequestStatusCard({ instanceId, enqueued, present }: RequestStatusCardProps) {
+export function RequestStatusCard({ instanceId, kind, enqueued, present }: RequestStatusCardProps) {
   const [poll, setPoll] = useState<Poll>({ state: 'polling', status: 'queued', reason: null });
   const latestRead = useRef(0);
   const { requestId, expiresAt } = enqueued;
@@ -92,7 +96,10 @@ export function RequestStatusCard({ instanceId, enqueued, present }: RequestStat
   const expiry = new Date(expiresAt * 1000);
   const expiryTime = <time dateTime={expiry.toISOString()}>{expiry.toLocaleTimeString()}</time>;
 
+  const need = poll.status === 'refused' && poll.reason !== null ? SETTING_NEEDED.get(poll.reason) : undefined;
+
   return (
+    <div className="flex flex-col gap-3">
     <div role="status" className={`rounded-lg border px-4 py-3 text-sm ${toneOf(poll.status)}`}>
       {poll.status === 'queued' && !present && (
         <>
@@ -121,8 +128,17 @@ export function RequestStatusCard({ instanceId, enqueued, present }: RequestStat
         <p className="text-xs text-slate-400">Stopped checking: the request is past its expiry.</p>
       )}
     </div>
+    {need !== undefined && <InstanceSettingsHelp kind={kind} need={need} />}
+    </div>
   );
 }
+
+/** The refusals an instance's own settings cause, and which setting each points at. */
+const SETTING_NEEDED = new Map<string, InstanceSettingNeed>([
+  ['scope_off', 'spend'],
+  ['over_run_ceiling', 'ceiling'],
+  ['over_rolling_ceiling', 'ceiling'],
+]);
 
 function Refused({ reason }: { reason: string | null }) {
   const sentence = reason === null ? null : refusalSentence(reason);

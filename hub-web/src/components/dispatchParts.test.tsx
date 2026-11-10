@@ -474,7 +474,14 @@ describe('RequestStatusCard', () => {
     });
 
   const renderCard = (present = true) =>
-    render(<RequestStatusCard instanceId={INSTANCE_ID} enqueued={{ requestId: REQUEST_ID, expiresAt }} present={present} />);
+    render(
+      <RequestStatusCard
+        instanceId={INSTANCE_ID}
+        kind="runner"
+        enqueued={{ requestId: REQUEST_ID, expiresAt }}
+        present={present}
+      />,
+    );
 
   const elapse = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 
@@ -487,8 +494,9 @@ describe('RequestStatusCard', () => {
     const card = screen.getByRole('status');
     expect(card).toHaveClass(TONE_CHIP.ruby);
     expect(card).toHaveTextContent(/Refused/);
-    expect(screen.getByText("The max cost is above this instance's per-run ceiling.")).toBeVisible();
+    expect(screen.getByText(/The max cost is above this instance's per-run ceiling, or it has no per-run ceiling set\./)).toBeVisible();
     expect(screen.getByText('over_run_ceiling')).toHaveClass('font-mono');
+    expect(screen.getByText('demeteo-runner hub policy --run-ceiling 2500 --daily-ceiling 10000')).toBeVisible();
   });
 
   it('says spend is off for a scope_off refusal', async () => {
@@ -499,6 +507,20 @@ describe('RequestStatusCard', () => {
 
     expect(screen.getByText(/Spend is off on this instance/)).toBeVisible();
     expect(screen.getByText('scope_off')).toBeVisible();
+    expect(
+      screen.getByText('demeteo-runner hub policy --spend on --run-ceiling 2500 --daily-ceiling 10000'),
+    ).toBeVisible();
+    expect(screen.getByText(/Settings › Machines/)).toBeVisible();
+    expect(screen.queryByText(/Settings › Hub/)).toBeNull();
+  });
+
+  it('points at nothing to change for a refusal the settings do not cause', async () => {
+    status({ status: 'refused', reason: 'unknown_project' });
+    renderCard();
+
+    await elapse(2_000);
+
+    expect(screen.queryByText(/demeteo-runner hub policy/)).toBeNull();
   });
 
   it('shows the raw code alone for a reason it has no sentence for', async () => {
@@ -599,22 +621,25 @@ function fleetInstance(overrides: Partial<FleetInstance> = {}): FleetInstance {
 }
 
 describe('DispatchTargetList', () => {
-  it('disables a row without spend, says why, and does not select it', async () => {
+  it('keeps a row without spend choosable, saying spend is off and that choosing it shows how', async () => {
     const onSelect = vi.fn();
     render(
       <DispatchTargetList
-        instances={[fleetInstance({ id: 'inst-2', label: 'desk', scopes: ['read'] })]}
+        instances={[
+          fleetInstance({ id: 'inst-2', label: 'desk', scopes: ['read'] }),
+          fleetInstance({ id: 'inst-4', label: 'box', kind: 'runner', scopes: ['read'] }),
+        ]}
         selectedId={null}
         onSelect={onSelect}
       />,
     );
     const row = screen.getByRole('button', { name: 'desk' });
 
-    expect(row).toBeDisabled();
-    expect(screen.getByText('Spend has not been granted on this instance.')).toBeVisible();
-    expect(row).toHaveAccessibleDescription(/Spend has not been granted on this instance\./);
+    expect(row).toBeEnabled();
+    expect(row).toHaveAccessibleDescription(/Spend is off on this instance\. Choose it to see how to turn it on\./);
+    expect(screen.getByRole('button', { name: 'box' })).toHaveAccessibleDescription(/Spend is off on this runner\./);
     await userEvent.click(row);
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith('inst-2');
   });
 
   it('lets an offline row with spend be selected and says requests queue', async () => {

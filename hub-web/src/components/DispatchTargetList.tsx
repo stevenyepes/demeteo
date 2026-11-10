@@ -16,8 +16,9 @@ interface DispatchTargetListProps {
  * holds: it runs one of this Hub's own projects, chosen in the next step.
  *
  * Offline does not disable a row — a request to an absent instance queues
- * until it reconnects. Only a missing `spend` scope does, since the instance
- * would refuse the request whenever it arrived.
+ * until it reconnects. Nor does `spend` being off: the instance would refuse
+ * the request, but choosing it is how the person finds out how to turn spend
+ * on there, which the form beyond it explains.
  */
 export function DispatchTargetList({ instances, selectedId, onSelect }: DispatchTargetListProps) {
   const headingId = useId();
@@ -61,13 +62,12 @@ function TargetRow({ instance, selected, onSelect }: TargetRowProps) {
   return (
     <button
       type="button"
-      disabled={!spend}
       aria-pressed={selected}
       aria-labelledby={`${id}-name`}
       aria-describedby={describedBy}
       onClick={onSelect}
-      className={`nested-card flex w-full items-start gap-3 px-3 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-        selected ? 'border-accent-edge bg-accent-tint' : 'enabled:hover:bg-white/5'
+      className={`nested-card flex w-full items-start gap-3 px-3 py-3 text-left transition-colors ${
+        selected ? 'border-accent-edge bg-accent-tint' : 'hover:bg-white/5'
       }`}
     >
       <span
@@ -103,8 +103,10 @@ function TargetRow({ instance, selected, onSelect }: TargetRowProps) {
           {instance.scopes.length === 0 ? 'No scopes granted' : `Scopes: ${instance.scopes.join(', ')}`}
         </span>
         {!spend && (
-          <span id={`${id}-reason`} className="text-xs text-ruby-300">
-            Spend has not been granted on this instance.
+          <span id={`${id}-reason`} className="text-xs text-slate-300">
+            {instance.kind === 'runner'
+              ? 'Spend is off on this runner. Choose it to see how to turn it on.'
+              : 'Spend is off on this instance. Choose it to see how to turn it on.'}
           </span>
         )}
       </span>

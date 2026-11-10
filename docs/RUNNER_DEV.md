@@ -144,6 +144,24 @@ matches. Ctrl-C cancels. Then `hub status`, `hub policy` (no flags prints it;
 socket, so `serve` must be up; the same `hub_*` methods are what a desktop calls
 over SSH. Only `hub seal` works without `serve`.
 
+**Pairing alone does not let the runner run work.** Approving `read spend
+gates` on the Hub says what the Hub may *ask*; the runner's own policy says
+what it will *do*, and `spend` and `gates` start off, with both ceilings unset
+(decision 64, [`HUB.md`](HUB.md) §7). Until you set them, the Hub's dispatch
+page reads "Spend is off on this runner" and a start sent anyway comes back
+`scope_off`. Turn them on once, after pairing:
+
+```bash
+demeteo-runner hub policy --spend on --gates on --run-ceiling 2500 --daily-ceiling 10000
+```
+
+The ceilings are cents and are yours to choose: a start whose max cost is above
+the run ceiling, or that would take the last 24 hours past the daily one, is
+refused, and an unset ceiling refuses every start. `--gates on` is only needed
+to decide this runner's gates from the Hub. The runner's Hub panel in `Settings
+→ Machines` sets the same fields over SSH. A change to `spend` or `gates`
+reconnects the runner's socket, so the Hub sees it within seconds.
+
 From a desktop, the runner's Hub panel on its machine card in `Settings →
 Machines` does the same over SSH: pair (it shows the code, the `#/device` URL
 and the fingerprint), status, policy, activity log and disconnect. A runner
@@ -160,6 +178,9 @@ must be up whenever the run pushes.
 | `hub seal` says a key is sealed already | Re-running it keeps the key, so an upgrade keeps the pairing | `hub seal --force` replaces it and forgets the pairing; pair again |
 | A `hub-…` run stays `needs-credentials` | The token keeper stopped: the journal says `run <id>: no more git tokens from the Hub: <reason>`. A `422` is a GitLab or unknown-host repository; a `503` that never clears is the Hub's App config, its Transit policy, or the App not installed on that repository | Fix the Hub side, then retry the run |
 | After a restart, `no accepted Hub start is logged for it` | The run's accepted start never reached `hub_request_log`, so its keeper cannot be restarted | Cancel and start the run again from the Hub |
+| The Hub says "Spend is off on this runner", or a start comes back `scope_off` | The runner's own `spend` toggle is off; pairing does not turn it on | `hub policy --spend on` with both ceilings, as above |
+| A start comes back `over_run_ceiling` or `over_rolling_ceiling` | A ceiling is unset, or the dispatch's max cost is above it | `hub policy --run-ceiling … --daily-ceiling …`, or lower the dispatch's max cost |
+| A gate decision from the Hub comes back `scope_off` | The runner's `gates` toggle is off | `hub policy --gates on` |
 | `cannot reach demeteo-runner serve` | The service is stopped, or `XDG_DATA_HOME` differs from the unit's | `systemctl --user status demeteo-runner` |
 
 The sealed key is `hub-store-key.cred` in the runner's data dir and the drop-in

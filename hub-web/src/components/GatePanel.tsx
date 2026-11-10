@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { HubApiError } from '../lib/api';
 import type { HubScope } from '../lib/fleet';
 import { decideGate, type GateDecision } from '../lib/gates';
+import { InstanceSettingsHelp } from './InstanceSettingsHelp';
 import type { RequestTicket } from '../lib/requests';
 import { CeremonyError } from './CeremonyError';
 import { Button } from '../../../src/components/ui/Button';
@@ -86,10 +87,12 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
       </h3>
       <p className="mt-1 text-xs text-slate-400">Every gate decision asks for your passkey.</p>
       {blocked && (
-        <p id={reasonId} className="mt-2 text-sm text-slate-300">
-          Deciding a gate needs the <span className="font-mono">gates</span> scope, which this instance has not
-          granted.
-        </p>
+        <div className="mt-2 flex flex-col gap-2">
+          <p id={reasonId} className="text-sm text-slate-300">
+            Gates is off on this instance, so it would refuse a decision sent from the Hub.
+          </p>
+          <InstanceSettingsHelp kind={null} need="gates" />
+        </div>
       )}
       {pending && !blocked && (
         <p id={pendingNoteId} className="mt-2 text-sm text-cyan-300">
@@ -128,9 +131,10 @@ export function GatePanel({ instanceId, featureId, stepExecutionId, scopes, pend
         <div className="mt-3 flex flex-col gap-1">
           <CeremonyError error={send.error} />
           {codeOf(send.error) === 'scope_not_granted' && (
-            <p className="text-sm text-slate-300">
-              The Hub says this instance has not granted the <span className="font-mono">gates</span> scope.
-            </p>
+            <>
+              <p className="text-sm text-slate-300">The Hub says gates is off on this instance.</p>
+              <InstanceSettingsHelp kind={null} need="gates" />
+            </>
           )}
           {START_AGAIN.includes(codeOf(send.error)) && (
             <p className="text-sm text-slate-300">That challenge cannot be used again. Start again to decide.</p>
