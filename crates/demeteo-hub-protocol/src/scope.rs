@@ -18,14 +18,16 @@ pub enum Scope {
     Gates,
 }
 
-/// A gate decision relayed by the Hub. There is no `redirect`: its free-text
-/// feedback is bound by no field of the signed challenge, so a relaying Hub
-/// could rewrite what the human wrote (HUB.md §8, open question §11).
+/// A gate decision relayed by the Hub. `Redirect` exists only because
+/// [`gate_challenge`](crate::gate_challenge) binds the feedback it carries: the
+/// human's passkey signs the text, so a relaying Hub cannot rewrite it, nor
+/// the step a feedback naming one rewinds to (HUB.md §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Approve,
     Cancel,
+    Redirect,
 }
 
 /// Reasoning effort for a run. Spellings mirror `demeteo-core`'s `EffortLevel`;
@@ -85,10 +87,13 @@ mod tests {
     }
 
     #[test]
-    fn decision_has_no_redirect() {
-        assert!(parse::<Decision>("redirect").is_err());
+    fn decision_parses_exactly_its_three_spellings() {
         assert_eq!(parse::<Decision>("approve").unwrap(), Decision::Approve);
         assert_eq!(parse::<Decision>("cancel").unwrap(), Decision::Cancel);
+        assert_eq!(parse::<Decision>("redirect").unwrap(), Decision::Redirect);
+        for name in ["reject", "Redirect", ""] {
+            assert!(parse::<Decision>(name).is_err(), "{name:?} must not parse");
+        }
     }
 
     #[test]

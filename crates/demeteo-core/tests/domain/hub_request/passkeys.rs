@@ -85,7 +85,7 @@ fn gate_judged(
         feature_id: envelope.feature_id.into(),
         step_execution_id: envelope.step_execution_id.into(),
         decision: envelope.decision,
-        feedback: None,
+        feedback: envelope.feedback.map(str::to_owned),
         assertion,
     };
     let request = relayed(envelope, RequestPayload::GateDecision(gate.clone()));
@@ -153,6 +153,7 @@ fn gate_challenge_digest_matches_the_hub_md_vector() {
         Decision::Approve,
         "Zk3m0R8pQnVx2tL5aYw9bA",
         1_791_020_400,
+        None,
     )
     .expect("the HUB.md example encodes");
     assert_eq!(
@@ -167,6 +168,99 @@ fn gate_verdict_accepts_a_pending_gate_with_a_valid_assertion() {
     let set = [SoftPasskey::es256().trusted(0), signer.trusted(0)];
     assert_eq!(
         gate_judged(&hub_pins(), GATE, signer.assert(&digest(GATE)), &set, false),
+        Ok(signer.credential_id())
+    );
+}
+
+const REDIRECT: Gate = Gate {
+    decision: Decision::Redirect,
+    feedback: Some("Split the parser out of main.rs first"),
+    ..GATE
+};
+
+#[test]
+fn gate_verdict_accepts_a_redirect_whose_feedback_was_signed() {
+    let signer = SoftPasskey::es256();
+    let set = [signer.trusted(0)];
+    assert_eq!(
+        gate_judged(
+            &hub_pins(),
+            REDIRECT,
+            signer.assert(&digest(REDIRECT)),
+            &set,
+            false
+        ),
+        Ok(signer.credential_id())
+    );
+}
+
+/// What a relaying Hub could do before the challenge bound the text: keep the
+/// human's assertion and change the words, or the step they rewind to.
+#[test]
+fn gate_verdict_refuses_feedback_rewritten_after_signing() {
+    let signer = SoftPasskey::es256();
+    let set = [signer.trusted(0)];
+    let assertion = signer.assert(&digest(REDIRECT));
+    for feedback in [
+        Some("Split the parser out of main.rs first, then delete the tests"),
+        Some("implement"),
+        Some(""),
+        None,
+    ] {
+        let rewritten = Gate {
+            feedback,
+            ..REDIRECT
+        };
+        assert_eq!(
+            gate_judged(&hub_pins(), rewritten, assertion.clone(), &set, false),
+            Err(RefusalReason::AssertionInvalid),
+            "{feedback:?}"
+        );
+    }
+}
+
+#[test]
+fn gate_verdict_refuses_feedback_added_to_a_decision_signed_without_it() {
+    let signer = SoftPasskey::es256();
+    let set = [signer.trusted(0)];
+    let added = Gate {
+        feedback: Some("Also merge it"),
+        ..GATE
+    };
+    assert_eq!(
+        gate_judged(
+            &hub_pins(),
+            added,
+            signer.assert(&digest(GATE)),
+            &set,
+            false
+        ),
+        Err(RefusalReason::AssertionInvalid)
+    );
+}
+
+/// Signed or not, a feedback over the cap is refused before the assertion
+/// spends a counter.
+#[test]
+fn gate_verdict_refuses_feedback_over_the_cap_before_the_assertion() {
+    let long: &'static str = Box::leak("x".repeat(MAX_GATE_FEEDBACK_BYTES + 1).into_boxed_str());
+    let at_cap: &'static str = Box::leak("x".repeat(MAX_GATE_FEEDBACK_BYTES).into_boxed_str());
+    let signer = SoftPasskey::es256();
+    let set = [signer.trusted(0)];
+    let over = Gate {
+        feedback: Some(long),
+        ..REDIRECT
+    };
+    assert_eq!(
+        gate_judged(&hub_pins(), over, signer.assert(&digest(over)), &set, false),
+        Err(RefusalReason::MalformedBody)
+    );
+    let at = Gate {
+        feedback: Some(at_cap),
+        ..REDIRECT
+    };
+    assert_eq!(
+        gate_judged(&hub_pins(), at, signer.assert(&digest(at)), &set, false),
         Ok(signer.credential_id())
     );
 }

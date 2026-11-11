@@ -45,7 +45,7 @@ full.
 |---|---|
 | `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep; and git tokens (§6.5): `POST /git-token`, admitted like the socket, minting a GitHub App installation token through a JWT signed in Transit; and Hub Projects and Workflows (§6.4): the tenant's own Projects under `/v1/projects`, the embedded starters at `GET /v1/workflows`, and a dispatch to a runner built from the two. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On an instance*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, a `start_feature`'s optional `runner` start (§6.1), snapshots (Features, harness kinds and each Project's `provider_kind` included, decision 70, and the harness catalog, decision 72), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
-| `hub-web/` (second Vite entry) | **built** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`. Runs reads `GET /v1/runs` into Needs-you, Active and Finished bands with one run's preview beside the list; Run reads `GET /v1/instances/{instance_id}/runs/{feature_id}`, polling every 5 s while the run is running, and draws the pinned Workflow on the `src/components/canvas` strip with its steps, ticket progress, events and a git-token problem the runner reported (§6.5), decides a pending gate (approve or cancel, after a passkey challenge, §8), re-points a step (`set_step_assignment`), and cancels a running run (`cancel_feature`, behind an inline confirm and no passkey, as the route asks only `spend`); Dispatch picks a desktop or a runner. For a desktop it offers a Project and Workflow from that desktop's snapshot; for a runner, one of this Hub's own Projects and one of its embedded starters (§6.4), and a state that links to Projects when there are none. A GitLab Project is greyed out for a runner, with the reason in words. The default agent is one of the target's harnesses, a project default the target reports it lacks is refused until another agent is picked, and the model a select over what the target's catalog lists for the agent in effect, free text only where the target reports no list (§5 *Harness catalog*). It takes caps and attachments, uploads the attachments to the target and queues the `start_feature`, following the request to its outcome. Projects at `#/projects` lists, creates, edits and removes the Hub's own Projects: a repository picked from a connected Git host, the run-shape defaults a runner dispatch fills in, the settings a runner lays over what it detects, and per-step harness defaults. Git hosts connects and removes GitHub Apps (§6.5). `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` (second Vite entry) | **built** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`. Runs reads `GET /v1/runs` into Needs-you, Active and Finished bands with one run's preview beside the list; Run reads `GET /v1/instances/{instance_id}/runs/{feature_id}`, polling every 5 s while the run is running, and draws the pinned Workflow on the `src/components/canvas` strip with its steps, ticket progress, events and a git-token problem the runner reported (§6.5), decides a pending gate (approve, redirect or cancel, with feedback the passkey signs, after a passkey challenge, §8), re-points a step (`set_step_assignment`), and cancels a running run (`cancel_feature`, behind an inline confirm and no passkey, as the route asks only `spend`); Dispatch picks a desktop or a runner. For a desktop it offers a Project and Workflow from that desktop's snapshot; for a runner, one of this Hub's own Projects and one of its embedded starters (§6.4), and a state that links to Projects when there are none. A GitLab Project is greyed out for a runner, with the reason in words. The default agent is one of the target's harnesses, a project default the target reports it lacks is refused until another agent is picked, and the model a select over what the target's catalog lists for the agent in effect, free text only where the target reports no list (§5 *Harness catalog*). It takes caps and attachments, uploads the attachments to the target and queues the `start_feature`, following the request to its outcome. Projects at `#/projects` lists, creates, edits and removes the Hub's own Projects: a repository picked from a connected Git host, the run-shape defaults a runner dispatch fills in, the settings a runner lays over what it detects, and per-step harness defaults. Git hosts connects and removes GitHub Apps (§6.5). `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first. **For a runner** (§4 *Pairing a runner by device code*), `demeteo-core` also has the device-code client (`HubPairing::begin_device_pairing`) and the sealed store (`SealedSecretStore`, migration `V68__hub_sealed_secrets.sql`), and composes both in `ExecutionMode::LocalOnly` when the caller hands it a store (`build_core_context_with_hub_store`). `demeteo-runner serve` holds that pairing and starts its socket; `demeteo-runner hub pair`, `status`, `policy`, `log` and `disconnect` call the `hub_*` methods of its control socket (`crates/demeteo-runner/src/rpc/hub.rs`), which a desktop's Settings › Machines calls over SSH too (the runner's Hub panel, below); and `demeteo-runner hub seal`, which both installers run, seals the store key and writes the unit drop-in that loads it |
 | Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On an instance*). Each row goes out under the Feature id its instance's `HubRunKeys` reports it under: a desktop reports its shadows of detached runs too, unless the runner the run went to last said it is paired to the same Hub origin, and a runner re-keys its run-id rows to the Feature id its snapshot lists (§5 *Events and the cursor*); a snapshot after the first `CursorAck`, after each Project or Workflow write, and after each harness probe it finishes (§5 *Snapshots*). The `hub-socket` feature no longer implies `keyring`, so a runner build can carry the socket; a runner binds its own request handler before its socket starts (§6.1 *On an instance*) |
@@ -114,7 +114,7 @@ judged by what that attacker cannot do.
 | queue a `start_feature` for an instance that has `spend` on | declare a cap above the instance's per-run ceiling, or one that takes the 24-hour committed total above its rolling ceiling (§7). The ceilings bound declared caps, not what a run spends — §7 *The per-run ceiling bounds the declared cap, not what the run spends* |
 | relay a gate decision a human made | **make** one with no ceremony: no token approves, and the assertion is verified on the desktop (§8). That holds per ceremony: a substituted ceremony can spend one (the next row) |
 | substitute what a passkey ceremony signs. It serves the hub-web bundle that runs every ceremony (§2), so a ceremony the user takes for a sign-in or one gate approval can be fed another challenge, and the authenticator shows only the RP. That ceremony can decide one gate the user did not mean, or revoke one of the user's other pinned keys (§11 item 20) | add a key to an instance's pinned set, with a ceremony or without: the desktop refuses every `passkey_endorsement` as `unknown_kind` without reading its assertion (§11 item 20); nor revoke the last key (§8) |
-| rewrite the free-text `feedback` a relayed gate decision carries, which no assertion binds. The desktop discards it, so a rewrite changes nothing on the instance (§8) | change the decision, its gate or its request: the challenge binds all three (§8) |
+| — | change the decision, its gate, its request or its feedback: the challenge binds all four, the feedback byte for byte, so the Hub can neither reword what the human wrote nor change the step a feedback naming one rewinds to (§8) |
 | — | turn a scope on, or raise a ceiling |
 
 > **A stolen device key and refresh token** let an attacker speak as the instance:
@@ -1622,26 +1622,28 @@ its outcome and the Hub's clock:
 challenge from the envelope it receives (§8), so the envelope's `request_id`
 and `expires_at` have to exist before the human signs.
 
-1. **Challenge.** The body names `feature_id`, `step_execution_id` and
-   `decision`. The Hub mints the request id and `expires_at` now — 600 seconds
-   on, the request lifetime of §6.1 — builds the pre-image with the protocol
-   crate's `gate_challenge`, and holds all six fields as a ceremony under the
-   passkey that signed the session in. The answer carries the ceremony id, the
+1. **Challenge.** The body names `feature_id`, `step_execution_id`,
+   `decision` and, optionally, `feedback`. Feedback past
+   `MAX_GATE_FEEDBACK_BYTES` (8 KiB of UTF-8) or holding a NUL is refused
+   `invalid_request` and nothing is held; whitespace-only feedback is held as
+   none, and any other is held exactly as sent. The Hub mints the request id
+   and `expires_at` now — 600 seconds on, the request lifetime of §6.1 —
+   builds the pre-image with the protocol crate's `gate_challenge`, and holds
+   every field it binds as a ceremony under the passkey that signed the
+   session in. The answer carries the ceremony id, the
    request id, `expires_at`, the pre-image as `gate_challenge`, and WebAuthn
    options whose challenge is its SHA-256, allowing the tenant's trusted
    passkeys.
 2. **Decision.** The body carries the ceremony id, the request id and the
    assertion only. A body that names `feedback` is refused `invalid_request`
-   before the held challenge is taken, so that challenge is not spent. The Hub
-   takes the held challenge, refuses a different request id, checks the
-   assertion's shape, refuses a request already past `expires_at`, and queues
-   a `gate_decision` whose `instance_id`, `request_id`, `expires_at`,
-   `feature_id`, `step_execution_id` and `decision` are **the held
-   challenge's, never the body's**, and which carries no `feedback`. The
-   protocol keeps that field, but the challenge does not bind it (§11 item 1)
-   and the desktop discards it (§8), so the Hub collects none rather than let
-   its sender believe it arrived. A challenge taken and refused is spent, so a
-   retry starts from step 1.
+   before the held challenge is taken, so that challenge is not spent: the
+   feedback was fixed, and signed, at step 1. The Hub takes the held
+   challenge, refuses a different request id, checks the assertion's shape,
+   refuses a request already past `expires_at`, and queues a `gate_decision`
+   whose `instance_id`, `request_id`, `expires_at`, `feature_id`,
+   `step_execution_id`, `decision` and `feedback` are **the held
+   challenge's, never the body's**. A challenge taken and refused is spent,
+   so a retry starts from step 1.
 
 **The Hub's assertion check is structural only.** Every field is unpadded
 base64url, the authenticator data is long enough to hold its counter, and the
@@ -1934,16 +1936,17 @@ assertion.
 
 ### The challenge
 
-The WebAuthn challenge commits to six fields, in this order:
+The WebAuthn challenge commits to seven fields, in this order:
 
 | # | Field | Source |
 |---|---|---|
 | 1 | `instance_id` | the envelope |
 | 2 | `feature_id` | the Gate's Feature |
 | 3 | `step_execution_id` | the Gate's step execution |
-| 4 | `decision` | `approve` or `cancel`; see below |
+| 4 | `decision` | `approve`, `cancel` or `redirect`; see below |
 | 5 | `request_id` | the envelope — so an assertion cannot outlive its request |
 | 6 | `expires_at` | the envelope |
+| 7 | `feedback` | the request body — optional; see below |
 
 **The pre-image** is what `gate_challenge` in
 [`canonical.rs`](../crates/demeteo-hub-protocol/src/canonical.rs) returns — the
@@ -1956,10 +1959,18 @@ rustdoc holds the byte layout; this section does not restate it.
   another: the two passkey challenges open with `demeteo-hub/v1/endorse` and
   `demeteo-hub/v1/revoke` (below), and the envelope's pre-image with
   `demeteo-hub/v1/request`.
-- The six fields follow in the table's order. Every string is length-prefixed, so
+- The fields follow in the table's order. Every string is length-prefixed, so
   no value can shift bytes into its neighbour and an id needs no character
-  restrictions to be safe. `decision` is a tag byte and `expires_at` a fixed-width
-  integer of Unix seconds, so neither has a spelling to disagree about.
+  restrictions to be safe. `decision` is a tag byte (`approve` 1, `cancel` 2,
+  `redirect` 3) and `expires_at` a fixed-width integer of Unix seconds, so
+  neither has a spelling to disagree about.
+- `feedback` is last, and absent feedback adds **no bytes**. Present feedback
+  adds `u8 1` and the length-prefixed text, exactly as the human typed it: no
+  normalisation, so the instance hashes the bytes the passkey signed. A
+  decision without feedback therefore signs what it signed before feedback was
+  bound, and the example below holds for it; a build that predates the field
+  recomputes a challenge without the text and refuses a decision that has one
+  as `assertion_invalid`, which fails closed.
 - The challenge is the **SHA-256 of the pre-image**, passed to WebAuthn as 32 bytes
   and carried as base64url without padding. The crate returns the pre-image only;
   hashing it is the caller's job.
@@ -2004,16 +2015,22 @@ of §6.1:
 3. its Gate is **pending**: a gate row exists for the step and the step has not
    completed, failed or been cancelled — the rule the desktop's own
    `gate_decide` applies — else `gate_not_pending`;
-4. the assertion verifies, by the checks below, over the challenge the instance
-   **recomputes from the envelope** and its own pinned `instance_id`. A
-   credential outside the pinned set is `credential_not_pinned`, and every
-   other failure `assertion_invalid`;
-5. the passkey's stored counter moves to the one the assertion reported, by a
+4. the feedback is at most `MAX_GATE_FEEDBACK_BYTES`, else `malformed_body`,
+   before the assertion, so no counter is spent on it;
+5. the assertion verifies, by the checks below, over the challenge the instance
+   **recomputes from the envelope**, its own pinned `instance_id` and the
+   request's `feedback`. A credential outside the pinned set is
+   `credential_not_pinned`, and every other failure `assertion_invalid`;
+6. the passkey's stored counter moves to the one the assertion reported, by a
    compare-and-set. A key revoked or used meanwhile is `credential_not_pinned`;
-6. the desktop's own `gate_decide` is called with `approve` or `cancel` and no
-   feedback, because the assertion does not bind the request's `feedback` and
-   the gate keeps feedback as the human's own words, for project memory and the
-   next agent step's prompt. One it refuses is `gate_not_pending`.
+7. the desktop's own `gate_decide` is called with the decision and the
+   request's `feedback`, exactly as the passkey signed it. The gate keeps that
+   feedback as the human's own words, as it does a local decision's: project
+   memory on an approval, and on a redirect the redirected step's prompt and,
+   when it names a step, where the run rewinds to. One it refuses is
+   `gate_not_pending`. The activity log records the decision as `signed by`
+   the credential id, never the feedback, which the gate's own decision row
+   holds.
 
 An assertion verifies only if each of these holds, checked in this order:
 
@@ -2059,11 +2076,21 @@ Signatures are verified with `aws-lc-rs`, already a dependency of
 same signatures. `ring` was proposed and is not a direct dependency: adding it is an
 [AGENTS.md §6](../AGENTS.md) Gate item, and it was asked and not answered.
 
-`decision` is `approve` or `cancel`. `redirect` carries free-text feedback that none
-of the six fields binds, so a relaying Hub could rewrite what the human wrote; until
-that is settled (§11) an instance refuses a `gate_decision` that is not `approve` or
-`cancel`. It also never maps an unrecognised string to a verdict, because
-`classify` in `domain/gate/decision.rs` cancels the run on one.
+`decision` is `approve`, `cancel` or `redirect`
+([decision 73](DECISIONS.md#1-the-locked-decisions)). A `redirect` is useful only
+with its feedback, and is offered because the challenge binds that text: a
+relaying Hub that rewrote it, or added feedback to a decision signed without
+any, would hand the instance an assertion over a challenge it does not
+recompute. An instance never maps an unrecognised string to a verdict, because
+`classify` in `domain/gate/decision.rs` cancels the run on one: the wire
+`Decision` has no catch-all, so a word this build does not know fails to parse
+and is refused.
+
+What binding does not reach is substitution, the §3 row on it: the Hub serves
+the page that runs the ceremony, and the authenticator shows only the RP, so a
+Hub that serves a hostile page can have the passkey sign feedback the user did
+not type, as it can a decision the user did not choose. Feedback is no weaker
+than the decision there, and the instance treats it with the same trust.
 
 ### The pinned set
 
@@ -2459,9 +2486,9 @@ does that today because the socket could not be built without an answer; no
 decision stands behind it, a human may overrule it, and until one does it is
 what a desktop client implements.
 
-1. **Gate decisions other than `approve` and `cancel`.** `redirect` carries
-   free-text feedback the challenge does not bind (§8). Whether the Hub offers it,
-   and how the feedback would be bound, is open. Until then an instance refuses it.
+1. *Decided by [decision 73](DECISIONS.md#1-the-locked-decisions), kept so the
+   numbering holds.* The Hub offers `redirect`, and approval notes, because the
+   gate challenge binds the feedback byte for byte (§8).
 2. **What a Gate's review pane may show on the Hub.** Transcripts, diffs and file
    contents never leave an instance (§3), so a Gate reviewed on the Hub is reviewed
    without them. Which gate summary text crosses, written by whom, is open.

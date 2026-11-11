@@ -11,7 +11,7 @@ use tokio::sync::MutexGuard;
 use super::{HubRequests, Settled};
 use crate::application::remote_runs::find_mirror_for_feature;
 use crate::domain::hub_pairing::HubPins;
-use crate::domain::hub_request::log::{trust_change_note, TrustChange};
+use crate::domain::hub_request::log::{gate_signer_note, trust_change_note, TrustChange};
 use crate::domain::hub_request::passkeys::{
     gate_decision_word, gate_verdict, revocation_verdict, trust_refusal, trust_write_refusal,
     TrustedPasskey,
@@ -82,6 +82,7 @@ impl HubRequests {
             Ok(verified) => verified,
             Err(reason) => return Settled::refused(reason),
         };
+        let signer = verified.passkey.credential_id.clone();
         match self.ports.passkeys.advance_count(
             &verified.passkey.credential_id,
             verified.passkey.sign_count,
@@ -95,21 +96,22 @@ impl HubRequests {
             }
         }
         drop(trust);
-        // Never `gate.feedback`: the assertion does not bind it, so the Hub
-        // can write any text there, and the gate stores feedback as the
-        // human's own words — a memory signal on approve, and the next
-        // agent step's prompt.
+        // `gate_verdict` verified the assertion over a challenge that binds
+        // `gate.feedback`, so this is text the human signed, not the Hub's.
         match self
             .ctx
             .presenter
             .gate_decide(
                 &gate.step_execution_id,
                 gate_decision_word(gate.decision),
-                None,
+                gate.feedback.as_deref(),
             )
             .await
         {
-            Ok(()) => Settled::accepted(Some(gate.feature_id.clone()), None),
+            Ok(()) => Settled::accepted(
+                Some(gate.feature_id.clone()),
+                Some(gate_signer_note(&signer)),
+            ),
             Err(e) => {
                 tracing::warn!(error = %e, "Hub gate decision refused: the gate did not take it");
                 Settled::refused(RefusalReason::GateNotPending)

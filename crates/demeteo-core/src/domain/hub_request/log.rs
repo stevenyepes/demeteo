@@ -4,7 +4,8 @@
 //! There is deliberately no field for a description, a title, an attachment
 //! or anything secret: the log says what was asked and what was answered,
 //! never what the request carried, save the credential ids of a change to the
-//! trusted set ([`trust_change_note`]).
+//! trusted set ([`trust_change_note`]) and of the key that decided a gate
+//! ([`gate_signer_note`]).
 
 use demeteo_hub_protocol::{RequestPayload, Scope};
 use serde::{Deserialize, Serialize};
@@ -180,6 +181,13 @@ pub fn trust_change_note(change: TrustChange<'_>) -> String {
     }
 }
 
+/// The `reason` of an accepted `gate_decision`: the trusted key that signed
+/// it. Its feedback is not here; the gate's own decision row holds that, and
+/// this row is what ties those words to a passkey rather than to the Hub.
+pub fn gate_signer_note(signer: &str) -> String {
+    format!("signed by {signer}")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubRequestLogEntry {
     pub request_id: String,
@@ -189,8 +197,8 @@ pub struct HubRequestLogEntry {
     pub scope: Option<Scope>,
     pub outcome: LogOutcome,
     /// A `RefusalReason` in its snake_case spelling, `signature` for a drop,
-    /// a note on a field that was ignored, [`launch_failure_reason`], or
-    /// [`trust_change_note`].
+    /// a note on a field that was ignored, [`launch_failure_reason`],
+    /// [`trust_change_note`], or [`gate_signer_note`].
     pub reason: Option<String>,
     pub feature_id: Option<String>,
     pub received_at_ms: i64,

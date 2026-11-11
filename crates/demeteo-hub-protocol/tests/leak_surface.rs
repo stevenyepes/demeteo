@@ -535,7 +535,7 @@ fn every_spec_public_name_is_importable_from_the_crate_root() {
         .all(|t| t.starts_with("demeteo_hub_protocol::")));
 
     type Bytes = Result<Vec<u8>, EncodeError>;
-    let gate: fn(&str, &str, &str, Decision, &str, u64) -> Bytes = gate_challenge;
+    let gate: fn(&str, &str, &str, Decision, &str, u64, Option<&str>) -> Bytes = gate_challenge;
     let endorse: fn(&str, &str, u64, &str, &str) -> Bytes = endorsement_challenge;
     let revoke: fn(&str, &str, u64, &str) -> Bytes = revocation_challenge;
     let sign: fn(&SignedRequest) -> Bytes = SignedRequest::signing_bytes;

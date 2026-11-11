@@ -55,6 +55,7 @@ pub(crate) fn decision_tag(decision: Decision) -> u8 {
     match decision {
         Decision::Approve => 1,
         Decision::Cancel => 2,
+        Decision::Redirect => 3,
     }
 }
 
@@ -149,10 +150,17 @@ impl Encoder {
 ///
 /// Layout: `str("demeteo-hub/v1/gate")`, `u32(PROTOCOL_VERSION)`, `str
 /// instance_id`, `str feature_id`, `str step_execution_id`, `u8 decision`,
-/// `str request_id`, `u64 expires_at`.
+/// `str request_id`, `u64 expires_at`, then `feedback`.
 ///
-/// `feedback` is deliberately **not** bound. A relaying Hub can rewrite it, so
-/// no consumer may give it authority.
+/// `feedback` is bound because it carries authority: the gate stores it as the
+/// human's words, a redirected step reads it in its prompt, and a feedback that
+/// names a step chooses where a redirect rewinds to. `None` contributes **no
+/// bytes**, not the `0x00` of an `opt`, so a decision without feedback signs
+/// exactly as it did before the field was bound and the HUB.md §8 vector still
+/// holds. `Some` is `u8 1`, `str feedback`; being last, it cannot be confused
+/// with `None`. A build that predates the field recomputes a challenge without
+/// the text and refuses the assertion, so a decision with feedback fails closed
+/// on it.
 pub fn gate_challenge(
     instance_id: &str,
     feature_id: &str,
@@ -160,6 +168,7 @@ pub fn gate_challenge(
     decision: Decision,
     request_id: &str,
     expires_at: u64,
+    feedback: Option<&str>,
 ) -> Result<Vec<u8>, EncodeError> {
     let mut enc = Encoder::begin("demeteo-hub/v1/gate", PROTOCOL_VERSION)?;
     enc.put_str(instance_id)?;
@@ -168,6 +177,10 @@ pub fn gate_challenge(
     enc.put_u8(decision_tag(decision));
     enc.put_str(request_id)?;
     enc.put_u64(expires_at);
+    if let Some(feedback) = feedback {
+        enc.put_u8(1);
+        enc.put_str(feedback)?;
+    }
     Ok(enc.finish())
 }
 
@@ -250,7 +263,7 @@ mod tests {
     type Challenge = Result<Vec<u8>, EncodeError>;
 
     fn baseline() -> Challenge {
-        gate_challenge("inst", "feat", "exec", Decision::Approve, "req", 1000)
+        gate_challenge("inst", "feat", "exec", Decision::Approve, "req", 1000, None)
     }
 
     #[test]
@@ -262,30 +275,74 @@ mod tests {
     #[test]
     fn each_bound_field_changes_the_bytes() {
         let base = baseline();
-        let variants: [(&str, Challenge); 6] = [
+        let variants: [(&str, Challenge); 7] = [
             (
                 "instance_id",
-                gate_challenge("inst2", "feat", "exec", Decision::Approve, "req", 1000),
+                gate_challenge(
+                    "inst2",
+                    "feat",
+                    "exec",
+                    Decision::Approve,
+                    "req",
+                    1000,
+                    None,
+                ),
             ),
             (
                 "feature_id",
-                gate_challenge("inst", "feat2", "exec", Decision::Approve, "req", 1000),
+                gate_challenge(
+                    "inst",
+                    "feat2",
+                    "exec",
+                    Decision::Approve,
+                    "req",
+                    1000,
+                    None,
+                ),
             ),
             (
                 "step_execution_id",
-                gate_challenge("inst", "feat", "exec2", Decision::Approve, "req", 1000),
+                gate_challenge(
+                    "inst",
+                    "feat",
+                    "exec2",
+                    Decision::Approve,
+                    "req",
+                    1000,
+                    None,
+                ),
             ),
             (
                 "decision",
-                gate_challenge("inst", "feat", "exec", Decision::Cancel, "req", 1000),
+                gate_challenge("inst", "feat", "exec", Decision::Cancel, "req", 1000, None),
             ),
             (
                 "request_id",
-                gate_challenge("inst", "feat", "exec", Decision::Approve, "req2", 1000),
+                gate_challenge(
+                    "inst",
+                    "feat",
+                    "exec",
+                    Decision::Approve,
+                    "req2",
+                    1000,
+                    None,
+                ),
             ),
             (
                 "expires_at",
-                gate_challenge("inst", "feat", "exec", Decision::Approve, "req", 1001),
+                gate_challenge("inst", "feat", "exec", Decision::Approve, "req", 1001, None),
+            ),
+            (
+                "feedback",
+                gate_challenge(
+                    "inst",
+                    "feat",
+                    "exec",
+                    Decision::Approve,
+                    "req",
+                    1000,
+                    Some(""),
+                ),
             ),
         ];
         for (field, bytes) in variants {
@@ -296,19 +353,19 @@ mod tests {
 
     #[test]
     fn adjacent_strings_cannot_be_shifted_across_a_boundary() {
-        let a = gate_challenge("ab", "c", "x", Decision::Approve, "r", 1);
-        let b = gate_challenge("a", "bc", "x", Decision::Approve, "r", 1);
+        let a = gate_challenge("ab", "c", "x", Decision::Approve, "r", 1, None);
+        let b = gate_challenge("a", "bc", "x", Decision::Approve, "r", 1, None);
         assert!(a.is_ok() && b.is_ok());
         assert_ne!(a, b);
 
-        let a = gate_challenge("i", "ab", "c", Decision::Approve, "r", 1);
-        let b = gate_challenge("i", "a", "bc", Decision::Approve, "r", 1);
+        let a = gate_challenge("i", "ab", "c", Decision::Approve, "r", 1, None);
+        let b = gate_challenge("i", "a", "bc", Decision::Approve, "r", 1, None);
         assert_ne!(a, b);
     }
 
     #[test]
     fn empty_strings_encode_as_a_zero_length_prefix() {
-        let bytes = gate_challenge("", "", "", Decision::Cancel, "", 0);
+        let bytes = gate_challenge("", "", "", Decision::Cancel, "", 0, None);
         let expected: Vec<u8> = [
             &[0, 0, 0, 19][..],
             b"demeteo-hub/v1/gate",
@@ -327,7 +384,7 @@ mod tests {
     #[test]
     fn length_prefix_counts_bytes_not_chars() {
         // "é" is 1 char and 2 bytes; "日本" is 2 chars and 6 bytes.
-        let bytes = gate_challenge("é", "日本", "", Decision::Approve, "", 0);
+        let bytes = gate_challenge("é", "日本", "", Decision::Approve, "", 0, None);
         let expected: Vec<u8> = [
             &[0, 0, 0, 19][..],
             b"demeteo-hub/v1/gate",
@@ -358,7 +415,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x02, 0x72, 0x31, // u64 expires_at = 258
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
         ];
-        let actual = gate_challenge("i1", "f1", "se1", Decision::Approve, "r1", 258);
+        let actual = gate_challenge("i1", "f1", "se1", Decision::Approve, "r1", 258, None);
         assert_eq!(actual, Ok(golden));
     }
 
@@ -448,7 +505,7 @@ mod tests {
     fn gate_endorse_and_revoke_never_collide_on_overlapping_inputs() {
         // Same instance_id/request_id/expires_at, and the same string reused in
         // every remaining slot.
-        let gate = gate_challenge("s", "s", "s", Decision::Approve, "s", 7);
+        let gate = gate_challenge("s", "s", "s", Decision::Approve, "s", 7, None);
         let endorse = endorsement_challenge("s", "s", 7, "s", "s");
         let revoke = revocation_challenge("s", "s", 7, "s");
         assert!(gate.is_ok() && endorse.is_ok() && revoke.is_ok());
@@ -470,7 +527,7 @@ mod tests {
     fn each_purpose_opens_with_its_own_label() {
         // The layouts differ, so overlapping inputs alone cannot show a shared
         // label; this pins the label itself.
-        let gate = gate_challenge("s", "s", "s", Decision::Approve, "s", 7).unwrap();
+        let gate = gate_challenge("s", "s", "s", Decision::Approve, "s", 7, None).unwrap();
         let endorse = endorsement_challenge("s", "s", 7, "s", "s").unwrap();
         let revoke = revocation_challenge("s", "s", 7, "s").unwrap();
         let device = device_approval_challenge("s", &[Scope::Read], "s", 7).unwrap();

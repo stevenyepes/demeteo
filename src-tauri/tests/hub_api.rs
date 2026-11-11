@@ -2239,9 +2239,20 @@ async fn a_gate_challenge_is_the_protocols_pre_image_and_its_digest_is_the_webau
     t.fleet.trusted(t.a, vec!["cred-a".to_owned()]);
     let before = t.fleet.requests(t.a_instance);
 
-    for (decision, spelled) in [(Decision::Approve, "approve"), (Decision::Cancel, "cancel")] {
+    for (decision, spelled, feedback) in [
+        (Decision::Approve, "approve", None),
+        (Decision::Cancel, "cancel", None),
+        (
+            Decision::Redirect,
+            "redirect",
+            Some(" Split the parser out first\n"),
+        ),
+    ] {
         let mut body = approve_e1();
         body["decision"] = json!(spelled);
+        if let Some(feedback) = feedback {
+            body["feedback"] = json!(feedback);
+        }
         let view = gate_challenge(
             &api,
             t.a,
@@ -2267,6 +2278,7 @@ async fn a_gate_challenge_is_the_protocols_pre_image_and_its_digest_is_the_webau
             decision,
             &view.request_id,
             view.expires_at,
+            feedback,
         )
         .expect("a pre-image");
         assert_eq!(
@@ -2287,7 +2299,7 @@ async fn a_gate_challenge_is_the_protocols_pre_image_and_its_digest_is_the_webau
             "{spelled}"
         );
     }
-    assert_eq!(parts.ceremonies.held_under(A_HOLDER), 2);
+    assert_eq!(parts.ceremonies.held_under(A_HOLDER), 3);
     assert_eq!(t.fleet.requests(t.a_instance), before);
 }
 
@@ -2334,8 +2346,19 @@ async fn a_gate_challenge_with_a_nul_or_an_over_long_id_is_refused_and_nothing_i
     nul_execution["step_execution_id"] = json!("\u{0}");
     let mut long_execution = approve_e1();
     long_execution["step_execution_id"] = json!("e".repeat(257));
+    let mut nul_feedback = approve_e1();
+    nul_feedback["feedback"] = json!("ship\u{0}it");
+    let mut long_feedback = approve_e1();
+    long_feedback["feedback"] =
+        json!("x".repeat(demeteo_hub::protocol::MAX_GATE_FEEDBACK_BYTES + 1));
 
-    for body in [nul_feature, nul_execution, long_execution] {
+    for body in [
+        nul_feature,
+        nul_execution,
+        long_execution,
+        nul_feedback,
+        long_feedback,
+    ] {
         let refused = gate_challenge(
             &api,
             t.a,
@@ -2357,10 +2380,10 @@ async fn a_gate_challenge_with_a_nul_or_an_over_long_id_is_refused_and_nothing_i
 #[test]
 fn a_gate_challenge_body_with_a_field_it_does_not_have_is_not_one() {
     let mut body = approve_e1();
-    body["feedback"] = json!("looks good");
+    body["notes"] = json!("looks good");
     assert!(serde_json::from_value::<GateChallengeBody>(body).is_err());
     let mut body = approve_e1();
-    body["decision"] = json!("redirect");
+    body["decision"] = json!("reject");
     assert!(serde_json::from_value::<GateChallengeBody>(body).is_err());
 }
 
@@ -2485,6 +2508,7 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
         queued.decision,
         &envelope.request_id,
         envelope.expires_at,
+        queued.feedback.as_deref(),
     )
     .expect("a pre-image");
     assert_eq!(

@@ -3,14 +3,30 @@ import { postInSession } from './auth';
 import { isWireRequestTicket, type RequestTicket, requestTicketOf } from './requests';
 import { type AssertionFields, getGateAssertion } from './webauthn';
 
-/** Exactly the Hub's `Decision`: it refuses `redirect`, so this build cannot name it. */
-export type GateDecision = 'approve' | 'cancel';
+/** Exactly the Hub's `Decision`. */
+export type GateDecision = 'approve' | 'cancel' | 'redirect';
+
+/**
+ * `MAX_GATE_FEEDBACK_BYTES` in `demeteo-hub-protocol`, in UTF-8 bytes. The Hub
+ * refuses a longer feedback before any passkey prompt; checking it here only
+ * says so before the user has asked for one.
+ */
+export const MAX_GATE_FEEDBACK_BYTES = 8 * 1024;
+
+export function feedbackBytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
 
 export type GateDecisionInput = {
   instanceId: string;
   featureId: string;
   stepExecutionId: string;
   decision: GateDecision;
+  /**
+   * Signed into the challenge with the decision, so the instance acts on
+   * exactly these bytes. Omitted from the body when absent.
+   */
+  feedback?: string;
 };
 
 type WireGateChallenge = {
@@ -32,17 +48,21 @@ type WireGateChallenge = {
  * the `HubApiError` it was, and the caller starts again.
  *
  * Both bodies are `deny_unknown_fields` on the Hub, so neither carries a key
- * beyond the ones written here. `assertion` is `getGateAssertion`'s object,
+ * beyond the ones written here. Feedback goes on the challenge and never on
+ * the decision: the Hub queues the text the passkey signed, and refuses a
+ * decision that names any. `assertion` is `getGateAssertion`'s object,
  * untouched, for the reason `assertOver` in `passkeys.ts` gives.
  */
 export async function decideGate(input: GateDecisionInput): Promise<RequestTicket> {
   const gates = `/v1/instances/${encodeURIComponent(input.instanceId)}/gates`;
   rejectSyntheticInstance(input.instanceId, `${gates}/challenge`);
-  const challenge = await postInSession(
-    `${gates}/challenge`,
-    { feature_id: input.featureId, step_execution_id: input.stepExecutionId, decision: input.decision },
-    isWireGateChallenge,
-  );
+  const asked = {
+    feature_id: input.featureId,
+    step_execution_id: input.stepExecutionId,
+    decision: input.decision,
+    ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
+  };
+  const challenge = await postInSession(`${gates}/challenge`, asked, isWireGateChallenge);
   const assertion = await getGateAssertion(challenge.public_key);
   const body: { ceremony_id: string; request_id: string; assertion: AssertionFields } = {
     ceremony_id: challenge.ceremony_id,

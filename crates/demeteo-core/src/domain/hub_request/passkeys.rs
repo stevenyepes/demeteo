@@ -9,7 +9,7 @@
 use demeteo_hub_protocol::{
     endorsement_challenge, gate_challenge, revocation_challenge, Decision, EncodeError,
     GateDecision as GatePayload, PasskeyEndorsement, PasskeyRevocation, RefusalReason,
-    SignedRequest, WebAuthnAssertion,
+    SignedRequest, WebAuthnAssertion, MAX_GATE_FEEDBACK_BYTES,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -73,6 +73,7 @@ pub fn gate_challenge_digest(
     decision: Decision,
     request_id: &str,
     expires_at: u64,
+    feedback: Option<&str>,
 ) -> Result<[u8; 32], EncodeError> {
     gate_challenge(
         instance_id,
@@ -81,6 +82,7 @@ pub fn gate_challenge_digest(
         decision,
         request_id,
         expires_at,
+        feedback,
     )
     .map(sha256)
 }
@@ -118,6 +120,7 @@ pub fn gate_decision_word(decision: Decision) -> &'static str {
     match decision {
         Decision::Approve => "approve",
         Decision::Cancel => "cancel",
+        Decision::Redirect => "redirect",
     }
 }
 
@@ -143,9 +146,9 @@ pub fn assertion_refusal(fault: AssertionFault) -> RefusalReason {
 
 /// Whether `gate` may be applied: the step, then whether a `demeteo-runner`
 /// owns its run, then whether its gate still awaits a decision, then the
-/// assertion. `step` and `recorded` are what the caller loaded for
-/// `gate.step_execution_id`, and `runner_owned` whether the remote-run mirror
-/// holds `gate.feature_id`.
+/// feedback's length, then the assertion. `step` and `recorded` are what the
+/// caller loaded for `gate.step_execution_id`, and `runner_owned` whether the
+/// remote-run mirror holds `gate.feature_id`.
 ///
 /// A runner-owned run is a mirror with no local gate row, so it is refused
 /// before the pending check, which would call its gate decided, and before the
@@ -154,7 +157,8 @@ pub fn assertion_refusal(fault: AssertionFault) -> RefusalReason {
 /// The challenge is recomputed from the envelope and this desktop's own
 /// `pins.instance_id`, never taken from the request, so an assertion made for
 /// another instance does not verify here even when the envelope names that
-/// instance.
+/// instance. It includes `gate.feedback` byte for byte, which is what lets the
+/// caller hand that text to the gate as the human's own.
 pub fn gate_verdict<'t>(
     request: &SignedRequest,
     gate: &GatePayload,
@@ -173,6 +177,13 @@ pub fn gate_verdict<'t>(
     if gate_decision_refusal(&step.status, recorded).is_some() {
         return Err(RefusalReason::GateNotPending);
     }
+    if gate
+        .feedback
+        .as_ref()
+        .is_some_and(|text| text.len() > MAX_GATE_FEEDBACK_BYTES)
+    {
+        return Err(RefusalReason::MalformedBody);
+    }
     let challenge = gate_challenge_digest(
         &pins.instance_id,
         &gate.feature_id,
@@ -180,6 +191,7 @@ pub fn gate_verdict<'t>(
         gate.decision,
         &request.request_id,
         request.expires_at,
+        gate.feedback.as_deref(),
     )
     .map_err(|_| RefusalReason::MalformedBody)?;
     verify_assertion(

@@ -33,7 +33,7 @@ const RP_ID: &str = "hub.example";
 const ORIGIN: &str = "https://hub.example";
 const UP_AND_UV: u8 = FLAG_USER_PRESENT | FLAG_USER_VERIFIED;
 
-/// The six fields `gate_challenge` binds.
+/// The fields `gate_challenge` binds.
 #[derive(Clone, Copy)]
 struct Gate {
     instance_id: &'static str,
@@ -42,6 +42,7 @@ struct Gate {
     decision: Decision,
     request_id: &'static str,
     expires_at: u64,
+    feedback: Option<&'static str>,
 }
 
 /// The gate every assertion below is checked against.
@@ -52,6 +53,7 @@ const GATE: Gate = Gate {
     decision: Decision::Approve,
     request_id: "Zk3m0R8pQnVx2tL5aYw9bA",
     expires_at: 1_791_020_400,
+    feedback: None,
 };
 
 fn digest(gate: Gate) -> [u8; 32] {
@@ -62,6 +64,7 @@ fn digest(gate: Gate) -> [u8; 32] {
         gate.decision,
         gate.request_id,
         gate.expires_at,
+        gate.feedback,
     )
     .expect("the gate challenge encodes")
 }
@@ -226,6 +229,7 @@ fn gate_challenge_digest_matches_the_hub_md_vector() {
         Decision::Approve,
         "Zk3m0R8pQnVx2tL5aYw9bA",
         1_791_020_400,
+        None,
     )
     .expect("the HUB.md example encodes");
     assert_eq!(
@@ -235,9 +239,10 @@ fn gate_challenge_digest_matches_the_hub_md_vector() {
 }
 
 #[test]
-fn gate_decision_word_pins_both_spellings() {
+fn gate_decision_word_pins_every_spelling() {
     assert_eq!(gate_decision_word(Decision::Approve), "approve");
     assert_eq!(gate_decision_word(Decision::Cancel), "cancel");
+    assert_eq!(gate_decision_word(Decision::Redirect), "redirect");
 }
 
 #[test]
@@ -287,6 +292,15 @@ fn rejects_a_challenge_over_another_step_execution_id() {
 fn rejects_a_challenge_over_another_decision() {
     let gate = Gate {
         decision: Decision::Cancel,
+        ..GATE
+    };
+    assert_eq!(checked_over(gate), Err(AssertionFault::WrongChallenge));
+}
+
+#[test]
+fn rejects_a_challenge_over_other_feedback() {
+    let gate = Gate {
+        feedback: Some("rewritten"),
         ..GATE
     };
     assert_eq!(checked_over(gate), Err(AssertionFault::WrongChallenge));
