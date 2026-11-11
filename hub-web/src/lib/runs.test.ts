@@ -102,6 +102,7 @@ const WIRE_EVENT = {
   step_id: 'plan',
   step_execution_id: 'se-1',
   ticket_id: null,
+  failure: null,
 };
 
 const WIRE_DETAIL = {
@@ -113,8 +114,8 @@ const WIRE_DETAIL = {
   project_id: 'p-1',
   project_name: 'demeteo',
   steps: [
-    { step_id: 'plan', state: 'completed', title: 'Plan' },
-    { step_id: 'build', state: 'failed', title: null },
+    { step_id: 'plan', state: 'completed', title: 'Plan', failure: null },
+    { step_id: 'build', state: 'failed', title: null, failure: 'usage_limit' },
   ],
   tickets: { completed: 2, failed: 1, running: 3 },
   pending_gates: [WIRE_PENDING_GATE],
@@ -241,8 +242,8 @@ describe('getRunDetail', () => {
       projectId: 'p-1',
       projectName: 'demeteo',
       steps: [
-        { stepId: 'plan', state: 'completed', title: 'Plan' },
-        { stepId: 'build', state: 'failed', title: null },
+        { stepId: 'plan', state: 'completed', title: 'Plan', failure: null },
+        { stepId: 'build', state: 'failed', title: null, failure: 'usage_limit' },
       ],
       tickets: { completed: 2, failed: 1, running: 3 },
       pendingGates: [
@@ -256,6 +257,7 @@ describe('getRunDetail', () => {
           stepId: 'plan',
           stepExecutionId: 'se-1',
           ticketId: null,
+          failure: null,
         },
       ],
       gitTokenProblem: 'github_app_not_installed',
@@ -305,6 +307,9 @@ describe('getRunDetail', () => {
     ['an unknown step state', { ...WIRE_DETAIL, steps: [{ step_id: 'plan', state: 'awaiting_gate' }] }],
     ['a step with no step_id', { ...WIRE_DETAIL, steps: [{ state: 'running', title: null }] }],
     ['a step with no title', { ...WIRE_DETAIL, steps: [{ step_id: 'plan', state: 'running' }] }],
+    ['a step with no failure', { ...WIRE_DETAIL, steps: [{ step_id: 'plan', state: 'failed', title: null }] }],
+    ['an event with no failure', { ...WIRE_DETAIL, events: [{ ...WIRE_EVENT, failure: undefined }] }],
+    ['an event whose failure is no string', { ...WIRE_DETAIL, events: [{ ...WIRE_EVENT, failure: 3 }] }],
     ['no title', { ...WIRE_DETAIL, title: undefined }],
     ['no project_name', { ...WIRE_DETAIL, project_name: undefined }],
     [

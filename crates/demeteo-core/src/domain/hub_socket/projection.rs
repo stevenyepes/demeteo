@@ -24,7 +24,9 @@ enum Allowed {
 ///
 /// The outbound payload is built from the one id the kind carries and
 /// nothing else: `payload_json` is read for `status` and that id, never
-/// forwarded. A row the Hub's frame parser would refuse — an offset or
+/// forwarded. A failure's cause is not in its own row, so the session sets
+/// `payload.failure` from [`failure_reason`](super::failure_reason) over the
+/// rows before it. A row the Hub's frame parser would refuse — an offset or
 /// timestamp it cannot hold, an oversized feature id, a U+0000 — is dropped
 /// here, since no resend of it could ever succeed.
 pub fn hub_event(row: &run_events::RunEvent) -> Option<RunEvent> {

@@ -141,6 +141,7 @@ mod tests {
                 step_id: None,
                 step_execution_id: None,
                 ticket_id: None,
+                failure: None,
             },
         };
         let text = serde_json::to_string(&event).unwrap();

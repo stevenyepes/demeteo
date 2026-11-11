@@ -16,6 +16,7 @@ function event(overrides: Partial<RunEvent>): RunEvent {
     stepId: null,
     stepExecutionId: null,
     ticketId: null,
+    failure: null,
     ...overrides,
   };
 }
@@ -91,6 +92,34 @@ describe('RunEvents', () => {
       '#6Step started · s-other1m ago',
       '#5Step started · Plan work1m ago',
     ]);
+  });
+
+  it('says why a failure happened, and that no reason came when none did', () => {
+    render(
+      <RunEvents
+        events={[
+          event({ offset: 1, kind: 'step_failed', stepId: 's-implement', failure: 'usage_limit' }),
+          event({ offset: 2, kind: 'feature_failed', failure: 'usage_limit' }),
+          event({ offset: 3, kind: 'step_failed', stepId: 's-verify' }),
+          event({ offset: 4, kind: 'feature_cancelled', failure: 'budget_cap' }),
+          event({ offset: 5, kind: 'feature_cancelled' }),
+        ]}
+        now={NOW}
+        stepTitles={{ 's-implement': 'Implement Tickets' }}
+      />,
+    );
+
+    const rows = within(screen.getByRole('list', { name: 'Events' })).getAllByRole('listitem');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '#5Run cancelled1m ago',
+      '#4Run cancelledSpending cap reached1m ago',
+      '#3Step failed · s-verifyNo reason reported1m ago',
+      '#2Run failedProvider usage limit reached1m ago',
+      '#1Step failed · Implement TicketsProvider usage limit reached1m ago',
+    ]);
+    expect(within(rows[4]).getByText('Provider usage limit reached')).toHaveClass('text-ruby-400');
+    expect(within(rows[2]).getByText('No reason reported')).not.toHaveClass('text-ruby-400');
+    expect(within(rows[1]).getByText('Spending cap reached')).toHaveClass('text-ruby-400');
   });
 
   it('shows a kind it has never heard of verbatim', () => {

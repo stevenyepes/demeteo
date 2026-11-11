@@ -624,7 +624,8 @@ async fn await_terminal_and_push_inner(
                     )
                 } else {
                     format!(
-                        "wall clock {}s exceeded cap {}s",
+                        "{} {}s exceeded cap {}s",
+                        demeteo_core::domain::hub_socket::OVER_WALL_CLOCK_CAP,
                         started.elapsed().as_secs(),
                         budget.max_wall_clock_secs.unwrap_or_default()
                     )

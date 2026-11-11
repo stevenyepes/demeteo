@@ -299,7 +299,7 @@ describe('Runs', () => {
             { from: 'review', to: 'finalize' },
           ],
         },
-        steps: [{ step_id: 'plan', state: 'completed', title: 'Plan' }],
+        steps: [{ step_id: 'plan', state: 'completed', title: 'Plan', failure: null }],
         pending_gates: [
           { feature_id: 'f-new', step_execution_id: 'se-review', step_id: 'review', since: NOW - 840, step_title: 'Review gate' },
         ],

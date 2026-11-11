@@ -31,8 +31,8 @@ pub use canonical::{
     EncodeError,
 };
 pub use message::{
-    CursorAck, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult, RunEvent,
-    RunEventKind, RunEventPayload,
+    CursorAck, FailureReason, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult,
+    RunEvent, RunEventKind, RunEventPayload,
 };
 pub use request::{
     AttachmentRef, CancelFeature, GateDecision, PasskeyEndorsement, PasskeyRevocation,

@@ -121,10 +121,10 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
     status: 'running',
     workflow: WORKFLOW,
     steps: [
-      { step_id: 'plan', state: 'completed', title: null },
-      { step_id: 'implement', state: 'running', title: null },
-      { step_id: 'verify', state: 'failed', title: null },
-      { step_id: 'approve', state: 'running', title: null },
+      { step_id: 'plan', state: 'completed', title: null, failure: null },
+      { step_id: 'implement', state: 'running', title: null, failure: null },
+      { step_id: 'verify', state: 'failed', title: null, failure: 'verdict_failed' },
+      { step_id: 'approve', state: 'running', title: null, failure: null },
     ],
     tickets: { completed: 0, failed: 0, running: 0 },
     pending_gates: [{ feature_id: FEATURE, step_execution_id: 'se-approve', step_id: 'approve', since: 1_700_000_000, step_title: null }],
@@ -205,7 +205,7 @@ describe('Run', () => {
         detail({
           workflow,
           tickets: { completed: 3, failed: 1, running: 2 },
-          events: [{ offset: 7, kind: 'ticket_started', occurred_at: 1_700_000_000, step_id: null, step_execution_id: null, ticket_id: 't-9' }],
+          events: [{ offset: 7, kind: 'ticket_started', occurred_at: 1_700_000_000, step_id: null, step_execution_id: null, ticket_id: 't-9', failure: null }],
         }),
       ),
     );
@@ -287,7 +287,7 @@ describe('Run', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     stubFetch(
       json(detail({ workflow: null })),
-      json(detail({ workflow: null, steps: [{ step_id: 'plan', state: 'failed', title: null }], pending_gates: [] })),
+      json(detail({ workflow: null, steps: [{ step_id: 'plan', state: 'failed', title: null, failure: null }], pending_gates: [] })),
       json({ error: 'unauthenticated' }, 401),
     );
     render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
@@ -371,6 +371,7 @@ describe('Run', () => {
       const inspector = screen.getByRole('region', { name: 'Step' });
       expect(field(inspector, 'Id')).toHaveTextContent(/^verify$/);
       expect(field(inspector, 'State')).toHaveTextContent(runStatusMeta('failed').label);
+      expect(field(inspector, 'Reason')).toHaveTextContent(/^Validation failed$/);
       expect(within(inspector).queryByText('Pending gate')).toBeNull();
 
       await user.click(within(inspector).getByRole('button', { name: 'Close' }));
@@ -396,7 +397,7 @@ describe('Run', () => {
         json(
           detail({
             workflow: null,
-            steps: [{ step_id: 'plan', state: 'completed', title: null }],
+            steps: [{ step_id: 'plan', state: 'completed', title: null, failure: null }],
             pending_gates: [
               { feature_id: FEATURE, step_execution_id: 'se-review', step_id: 'review', since: 1_700_000_000, step_title: null },
             ],
