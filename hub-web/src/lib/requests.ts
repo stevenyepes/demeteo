@@ -1,4 +1,4 @@
-import type { EffortLevel } from '../../../src/lib/effortLevels';
+import { type EffortLevel, isEffortLevel } from '../../../src/lib/effortLevels';
 import { type Guard, getJson, HubApiError, rejectSyntheticInstance } from './api';
 import { postInSession } from './auth';
 
@@ -80,6 +80,26 @@ export async function cancelRun(instanceId: string, featureId: string): Promise<
   const path = `/v1/instances/${encodeURIComponent(instanceId)}/runs/${encodeURIComponent(featureId)}/cancel`;
   rejectSyntheticInstance(instanceId, path);
   return requestTicketOf(await postInSession(path, {}, isWireRequestTicket));
+}
+
+/**
+ * Queues a `retry_step` for the newest execution of the node. It carries no
+ * assignment: a change of agent is a `setStepAssignment` the instance has
+ * already accepted, since the two are answered in no promised order (docs/HUB.md §6.1).
+ */
+export async function retryStep(instanceId: string, featureId: string, stepId: string): Promise<RequestTicket> {
+  const path = `/v1/instances/${encodeURIComponent(instanceId)}/runs/${encodeURIComponent(featureId)}/steps/${encodeURIComponent(stepId)}/retry`;
+  rejectSyntheticInstance(instanceId, path);
+  return requestTicketOf(await postInSession(path, {}, isWireRequestTicket));
+}
+
+/** Only the fields the user set; `null` when none is. */
+export function assignmentOf(agent: string, model: string, effort: string): StepAssignment | null {
+  const assignment: StepAssignment = {};
+  if (agent !== '') assignment.agentKind = agent;
+  if (model.trim() !== '') assignment.model = model.trim();
+  if (isEffortLevel(effort)) assignment.effort = effort;
+  return Object.keys(assignment).length === 0 ? null : assignment;
 }
 
 export function isTerminal(state: RequestOutcome): boolean {

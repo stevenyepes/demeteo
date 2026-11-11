@@ -379,6 +379,21 @@ describe('Run', () => {
       expect(screen.queryByRole('region', { name: 'Step' })).toBeNull();
     });
 
+    it('offers a retry on the failed step of a failed run, and an assignment otherwise', async () => {
+      stubFetch(json(detail({ workflow: null, status: 'failed', pending_gates: [] })));
+      const user = userEvent.setup();
+      render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+      const steps = await screen.findByRole('list', { name: 'Reported steps' });
+
+      await user.click(within(steps).getByRole('button', { name: /^verify/ }));
+      const inspector = screen.getByRole('region', { name: 'Step' });
+      expect(within(inspector).getByRole('region', { name: 'Retry' })).toBeInTheDocument();
+      expect(within(inspector).queryByRole('region', { name: 'Assignment' })).toBeNull();
+
+      await user.click(within(steps).getByRole('button', { name: /^plan/ }));
+      expect(within(screen.getByRole('region', { name: 'Step' })).queryByRole('region', { name: 'Retry' })).toBeNull();
+    });
+
     it("shows a pending gate's step execution id", async () => {
       stubFetch(json(detail({ workflow: null })));
       const user = userEvent.setup();

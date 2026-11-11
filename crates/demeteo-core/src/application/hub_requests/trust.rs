@@ -55,6 +55,7 @@ impl HubRequests {
             RequestPayload::StartFeature(_)
             | RequestPayload::CancelFeature(_)
             | RequestPayload::SetStepAssignment(_)
+            | RequestPayload::RetryStep(_)
             | RequestPayload::PasskeyEndorsement(_) => Ok(TrustRecord::default()),
         }
     }

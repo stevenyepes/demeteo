@@ -42,7 +42,8 @@ pub fn required_scope(payload: &RequestPayload) -> Option<Scope> {
     match payload {
         RequestPayload::StartFeature(_)
         | RequestPayload::CancelFeature(_)
-        | RequestPayload::SetStepAssignment(_) => Some(Scope::Spend),
+        | RequestPayload::SetStepAssignment(_)
+        | RequestPayload::RetryStep(_) => Some(Scope::Spend),
         RequestPayload::GateDecision(_) => Some(Scope::Gates),
         RequestPayload::PasskeyEndorsement(_) | RequestPayload::PasskeyRevocation(_) => None,
     }
@@ -76,6 +77,7 @@ fn kind_name(payload: &RequestPayload) -> &'static str {
         RequestPayload::GateDecision(_) => "gate_decision",
         RequestPayload::PasskeyEndorsement(_) => "passkey_endorsement",
         RequestPayload::PasskeyRevocation(_) => "passkey_revocation",
+        RequestPayload::RetryStep(_) => "retry_step",
     }
 }
 
@@ -413,7 +415,7 @@ mod tests {
     use axum::http::StatusCode;
     use demeteo_hub_protocol::{
         CancelFeature, Decision, GateDecision, PasskeyEndorsement, PasskeyRevocation,
-        RefusalReason, SetStepAssignment, StartFeature, WebAuthnAssertion,
+        RefusalReason, RetryStep, SetStepAssignment, StartFeature, WebAuthnAssertion,
     };
 
     const NOW: u64 = 1_700_000_000;
@@ -433,7 +435,7 @@ mod tests {
         })
     }
 
-    fn every_kind() -> [RequestPayload; 6] {
+    fn every_kind() -> [RequestPayload; 7] {
         [
             RequestPayload::StartFeature(StartFeature {
                 project_id: "p-1".to_owned(),
@@ -473,6 +475,10 @@ mod tests {
                 credential_id: "old".to_owned(),
                 assertion: assertion(),
             }),
+            RequestPayload::RetryStep(RetryStep {
+                feature_id: "f-1".to_owned(),
+                step_id: "s-1".to_owned(),
+            }),
         ]
     }
 
@@ -496,6 +502,7 @@ mod tests {
                 Some(Scope::Gates),
                 None,
                 None,
+                Some(Scope::Spend),
             ]
         );
 

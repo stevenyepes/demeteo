@@ -196,6 +196,7 @@ fn kept() -> KeptRun {
         run_id: RUN.into(),
         request_id: REQUEST.into(),
         feature_id: FEATURE.into(),
+        reopened: false,
     }
 }
 

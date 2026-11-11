@@ -10,8 +10,9 @@ interface RequestStatusProps {
   /**
    * Called once the request has an outcome, or its poll ran out at expiry
    * without one: either way nothing this request does can change any more.
+   * The outcome is `null` in the second case.
    */
-  onSettled?: () => void;
+  onSettled?: (outcome: RequestOutcome | null) => void;
 }
 
 /** Only `accepted` may say the change took: until then the instance has not answered. */
@@ -57,10 +58,11 @@ export function RequestStatus({ instanceId, ticket, onSettled }: RequestStatusPr
     );
   }, [instanceId, ticket.requestId, ticket.expiresAt]);
 
-  const settled = isTerminal(outcome) || stopped;
+  const answer = isTerminal(outcome) ? outcome : null;
+  const settled = answer !== null || stopped;
   useEffect(() => {
-    if (settled) onSettled?.();
-  }, [settled, onSettled]);
+    if (settled) onSettled?.(answer);
+  }, [settled, answer, onSettled]);
 
   const unanswered = stopped && !isTerminal(outcome);
   const expiry = new Date(expiresAt * 1000);

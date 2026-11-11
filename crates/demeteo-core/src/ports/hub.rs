@@ -397,7 +397,9 @@ pub struct HubLaunched {
 ///
 /// Assignment and gate decisions are not here: they already reach the same
 /// call on every instance, [`crate::application::step_control`] and the
-/// presenter's `gate_decide`.
+/// presenter's `gate_decide`. A retry is, because it is not the same call: a
+/// runner's run has a driver and a row of its own that a step retry alone
+/// leaves ended, and only its control socket's retry re-opens them.
 #[async_trait]
 pub trait HubRunControl: Send + Sync {
     /// Read before the committed total is loaded or any attachment fetched:
@@ -426,6 +428,18 @@ pub trait HubRunControl: Send + Sync {
 
     /// Stop the run of `feature_id`, wherever it executes.
     async fn cancel(&self, feature_id: &crate::domain::ids::FeatureId) -> Result<(), AppError>;
+
+    /// Re-run `step_execution_id` of `feature_id` as this instance's own
+    /// retry control does, called only for a step
+    /// [`hub_retry_refusal`](crate::domain::hub_request::hub_retry_refusal)
+    /// passed. An `Err` is answered by
+    /// [`retry_call_refusal`](crate::domain::hub_request::retry_call_refusal),
+    /// so a step the executor declines must stay `AppError::Validation`.
+    async fn retry(
+        &self,
+        feature_id: &crate::domain::ids::FeatureId,
+        step_execution_id: &crate::domain::ids::StepExecutionId,
+    ) -> Result<(), AppError>;
 }
 
 pub trait BrowserLauncher: Send + Sync {

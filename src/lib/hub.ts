@@ -125,6 +125,7 @@ export type HubRequestKind =
   | "gate_decision"
   | "passkey_endorsement"
   | "passkey_revocation"
+  | "retry_step"
   | "unknown";
 
 export type HubScope = "read" | "spend" | "gates";

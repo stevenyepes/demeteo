@@ -130,6 +130,34 @@ fn the_terminal_answers_stop_the_keeper() {
 }
 
 #[test]
+fn a_retried_run_waits_out_ended_until_its_budget_or_first_token() {
+    let budget_ms = T.not_yet_budget.as_millis() as u64;
+    let mut attempts = Attempts::reopened();
+    assert!(matches!(
+        attempts.after(refused(410), NOW_MS, &T),
+        Step::Retry { .. }
+    ));
+    assert_eq!(
+        attempts.after(refused(410), NOW_MS + budget_ms, &T),
+        Step::Stop(StopReason::RunEnded)
+    );
+
+    let mut attempts = Attempts::reopened();
+    attempts.after(refused(410), NOW_MS, &T);
+    attempts.after(
+        Answer::Token {
+            expires_at: NOW_MS / 1000 + 3600,
+        },
+        NOW_MS + 1,
+        &T,
+    );
+    assert_eq!(
+        attempts.after(refused(410), NOW_MS + 2, &T),
+        Step::Stop(StopReason::RunEnded)
+    );
+}
+
+#[test]
 fn a_run_is_watched_until_it_leaves_the_statuses_that_can_use_a_credential() {
     for (status, holds, expected) in [
         (Some("pending"), false, Watch::Continue),

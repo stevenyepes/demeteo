@@ -24,7 +24,8 @@ export type HubRefusalReason =
   | "attachment_mismatch"
   | "last_credential"
   | "self_revocation"
-  | "runner_owned";
+  | "runner_owned"
+  | "step_not_retryable";
 
 export const UNSET_CEILING_COPY = "Not set — every Hub start is refused";
 
@@ -93,6 +94,7 @@ const REFUSAL_COPY: Readonly<Record<HubRefusalReason, string>> = {
   last_credential: "it would remove the last trusted passkey",
   self_revocation: "a passkey cannot revoke itself",
   runner_owned: "the run belongs to a remote runner",
+  step_not_retryable: "the step can no longer be retried",
 };
 
 const REFUSAL_REASONS: ReadonlySet<string> = new Set(Object.keys(REFUSAL_COPY));
@@ -142,6 +144,7 @@ const KIND_LABELS: Readonly<Record<HubRequestKind, string>> = {
   gate_decision: "gate decision",
   passkey_endorsement: "add passkey",
   passkey_revocation: "remove passkey",
+  retry_step: "retry step",
   unknown: "unreadable request",
 };
 

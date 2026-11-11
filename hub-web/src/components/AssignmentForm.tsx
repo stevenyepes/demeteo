@@ -1,13 +1,12 @@
 import { type FormEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { nodeTypeMeta } from '../../../src/components/canvas/types';
-import { AGENTS } from '../../../src/lib/agents';
-import { EFFORT_LABELS, EFFORT_LEVELS, isEffortLevel } from '../../../src/lib/effortLevels';
 import { isAssignable, takesAssignment } from '../../../src/lib/stepAssignment';
 import { HubApiError } from '../lib/api';
 import type { HubScope } from '../lib/fleet';
-import { type RequestTicket, type StepAssignment, setStepAssignment } from '../lib/requests';
+import { assignmentOf, type RequestTicket, setStepAssignment } from '../lib/requests';
 import type { RunStatus, StepState } from '../lib/runs';
+import { type AssignmentDraft, AssignmentFields } from './AssignmentFields';
 import { CeremonyError } from './CeremonyError';
 import { RequestStatus } from './RequestStatus';
 import { Button } from '../../../src/components/ui/Button';
@@ -28,19 +27,10 @@ interface AssignmentFormProps {
 
 type Send = { state: 'idle' } | { state: 'sending' } | { state: 'sent'; ticket: RequestTicket } | { state: 'failed'; error: unknown };
 
-/**
- * The model is free text: the Hub reports no harness catalogue, and the
- * desktop's `agentModels.ts` / `agentCatalog.ts` reach Tauri.
- */
 export function AssignmentForm({ instanceId, featureId, stepId, runStatus, state, kind, scopes }: AssignmentFormProps) {
   const headingId = useId();
   const reasonId = useId();
-  const agentId = useId();
-  const modelId = useId();
-  const effortId = useId();
-  const [agent, setAgent] = useState('');
-  const [model, setModel] = useState('');
-  const [effort, setEffort] = useState('');
+  const [draft, setDraft] = useState<AssignmentDraft>({ agent: '', model: '', effort: '' });
   const [send, setSend] = useState<Send>({ state: 'idle' });
 
   /** Bumped on unmount, so a POST that settles after it has no form to land on. */
@@ -53,7 +43,7 @@ export function AssignmentForm({ instanceId, featureId, stepId, runStatus, state
   );
 
   const blocked = blockedBy(runStatus, state, kind, scopes);
-  const assignment = assignmentOf(agent, model, effort);
+  const assignment = assignmentOf(draft.agent, draft.model, draft.effort);
   const canSend = blocked === null && assignment !== null && send.state !== 'sending';
 
   const submit = (event: FormEvent) => {
@@ -92,46 +82,7 @@ export function AssignmentForm({ instanceId, featureId, stepId, runStatus, state
           aria-describedby={blocked === null ? undefined : reasonId}
           className="flex flex-wrap items-end gap-3 disabled:opacity-40"
         >
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={agentId} className="text-xs font-medium text-slate-300">
-              Agent
-            </label>
-            <select id={agentId} value={agent} onChange={(event) => setAgent(event.target.value)} className="input-field">
-              <option value="">Unchanged</option>
-              {Object.values(AGENTS).map((meta) => (
-                <option key={meta.kind} value={meta.kind}>
-                  {meta.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={modelId} className="text-xs font-medium text-slate-300">
-              Model
-            </label>
-            <input
-              id={modelId}
-              type="text"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              placeholder="Unchanged"
-              autoComplete="off"
-              className="input-field font-mono"
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={effortId} className="text-xs font-medium text-slate-300">
-              Effort
-            </label>
-            <select id={effortId} value={effort} onChange={(event) => setEffort(event.target.value)} className="input-field">
-              <option value="">Unchanged</option>
-              {EFFORT_LEVELS.map((level) => (
-                <option key={level} value={level}>
-                  {EFFORT_LABELS[level]}
-                </option>
-              ))}
-            </select>
-          </div>
+          <AssignmentFields draft={draft} onChange={setDraft} />
           <Button variant="primary"
             type="submit"
             disabled={!canSend}>
@@ -180,15 +131,6 @@ function blockedBy(runStatus: RunStatus, state: StepState | null, kind: string |
     );
   }
   return null;
-}
-
-/** Only the fields the user set; `null` when none is. */
-function assignmentOf(agent: string, model: string, effort: string): StepAssignment | null {
-  const assignment: StepAssignment = {};
-  if (agent !== '') assignment.agentKind = agent;
-  if (model.trim() !== '') assignment.model = model.trim();
-  if (isEffortLevel(effort)) assignment.effort = effort;
-  return Object.keys(assignment).length === 0 ? null : assignment;
 }
 
 function isScopeNotGranted(error: unknown): boolean {

@@ -39,6 +39,7 @@ const EVERY_REFUSAL: HubRefusalReason[] = [
   "last_credential",
   "self_revocation",
   "runner_owned",
+  "step_not_retryable",
 ];
 
 const EVERY_STOP: HubStopReason[] = [
@@ -59,6 +60,7 @@ const EVERY_KIND: HubRequestKind[] = [
   "gate_decision",
   "passkey_endorsement",
   "passkey_revocation",
+  "retry_step",
   "unknown",
 ];
 

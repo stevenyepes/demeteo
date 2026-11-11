@@ -1,4 +1,4 @@
-//! A desktop's [`HubRunControl`]: its launch button and its stop button.
+//! A desktop's [`HubRunControl`]: its launch, stop and retry buttons.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use demeteo_hub_protocol::{RefusalReason, StartFeature};
 use crate::application::launch::{launch_run, LaunchRequest};
 use crate::application::step_control;
 use crate::domain::hub_request::desktop_start_refusal;
-use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
+use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::run_placement::{DetachedOptions, RunPlacement};
 use crate::error::AppError;
 use crate::ports::hub::{HubLaunch, HubLaunched, HubRunControl, StartSupport};
@@ -90,5 +90,15 @@ impl HubRunControl for DesktopRuns {
 
     async fn cancel(&self, feature_id: &FeatureId) -> Result<(), AppError> {
         step_control::cancel_feature(&self.ctx, feature_id).await
+    }
+
+    /// The handler has already refused a run a runner owns, so this is
+    /// always the local executor's `step_retry`.
+    async fn retry(
+        &self,
+        _: &FeatureId,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<(), AppError> {
+        step_control::retry_step(&self.ctx, step_execution_id).await
     }
 }

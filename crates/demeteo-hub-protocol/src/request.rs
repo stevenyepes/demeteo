@@ -186,6 +186,17 @@ pub struct SetStepAssignment {
     pub effort: Option<Effort>,
 }
 
+/// Re-run the newest execution of node `step_id`, as the desktop's own retry
+/// does. No assignment rides on it: a change of agent is a
+/// [`SetStepAssignment`] the instance accepted first, so each kind stays one
+/// call the instance already makes, judged by that call's own refusals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetryStep {
+    pub feature_id: String,
+    pub step_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateDecision {
@@ -219,7 +230,7 @@ pub struct PasskeyRevocation {
     pub assertion: WebAuthnAssertion,
 }
 
-/// What a Hub may ask an instance to do. Exactly six kinds, and none enables a
+/// What a Hub may ask an instance to do. Exactly seven kinds, and none enables a
 /// scope, sets a ceiling or edits project settings — those stay in the
 /// instance's own Settings.
 ///
@@ -235,6 +246,10 @@ pub enum RequestPayload {
     GateDecision(GateDecision),
     PasskeyEndorsement(PasskeyEndorsement),
     PasskeyRevocation(PasskeyRevocation),
+    /// Last, with the next payload tag, so no earlier kind's bytes change. An
+    /// instance built before it cannot parse the body and answers
+    /// `unknown_kind`.
+    RetryStep(RetryStep),
 }
 
 /// A Hub-relayed request. `signature` is the Hub's, opaque base64url; the
@@ -384,6 +399,11 @@ fn put_payload(enc: &mut Encoder, payload: &RequestPayload) -> Result<(), Encode
             enc.put_str(&b.credential_id)?;
             put_assertion(enc, &b.assertion)
         }
+        RequestPayload::RetryStep(b) => {
+            enc.put_u8(7);
+            enc.put_str(&b.feature_id)?;
+            enc.put_str(&b.step_id)
+        }
     }
 }
 
@@ -394,8 +414,9 @@ impl SignedRequest {
     /// Layout: `str("demeteo-hub/v1/request")`, `u32 v` (the message's own, not
     /// [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION)), `str request_id`, `str
     /// instance_id`, `u64 issued_at`, `u64 expires_at`, `u8` payload tag
-    /// (start_feature=1 … passkey_revocation=6), then the variant's fields in
-    /// declaration order, so `StartFeature.max_budget_cents` is an `opt<u64>`.
+    /// (start_feature=1 … passkey_revocation=6, retry_step=7), then the
+    /// variant's fields in declaration order, so `StartFeature.max_budget_cents`
+    /// is an `opt<u64>` and a [`RetryStep`] is `str feature_id, str step_id`.
     ///
     /// The one exception is `StartFeature.runner`, the last field: `None`
     /// contributes **no bytes at all**, not the `0x00` of an `opt`, so a start
