@@ -1,12 +1,16 @@
 // Tests extracted from `crates/demeteo-runner/src/hub/runs.rs` (mirrored-tests convention). `super` = that module.
 
 use super::{HubRunCredentials, RunnerHubRuns, HUB_CLIENT_ID};
+use crate::driver::{Acquire, DriverGuard};
 use crate::test_services::Rig;
 use async_trait::async_trait;
 use demeteo_core::application::attachments::StagedAttachmentInput;
-use demeteo_core::domain::ids::FeatureId;
+use demeteo_core::domain::hub_request::log::parse_scope;
+use demeteo_core::domain::hub_request::{runner_run_spec, HubRequestLogEntry, LogKind, LogOutcome};
+use demeteo_core::domain::ids::{FeatureId, StepExecutionId};
 use demeteo_core::domain::models::{LaunchedBy, StepConfig};
 use demeteo_core::domain::run_spec::RunSpec;
+use demeteo_core::error::AppError;
 use demeteo_core::ports::hub::{
     HubLaunch, HubRunControl, RefusalReason, StartFeature, StartSupport,
 };
@@ -57,11 +61,20 @@ async fn a_runner_with_no_credential_seam_refuses_hub_starts() {
     ));
 }
 
-/// Records every `(run, request, feature)` it was asked to deliver for, and
-/// delivers nothing.
+/// Records every `(run, request, feature)` it was asked to deliver or
+/// redeliver for, and delivers nothing.
 #[derive(Default)]
 struct RecordingCredentials {
     delivered: Mutex<Vec<(String, String, String)>>,
+    redelivered: Mutex<Vec<(String, String, String)>>,
+}
+
+fn recorded(run_id: &str, request_id: &str, feature_id: &FeatureId) -> (String, String, String) {
+    (
+        run_id.to_owned(),
+        request_id.to_owned(),
+        feature_id.to_string(),
+    )
 }
 
 #[async_trait]
@@ -72,11 +85,23 @@ impl HubRunCredentials for RecordingCredentials {
         request_id: &str,
         feature_id: &FeatureId,
     ) -> Result<(), String> {
-        self.delivered.lock().unwrap().push((
-            run_id.to_owned(),
-            request_id.to_owned(),
-            feature_id.to_string(),
-        ));
+        self.delivered
+            .lock()
+            .unwrap()
+            .push(recorded(run_id, request_id, feature_id));
+        Ok(())
+    }
+
+    async fn redeliver(
+        &self,
+        run_id: &str,
+        request_id: &str,
+        feature_id: &FeatureId,
+    ) -> Result<(), String> {
+        self.redelivered
+            .lock()
+            .unwrap()
+            .push(recorded(run_id, request_id, feature_id));
         Ok(())
     }
 }
@@ -226,4 +251,116 @@ async fn a_start_without_its_runner_part_is_refused_at_resolution() {
     let mut start = hub_start(None);
     start.runner = None;
     assert_eq!(runs.resolve(&start), Err(RefusalReason::MalformedBody));
+}
+
+/// A run of `f-1` whose step failed and ended it, as `owner` submitted it,
+/// with the accepted start the Hub's token is fetched under logged. The
+/// driver slot is held, so the retry's re-open attaches and no pass runs.
+fn seed_ended_run(rig: &Rig, owner: &str) -> DriverGuard {
+    let start = hub_start(None);
+    let runner = start.runner.as_deref().expect("a runner part");
+    let spec = runner_run_spec(&start, runner, "f-1", Vec::new()).expect("a spec");
+    let runs = &rig.svc.ctx.runner_runs;
+    runs.get_or_create("run-1", &serde_json::to_string(&spec).unwrap(), owner, 1)
+        .unwrap();
+    runs.update_status("run-1", "failed", Some("p-1"), Some("f-1"), None, None, 2)
+        .unwrap();
+    rig.svc
+        .ctx
+        .hub_requests
+        .append_log(&HubRequestLogEntry {
+            request_id: REQUEST_ID.into(),
+            kind: LogKind::StartFeature,
+            scope: parse_scope("spend"),
+            outcome: LogOutcome::Accepted,
+            reason: None,
+            feature_id: Some("f-1".into()),
+            received_at_ms: 1,
+        })
+        .unwrap();
+    match rig.svc.drivers.try_acquire("run-1") {
+        Acquire::Driver(guard) => guard,
+        Acquire::Attached => panic!("no driver was live"),
+    }
+}
+
+#[tokio::test]
+async fn a_hub_retry_reruns_the_step_and_fetches_a_hub_runs_token_again() {
+    let rig = Rig::new("runner_hub_runs_retry");
+    let _slot = seed_ended_run(&rig, HUB_CLIENT_ID);
+    rig.executor.answer_retries(Ok(()));
+    let (runs, credentials) = with_seam(&rig);
+
+    runs.retry(&FeatureId::from("f-1"), &StepExecutionId::from("se-build"))
+        .await
+        .expect("retried");
+
+    assert_eq!(rig.executor.retries(), ["se-build"]);
+    assert_eq!(rig.event_kinds("run-1"), ["retried"]);
+    assert_eq!(
+        *credentials.redelivered.lock().unwrap(),
+        [recorded("run-1", REQUEST_ID, &FeatureId::from("f-1"))]
+    );
+    assert!(credentials.delivered.lock().unwrap().is_empty());
+    assert!(
+        rig.svc.creds.deliver("run-1", "token".into()),
+        "the window is open"
+    );
+}
+
+#[tokio::test]
+async fn a_hub_retry_of_a_desktop_submitted_run_fetches_no_hub_token() {
+    let rig = Rig::new("runner_hub_runs_retry_desktop");
+    let _slot = seed_ended_run(&rig, "laptop-1");
+    rig.executor.answer_retries(Ok(()));
+    let (runs, credentials) = with_seam(&rig);
+
+    runs.retry(&FeatureId::from("f-1"), &StepExecutionId::from("se-build"))
+        .await
+        .expect("retried");
+
+    assert_eq!(rig.executor.retries(), ["se-build"]);
+    assert!(credentials.redelivered.lock().unwrap().is_empty());
+    assert!(!rig.svc.creds.deliver("run-1", "token".into()));
+}
+
+#[tokio::test]
+async fn a_retry_the_executor_declines_stays_a_validation_error_and_reopens_nothing() {
+    let rig = Rig::new("runner_hub_runs_retry_declined");
+    let _slot = seed_ended_run(&rig, HUB_CLIENT_ID);
+    rig.executor
+        .answer_retries(Err("Step 's-plan' is still running".into()));
+    let (runs, credentials) = with_seam(&rig);
+
+    let error = runs
+        .retry(&FeatureId::from("f-1"), &StepExecutionId::from("se-build"))
+        .await
+        .expect_err("declined");
+
+    assert!(matches!(error, AppError::Validation { .. }), "{error:?}");
+    assert!(rig.event_kinds("run-1").is_empty());
+    assert!(credentials.redelivered.lock().unwrap().is_empty());
+    assert!(
+        !rig.svc.creds.deliver("run-1", "token".into()),
+        "the window is closed"
+    );
+    assert_eq!(rig.run("run-1").status, "failed");
+}
+
+#[tokio::test]
+async fn a_retry_of_a_feature_with_no_run_here_is_not_found() {
+    let rig = Rig::new("runner_hub_runs_retry_absent");
+    rig.executor.answer_retries(Ok(()));
+    let (runs, _) = with_seam(&rig);
+
+    let error = runs
+        .retry(
+            &FeatureId::from("f-missing"),
+            &StepExecutionId::from("se-build"),
+        )
+        .await
+        .expect_err("no run");
+
+    assert!(matches!(error, AppError::NotFound { .. }), "{error:?}");
+    assert!(rig.executor.retries().is_empty());
 }

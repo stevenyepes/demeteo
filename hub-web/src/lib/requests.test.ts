@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HubApiError, setCsrfToken } from './api';
-import { getRequestStatus, isTerminal, pollRequestStatus, type RequestState, setStepAssignment } from './requests';
+import {
+  assignmentOf,
+  getRequestStatus,
+  isTerminal,
+  pollRequestStatus,
+  type RequestState,
+  retryStep,
+  setStepAssignment,
+} from './requests';
 
 type Exchange = { method: 'GET' | 'POST'; path: string; answer: Response };
 
@@ -225,6 +233,40 @@ describe('setStepAssignment', () => {
     const error = await rejectionOf(setStepAssignment(INSTANCE_ID, 'f-1', 'build', { model: 'm' }));
 
     expect([error.status, error.code]).toEqual([403, 'scope_not_granted']);
+  });
+});
+
+describe('retryStep', () => {
+  const TICKET = { request_id: REQUEST_ID, expires_at: EXPIRES_AT };
+
+  it('posts an empty body to the encoded path and answers the ticket', async () => {
+    const path = `/v1/instances/${INSTANCE_ID}/runs/f%2F1/steps/a%3Fb/retry`;
+    const { sent, bodies } = stubFetch([post(path, TICKET)]);
+
+    await expect(retryStep(INSTANCE_ID, 'f/1', 'a?b')).resolves.toEqual({
+      requestId: REQUEST_ID,
+      expiresAt: EXPIRES_AT,
+    });
+    expect(sent).toEqual([`POST ${path}`]);
+    expect(bodies).toEqual([{}]);
+  });
+
+  it('answers an id that is not a UUID as not found, without asking', async () => {
+    const { sent } = stubFetch([]);
+
+    const error = await rejectionOf(retryStep('x', 'f-1', 'build'));
+
+    expect([error.status, error.code]).toEqual([404, 'not_found']);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('assignmentOf', () => {
+  it('keeps only the fields that were set', () => {
+    expect(assignmentOf('', '', '')).toBeNull();
+    expect(assignmentOf('', '  ', 'nonsense')).toBeNull();
+    expect(assignmentOf('codex', ' gpt-5 ', 'high')).toEqual({ agentKind: 'codex', model: 'gpt-5', effort: 'high' });
+    expect(assignmentOf('', '', 'low')).toEqual({ effort: 'low' });
   });
 });
 

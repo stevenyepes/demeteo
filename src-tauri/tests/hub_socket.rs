@@ -2027,10 +2027,10 @@ async fn a_registry_is_drained_only_when_every_registration_is_gone() {
 /// The name the request-signing key goes by in every key service below.
 const SIGNING_KEY: &str = "demeteo-hub-signing";
 
-/// The six kinds: the fixture a payload of each is read from, the tag it
+/// The seven kinds: the fixture a payload of each is read from, the tag it
 /// travels under, and the scope `docs/HUB.md` §7 files it under. Spelled
 /// here and not asked of the Hub, which is what is being checked.
-const KINDS: [(&str, &str, Option<Scope>); 6] = [
+const KINDS: [(&str, &str, Option<Scope>); 7] = [
     (
         "signed_request_start_feature.json",
         "start_feature",
@@ -2060,6 +2060,11 @@ const KINDS: [(&str, &str, Option<Scope>); 6] = [
         "signed_request_passkey_revocation.json",
         "passkey_revocation",
         None,
+    ),
+    (
+        "signed_request_retry_step.json",
+        "retry_step",
+        Some(Scope::Spend),
     ),
 ];
 
@@ -2853,7 +2858,7 @@ async fn every_delivered_request_verifies_under_the_hub_public_key() {
     assert_eq!(ended(session).await, Ended::PeerGone);
     assert_eq!(
         sessions.deliveries(),
-        [(RequestStatus::Queued, 1, Some(NOW + 45)); 6]
+        [(RequestStatus::Queued, 1, Some(NOW + 45)); 7]
     );
 }
 

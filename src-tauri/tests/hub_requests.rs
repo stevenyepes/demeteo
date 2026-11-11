@@ -169,8 +169,8 @@ mod decision {
     };
     use demeteo_hub::protocol::{
         AttachmentRef, CancelFeature, Decision, GateDecision, PasskeyEndorsement,
-        PasskeyRevocation, RefusalReason, RequestPayload, Scope, SetStepAssignment, SignedRequest,
-        StartFeature, WebAuthnAssertion,
+        PasskeyRevocation, RefusalReason, RequestPayload, RetryStep, Scope, SetStepAssignment,
+        SignedRequest, StartFeature, WebAuthnAssertion,
     };
 
     const INSTANCE: &str = "i-7f3a9c";
@@ -244,6 +244,13 @@ mod decision {
         expected: Kind,
     }
 
+    fn retry_step() -> RequestPayload {
+        RequestPayload::RetryStep(RetryStep {
+            feature_id: "f-1".into(),
+            step_id: "s-1".into(),
+        })
+    }
+
     fn row(name: &'static str, payload: RequestPayload, expected: Kind) -> Row {
         Row {
             name,
@@ -269,6 +276,7 @@ mod decision {
         Assign,
         Gate,
         Revoke,
+        Retry,
         Refuse(RefusalReason),
         Drop(DropReason),
         Defer,
@@ -281,6 +289,7 @@ mod decision {
             Verdict::Execute(ExecuteKind::SetStepAssignment(_)) => Kind::Assign,
             Verdict::Execute(ExecuteKind::GateDecision(_)) => Kind::Gate,
             Verdict::Execute(ExecuteKind::PasskeyRevocation(_)) => Kind::Revoke,
+            Verdict::Execute(ExecuteKind::RetryStep(_)) => Kind::Retry,
             Verdict::Refuse(reason) => Kind::Refuse(reason),
             Verdict::Drop(reason) => Kind::Drop(reason),
             Verdict::Defer => Kind::Defer,
@@ -532,6 +541,20 @@ mod decision {
                 }),
                 Kind::Assign,
             ),
+            // A retry commits no cap: a committed total already past both
+            // ceilings does not refuse it, and spend off still does.
+            Row {
+                committed: 10_000,
+                ..row(
+                    "retry step, ceilings already met",
+                    retry_step(),
+                    Kind::Retry,
+                )
+            },
+            Row {
+                policy: policy(false, true, Some(500), Some(2_000)),
+                ..row("retry step, spend off", retry_step(), refuse(ScopeOff))
+            },
             // Gates and passkeys.
             row("gate decision, gates on", gate(), Kind::Gate),
             Row {
@@ -1434,7 +1457,7 @@ mod handler {
     use demeteo_hub::ports::KeyService;
     use demeteo_hub::protocol::{
         AttachmentRef, CancelFeature, Effort, RefusalReason, RequestOutcome, RequestPayload,
-        RequestResult, SetStepAssignment, SignedRequest, StartFeature,
+        RequestResult, RetryStep, SetStepAssignment, SignedRequest, StartFeature,
         StepOverride as WireStepOverride,
     };
     use sha2::{Digest, Sha256};
@@ -1444,18 +1467,25 @@ mod handler {
     const NOW: u64 = 1_800_000_000;
     const ATTACHMENT_ID: &str = "0b5e4c1a-2f7d-4e8b-9a3c-6d1f0e2b7a94";
 
-    /// Records each launch, cancel and assignment it is given; every other
-    /// method panics, so no refusal can pass by reaching some other effect.
-    /// A `start_error` makes `feature_start` fail with it after recording.
+    /// Records each launch, cancel, assignment and retry it is given; every
+    /// other method panics, so no refusal can pass by reaching some other
+    /// effect. A `start_error` makes `feature_start` fail with it after
+    /// recording, and a `retry_error` makes `step_retry` decline the step.
     #[derive(Default)]
     struct ExecutorSpy {
         start_error: Mutex<Option<String>>,
+        retry_error: Mutex<Option<String>>,
         launches: Mutex<Vec<FeatureLaunch>>,
         cancels: Mutex<Vec<String>>,
         assignments: Mutex<Vec<(String, StepAssignment)>>,
+        retries: Mutex<Vec<String>>,
     }
 
     impl ExecutorSpy {
+        fn retries(&self) -> Vec<String> {
+            self.retries.lock().expect("lock").clone()
+        }
+
         fn launches(&self) -> Vec<FeatureLaunch> {
             self.launches.lock().expect("lock").clone()
         }
@@ -1469,7 +1499,10 @@ mod handler {
         }
 
         fn effects(&self) -> usize {
-            self.launches().len() + self.cancels().len() + self.assignments().len()
+            self.launches().len()
+                + self.cancels().len()
+                + self.assignments().len()
+                + self.retries().len()
         }
     }
 
@@ -1561,12 +1594,21 @@ mod handler {
         }
         async fn step_retry(
             &self,
-            _: &str,
-            _: Option<&str>,
-            _: Option<&str>,
-            _: Option<EffortLevel>,
+            execution_id: &str,
+            model: Option<&str>,
+            agent: Option<&str>,
+            effort: Option<EffortLevel>,
         ) -> Result<(), AppError> {
-            unexpected()
+            assert_eq!(
+                (model, agent, effort),
+                (None, None, None),
+                "a Hub retry re-pins nothing feature-wide"
+            );
+            self.retries.lock().expect("lock").push(execution_id.into());
+            match self.retry_error.lock().expect("lock").clone() {
+                Some(error) => Err(AppError::validation(error)),
+                None => Ok(()),
+            }
         }
         async fn step_set_assignment(
             &self,
@@ -2680,6 +2722,7 @@ mod handler {
     #[derive(Default)]
     struct RefusingStarts {
         cancels: Mutex<Vec<String>>,
+        retries: Mutex<Vec<(String, String)>>,
     }
 
     #[async_trait]
@@ -2705,6 +2748,18 @@ mod handler {
                 .lock()
                 .expect("lock")
                 .push(feature_id.as_ref().to_string());
+            Ok(())
+        }
+
+        async fn retry(
+            &self,
+            feature_id: &FeatureId,
+            step_execution_id: &StepExecutionId,
+        ) -> Result<(), AppError> {
+            self.retries.lock().expect("lock").push((
+                feature_id.as_ref().to_string(),
+                step_execution_id.as_ref().to_string(),
+            ));
             Ok(())
         }
     }
@@ -2819,6 +2874,10 @@ mod handler {
 
         async fn cancel(&self, _: &FeatureId) -> Result<(), AppError> {
             panic!("nothing was asked to cancel")
+        }
+
+        async fn retry(&self, _: &FeatureId, _: &StepExecutionId) -> Result<(), AppError> {
+            panic!("nothing was asked to retry")
         }
     }
 
@@ -3019,6 +3078,7 @@ mod handler {
         for request in [
             cancel("r-cancel", "f-1"),
             assign("r-assign", "f-1", "s-build"),
+            retry("r-retry", "f-1", "s-build"),
         ] {
             let text = hub.signed(request).await;
             let result = desktop.handle(&text).await.expect("an answer");
@@ -3026,7 +3086,143 @@ mod handler {
         }
 
         assert_eq!(desktop.spy.effects(), 0);
-        assert_eq!(desktop.log_len(), 2);
+        assert_eq!(desktop.log_len(), 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn retry(request_id: &str, feature_id: &str, step_id: &str) -> SignedRequest {
+        request(
+            request_id,
+            RequestPayload::RetryStep(RetryStep {
+                feature_id: feature_id.into(),
+                step_id: step_id.into(),
+            }),
+        )
+    }
+
+    /// The desktop's own retry, on the newest execution of the node, with
+    /// nothing feature-wide re-pinned.
+    #[tokio::test]
+    async fn an_accepted_retry_reruns_the_latest_execution_of_the_step() {
+        let hub = Hub::new();
+        let dir = paired("retry", &hub).await;
+        let desktop = Desktop::open(&dir);
+        desktop.seed_run();
+        let text = hub.signed(retry("r-retry", "f-1", "s-build")).await;
+
+        let result = desktop.handle(&text).await.expect("an answer");
+
+        assert_eq!(result.outcome, RequestOutcome::Accepted);
+        assert_eq!(desktop.spy.retries(), ["se-build-2"]);
+        assert_eq!(desktop.spy.effects(), 1);
+        assert_eq!(
+            desktop.last_log(),
+            (LogKind::RetryStep, LogOutcome::Accepted, None)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A runner's retry is its control socket's, which re-opens the run, so it
+    /// lands in the run control and not in the executor behind it.
+    #[tokio::test]
+    async fn an_accepted_retry_reaches_the_instance_run_control() {
+        let hub = Hub::new();
+        let dir = paired("retry-runs", &hub).await;
+        let runs = Arc::new(RefusingStarts::default());
+        let runner = Desktop::open(&dir).with_runs(runs.clone());
+        runner.seed_run();
+        let text = hub.signed(retry("r-retry-runs", "f-1", "s-build")).await;
+
+        let result = runner.handle(&text).await.expect("an answer");
+
+        assert_eq!(result.outcome, RequestOutcome::Accepted);
+        assert_eq!(
+            *runs.retries.lock().expect("lock"),
+            [("f-1".to_string(), "se-build-2".to_string())]
+        );
+        assert_eq!(runner.spy.effects(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_retry_that_cannot_land_is_refused_without_an_effect() {
+        let hub = Hub::new();
+        let cases = [
+            (
+                "retry-unknown-feature",
+                retry("r-1", "f-missing", "s-build"),
+                RefusalReason::UnknownFeature,
+                "unknown_feature",
+            ),
+            (
+                "retry-unknown-step",
+                retry("r-2", "f-1", "s-missing"),
+                RefusalReason::UnknownStep,
+                "unknown_step",
+            ),
+            (
+                "retry-running-step",
+                retry("r-3", "f-1", "s-review"),
+                RefusalReason::StepNotRetryable,
+                "step_not_retryable",
+            ),
+        ];
+        for (tag, request, reason, logged) in cases {
+            let dir = paired(tag, &hub).await;
+            let desktop = Desktop::open(&dir);
+            desktop.seed_run();
+            let text = hub.signed(request).await;
+
+            let result = desktop.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, refused(reason), "{tag}");
+            assert_eq!(desktop.spy.effects(), 0, "{tag}");
+            assert_eq!(
+                desktop.last_log(),
+                (LogKind::RetryStep, LogOutcome::Refused, Some(logged.into())),
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// The upstream check needs the graph, so the executor makes it; its
+    /// refusal is the same reason, not a malformed body.
+    #[tokio::test]
+    async fn a_retry_the_executor_declines_is_step_not_retryable() {
+        let hub = Hub::new();
+        let dir = paired("retry-declined", &hub).await;
+        let desktop = Desktop::open(&dir);
+        desktop.seed_run();
+        *desktop.spy.retry_error.lock().expect("lock") =
+            Some("Step 's-plan' is still running".into());
+        let text = hub.signed(retry("r-declined", "f-1", "s-build")).await;
+
+        let result = desktop.handle(&text).await.expect("an answer");
+
+        assert_eq!(result.outcome, refused(RefusalReason::StepNotRetryable));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The desktop only mirrors a run a runner owns; its step rows are a
+    /// report, so the retry is refused before their status is read.
+    #[tokio::test]
+    async fn a_retry_of_a_runner_owned_run_is_runner_owned() {
+        let hub = Hub::new();
+        let dir = paired("retry-runner-owned", &hub).await;
+        let desktop = Desktop::open(&dir);
+        desktop.seed_run();
+        desktop
+            .ctx
+            .remote_run_mirror
+            .upsert_submitted("m-1", "run-1", Some("p-1"), Some("f-1"), "t", 0)
+            .expect("mirror the run");
+        let text = hub.signed(retry("r-mirrored", "f-1", "s-build")).await;
+
+        let result = desktop.handle(&text).await.expect("an answer");
+
+        assert_eq!(result.outcome, refused(RefusalReason::RunnerOwned));
+        assert_eq!(desktop.spy.effects(), 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -1,8 +1,8 @@
 use demeteo_hub_protocol::{
     endorsement_challenge, gate_challenge, revocation_challenge, AttachmentRef, CancelFeature,
     Decision, Effort, GateDecision, PasskeyEndorsement, PasskeyRevocation, RequestPayload,
-    RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment, SignedRequest, StartFeature,
-    StepOverride, WebAuthnAssertion,
+    RetryStep, RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment, SignedRequest,
+    StartFeature, StepOverride, WebAuthnAssertion,
 };
 
 fn assertion() -> WebAuthnAssertion {
@@ -110,6 +110,28 @@ fn cancel_feature_matches_hand_written_golden_bytes() {
         0x00, 0x00, 0x00, 0x04, 0x66, 0x65, 0x61, 0x74,
     ];
     assert_eq!(cancel().signing_bytes(), Ok(golden));
+}
+
+#[test]
+fn retry_step_matches_hand_written_golden_bytes() {
+    let golden: Vec<u8> = vec![
+        // str("demeteo-hub/v1/request")
+        0x00, 0x00, 0x00, 0x16, 0x64, 0x65, 0x6D, 0x65, 0x74, 0x65, 0x6F, 0x2D, 0x68, 0x75, 0x62,
+        0x2F, 0x76, 0x31, 0x2F, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, // u32 v = 1
+        0x00, 0x00, 0x00, 0x01, // str request_id "req"
+        0x00, 0x00, 0x00, 0x03, 0x72, 0x65, 0x71, // str instance_id "inst"
+        0x00, 0x00, 0x00, 0x04, 0x69, 0x6E, 0x73, 0x74, // u64 issued_at = 100
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, // u64 expires_at = 200
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC8, // u8 tag: retry_step
+        0x07, // str feature_id "feat"
+        0x00, 0x00, 0x00, 0x04, 0x66, 0x65, 0x61, 0x74, // str step_id "s-impl"
+        0x00, 0x00, 0x00, 0x06, 0x73, 0x2D, 0x69, 0x6D, 0x70, 0x6C,
+    ];
+    let retry = request(RequestPayload::RetryStep(RetryStep {
+        feature_id: "feat".into(),
+        step_id: "s-impl".into(),
+    }));
+    assert_eq!(retry.signing_bytes(), Ok(golden));
 }
 
 fn minimal_start(runner: Option<Box<RunnerStart>>) -> SignedRequest {
@@ -370,6 +392,22 @@ fn other_variants_react_to_their_fields() {
         ("agent_kind", set(|b| b.agent_kind = None)),
         ("model", set(|b| b.model = None)),
         ("effort", set(|b| b.effort = Some(Effort::High))),
+    ] {
+        assert_ne!(v, base, "changing {field} must change the bytes");
+    }
+
+    let retry = |f: fn(&mut RetryStep)| {
+        let mut b = RetryStep {
+            feature_id: "feat".into(),
+            step_id: "s".into(),
+        };
+        f(&mut b);
+        bytes(&request(RequestPayload::RetryStep(b)))
+    };
+    let base = retry(|_| {});
+    for (field, v) in [
+        ("feature_id", retry(|b| b.feature_id = "f2".into())),
+        ("step_id", retry(|b| b.step_id = "s2".into())),
     ] {
         assert_ne!(v, base, "changing {field} must change the bytes");
     }

@@ -1970,6 +1970,14 @@ impl crate::ports::hub::HubRunControl for RefusingStarts {
     async fn cancel(&self, _: &FeatureId) -> Result<(), crate::error::AppError> {
         panic!("nothing was asked to cancel")
     }
+
+    async fn retry(
+        &self,
+        _: &FeatureId,
+        _: &crate::domain::ids::StepExecutionId,
+    ) -> Result<(), crate::error::AppError> {
+        panic!("nothing was asked to retry")
+    }
 }
 
 /// A runner's composition: a pairing over the store it was handed, with a

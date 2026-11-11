@@ -11,13 +11,13 @@
 
 use demeteo_hub_protocol::{
     AttachmentRef, CancelFeature, Effort, GateDecision as GatePayload, PasskeyRevocation,
-    RefusalReason, RequestPayload, Scope, SetStepAssignment, SignedRequest, StartFeature,
-    StepOverride as WireStepOverride,
+    RefusalReason, RequestPayload, RetryStep, Scope, SetStepAssignment, SignedRequest,
+    StartFeature, StepOverride as WireStepOverride,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::domain::models::{EffortLevel, StepExecution, StepOverride};
-use crate::domain::run_control::{out_of_band_refusal, RunAction};
+use crate::domain::run_control::{out_of_band_refusal, retry_refusal, RunAction};
 use crate::domain::step_assignment::{
     assignment_refusal, harness_refusal, identifier_refusal, kind_refusal, StepAssignment,
 };
@@ -80,7 +80,8 @@ pub fn required_scope(payload: &RequestPayload) -> Option<Scope> {
     match payload {
         RequestPayload::StartFeature(_)
         | RequestPayload::CancelFeature(_)
-        | RequestPayload::SetStepAssignment(_) => Some(Scope::Spend),
+        | RequestPayload::SetStepAssignment(_)
+        | RequestPayload::RetryStep(_) => Some(Scope::Spend),
         RequestPayload::GateDecision(_) => Some(Scope::Gates),
         RequestPayload::PasskeyEndorsement(_) | RequestPayload::PasskeyRevocation(_) => None,
     }
@@ -152,6 +153,7 @@ pub enum ExecuteKind<'a> {
     StartFeature(&'a StartFeature),
     CancelFeature(&'a CancelFeature),
     SetStepAssignment(&'a SetStepAssignment),
+    RetryStep(&'a RetryStep),
     GateDecision(&'a GatePayload),
     PasskeyRevocation(&'a PasskeyRevocation),
 }
@@ -269,6 +271,10 @@ pub fn decide<'a>(
         RequestPayload::SetStepAssignment(change) => {
             Verdict::Execute(ExecuteKind::SetStepAssignment(change))
         }
+        // No ceiling: the ceilings bound the caps Hub starts commit, and a
+        // retry commits no new cap. It re-runs the step under the run's own
+        // `max_budget_usd`, which the start was already judged on (HUB.md §7).
+        RequestPayload::RetryStep(retry) => Verdict::Execute(ExecuteKind::RetryStep(retry)),
         RequestPayload::GateDecision(gate) => Verdict::Execute(ExecuteKind::GateDecision(gate)),
         // Refused, assertion unread, until a Hub producer and a desktop-side
         // confirmation or trusted-set view exist (docs/HUB.md §11 item 20).
@@ -366,6 +372,17 @@ pub fn reassignment_refusal(
     identifier_refusal(assignment).map(|_| RefusalReason::MalformedBody)
 }
 
+/// The refusals `StepExecutor::step_retry` would return before it touches a
+/// row, as the reason the Hub is told — decided before the call for
+/// [`reassignment_refusal`]'s reason. What the executor checks after these,
+/// that no upstream step is still working, needs the workflow graph, and is
+/// answered from the call's error.
+pub fn hub_retry_refusal(step: &StepExecution) -> Option<RefusalReason> {
+    (retry_refusal(&step.status).is_some()
+        || out_of_band_refusal(RunAction::Retry, step.step_id.as_str()).is_some())
+    .then_some(RefusalReason::StepNotRetryable)
+}
+
 /// [`reassignment_refusal`]'s harness and identifier refusals, applied to a
 /// start's feature-wide pair and to every override, harnesses first. No
 /// launch path the app itself offers checks these — the UI picks from the
@@ -459,6 +476,20 @@ pub fn cancel_refusal(error: &AppError) -> RefusalReason {
     }
 }
 
+/// The reason a retry that passed [`hub_retry_refusal`] is refused when its
+/// call fails.
+///
+/// `Validation` is the executor declining the step after all: an upstream
+/// step still working, or a status that moved between the read and the call.
+/// `NotFound` is [`cancel_refusal`]'s case, a runner holding the Feature but
+/// no run of it. Every other failure is the instance's own.
+pub fn retry_call_refusal(error: &AppError) -> RefusalReason {
+    match error {
+        AppError::Validation { .. } => RefusalReason::StepNotRetryable,
+        _ => cancel_refusal(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +567,44 @@ mod tests {
                 "{failed}"
             );
         }
+    }
+
+    /// A retry commits no cap, so no total is loaded for it and a policy with
+    /// both ceilings unset, which refuses every start, still lets it through.
+    #[test]
+    fn a_retry_reads_no_total_and_meets_no_ceiling() {
+        let retry = RequestPayload::RetryStep(RetryStep {
+            feature_id: "f-1".into(),
+            step_id: "s-implement".into(),
+        });
+        assert!(!needs_committed_total(&retry, StartSupport::Launches));
+        assert!(matches!(
+            decide(
+                &retry,
+                Consumption::Fresh,
+                None,
+                &HubLocalPolicy::default(),
+                StartSupport::Refused
+            ),
+            Verdict::Execute(ExecuteKind::RetryStep(_))
+        ));
+    }
+
+    #[test]
+    fn a_retry_the_executor_declines_is_not_retryable_and_any_other_failure_is_the_cancels() {
+        assert_eq!(
+            retry_call_refusal(&AppError::validation(
+                "Step 's-plan' is still running; wait for it to finish before retrying this step."
+            )),
+            RefusalReason::StepNotRetryable
+        );
+        assert_eq!(
+            retry_call_refusal(&AppError::not_found("no run of feature f-1")),
+            RefusalReason::UnknownFeature
+        );
+        assert_eq!(
+            retry_call_refusal(&AppError::internal("run vanished during retry")),
+            RefusalReason::MalformedBody
+        );
     }
 }

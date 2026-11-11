@@ -9,6 +9,7 @@ import type { RunDetail } from '../lib/runs';
 import { AssignmentForm } from './AssignmentForm';
 import { GatePanel } from './GatePanel';
 import { RequestStatus } from './RequestStatus';
+import { RetryForm } from './RetryForm';
 import { Button } from '../../../src/components/ui/Button';
 
 /**
@@ -97,16 +98,27 @@ export function StepInspector({
           </>
         )}
       </dl>
-      <AssignmentForm
-        key={stepId}
-        instanceId={instanceId}
-        featureId={featureId}
-        stepId={stepId}
-        runStatus={detail.status}
-        state={step?.state ?? null}
-        kind={node?.type ?? null}
-        scopes={scopes}
-      />
+      {detail.status === 'failed' && step?.state === 'failed' ? (
+        <RetryForm
+          key={stepId}
+          instanceId={instanceId}
+          featureId={featureId}
+          stepId={stepId}
+          kind={node?.type ?? null}
+          scopes={scopes}
+        />
+      ) : (
+        <AssignmentForm
+          key={stepId}
+          instanceId={instanceId}
+          featureId={featureId}
+          stepId={stepId}
+          runStatus={detail.status}
+          state={step?.state ?? null}
+          kind={node?.type ?? null}
+          scopes={scopes}
+        />
+      )}
       {gate !== undefined && (
         <GatePanel
           key={gate.stepExecutionId}
