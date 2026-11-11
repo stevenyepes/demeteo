@@ -13,7 +13,7 @@ use demeteo_hub::auth::policy::Status;
 use demeteo_hub::auth::session::SessionSecret;
 use demeteo_hub::auth::testing::SoftAuthenticator;
 use demeteo_hub::protocol::{
-    gate_challenge, Decision, GateDecision, RequestPayload, RunEvent, RunEventKind,
+    gate_challenge, Decision, FailureReason, GateDecision, RequestPayload, RunEvent, RunEventKind,
     RunEventPayload, WebAuthnAssertion,
 };
 use demeteo_hub::routes::AppState;
@@ -131,18 +131,28 @@ async fn request_rows(db: &Db) -> i64 {
 }
 
 async fn started(db: &Db, tenant: &Tenant, feature_id: &str) {
-    let event = RunEvent {
-        v: 1,
-        feature_id: feature_id.to_owned(),
-        offset: 1,
-        kind: RunEventKind::FeatureStarted,
-        occurred_at: 1_700_000_000,
-        payload: RunEventPayload {
-            step_id: None,
-            step_execution_id: None,
-            ticket_id: None,
+    mirrored(
+        db,
+        tenant,
+        RunEvent {
+            v: 1,
+            feature_id: feature_id.to_owned(),
+            offset: 1,
+            kind: RunEventKind::FeatureStarted,
+            occurred_at: 1_700_000_000,
+            payload: RunEventPayload {
+                step_id: None,
+                step_execution_id: None,
+                ticket_id: None,
+                failure: None,
+            },
         },
-    };
+    )
+    .await;
+}
+
+async fn mirrored(db: &Db, tenant: &Tenant, event: RunEvent) {
+    let feature_id = &event.feature_id;
     let new = NewEvent {
         feature_id: feature_id.to_owned(),
         event_offset: event.offset,
@@ -209,6 +219,73 @@ async fn every_read_of_another_tenants_instance_run_or_request_is_not_found() {
             assert_eq!(listed_ids(&runs, "runs", "feature_id"), [run]);
             assert_eq!(listed_ids(&runs, "runs", "instance_id"), [own]);
         }
+    })
+    .await;
+}
+
+/// A reason stored through the mirror is answered on the event and on its
+/// failed Step; a failure from an instance that gave none answers `null`.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_run_answers_why_each_failure_happened_as_its_instance_said() {
+    in_fresh_schema(|db| async move {
+        let tenant = Tenant::new(&db, &ALL_SCOPES).await;
+        started(&db, &tenant, "f-1").await;
+        let failed = |offset, step: &str, failure| RunEvent {
+            v: 1,
+            feature_id: "f-1".to_owned(),
+            offset,
+            kind: RunEventKind::StepFailed,
+            occurred_at: 1_700_000_000 + offset,
+            payload: RunEventPayload {
+                step_id: Some(step.to_owned()),
+                failure,
+                ..RunEventPayload::default()
+            },
+        };
+        mirrored(
+            &db,
+            &tenant,
+            failed(2, "s-implement", Some(FailureReason::UsageLimit)),
+        )
+        .await;
+        mirrored(&db, &tenant, failed(3, "s-verify", None)).await;
+        let base = serve_state(state_over(db.clone())).await;
+
+        let (status, run) = get_as(&base, &tenant.at("/runs/f-1"), &tenant.session).await;
+
+        assert_eq!(status, 200, "{run}");
+        let events: Vec<(&Value, &Value)> = run["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| (&event["kind"], &event["failure"]))
+            .collect();
+        assert_eq!(
+            events,
+            [
+                (&json!("feature_started"), &Value::Null),
+                (&json!("step_failed"), &json!("usage_limit")),
+                (&json!("step_failed"), &Value::Null),
+            ]
+        );
+        let steps: Vec<(&Value, &Value, &Value)> = run["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| (&step["step_id"], &step["state"], &step["failure"]))
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                (
+                    &json!("s-implement"),
+                    &json!("failed"),
+                    &json!("usage_limit")
+                ),
+                (&json!("s-verify"), &json!("failed"), &Value::Null),
+            ]
+        );
     })
     .await;
 }

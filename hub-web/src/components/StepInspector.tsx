@@ -3,6 +3,7 @@ import { useId } from 'react';
 import { nodeTypeMeta } from '../../../src/components/canvas/types';
 import { Chip } from '../../../src/components/ui/Chip';
 import { runStatusMeta, TONE_TEXT } from '../../../src/lib/runStatus';
+import { failureReasonText } from '../lib/failureReason';
 import type { HubScope } from '../lib/fleet';
 import type { RequestTicket } from '../lib/requests';
 import type { RunDetail } from '../lib/runs';
@@ -78,6 +79,14 @@ export function StepInspector({
         <dd className={state === null ? undefined : TONE_TEXT[state.tone]}>
           {state === null ? 'not reported' : state.label}
         </dd>
+        {step?.state === 'failed' && (
+          <>
+            <dt>Reason</dt>
+            <dd className={step.failure === null ? 'text-slate-400' : TONE_TEXT.ruby}>
+              {failureReasonText(step.failure)}
+            </dd>
+          </>
+        )}
         {node !== undefined && (
           <>
             <dt>Kind</dt>

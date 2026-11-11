@@ -577,7 +577,8 @@ impl ExecutionDriver {
                 }
                 _ = &mut wall_sleep => {
                     run_failed = Some(format!(
-                        "Verifier exceeded wall clock cap ({}s)",
+                        "Verifier {} ({}s)",
+                        crate::domain::hub_socket::WALL_CLOCK_CAP_PHRASE,
                         wall_s
                     ));
                     break;

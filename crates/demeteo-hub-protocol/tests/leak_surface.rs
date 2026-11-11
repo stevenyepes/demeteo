@@ -486,12 +486,12 @@ fn no_todo_or_line_number_citation_in_the_crate() {
 fn every_spec_public_name_is_importable_from_the_crate_root() {
     use demeteo_hub_protocol::{
         endorsement_challenge, gate_challenge, revocation_challenge, AttachmentRef, CancelFeature,
-        CursorAck, Decision, Effort, EncodeError, GateDecision, Hello, PasskeyEndorsement,
-        PasskeyRevocation, ProjectSnapshot, RefusalReason, RequestHeader, RequestOutcome,
-        RequestPayload, RequestResult, RunEvent, RunEventKind, RunEventPayload, RunShapeSettings,
-        RunnerRepository, RunnerStart, RunnerWorkflow, Scope, SetStepAssignment, SignedRequest,
-        Snapshot, StartFeature, StepOverride, WebAuthnAssertion, WorkflowVersionSnapshot,
-        PROTOCOL_VERSION,
+        CursorAck, Decision, Effort, EncodeError, FailureReason, GateDecision, Hello,
+        PasskeyEndorsement, PasskeyRevocation, ProjectSnapshot, RefusalReason, RequestHeader,
+        RequestOutcome, RequestPayload, RequestResult, RunEvent, RunEventKind, RunEventPayload,
+        RunShapeSettings, RunnerRepository, RunnerStart, RunnerWorkflow, Scope, SetStepAssignment,
+        SignedRequest, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
+        WorkflowVersionSnapshot, PROTOCOL_VERSION,
     };
     use std::any::type_name;
 
@@ -505,6 +505,7 @@ fn every_spec_public_name_is_importable_from_the_crate_root() {
         type_name::<Hello>(),
         type_name::<RunEventKind>(),
         type_name::<RunEventPayload>(),
+        type_name::<FailureReason>(),
         type_name::<RunEvent>(),
         type_name::<CursorAck>(),
         type_name::<ProjectSnapshot>(),

@@ -7,7 +7,7 @@
 //! test without one (AGENTS.md §3).
 
 use super::port::MirrorEvent;
-use demeteo_hub_protocol::{RunEvent, RunEventKind};
+use demeteo_hub_protocol::{FailureReason, RunEvent, RunEventKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -16,6 +16,10 @@ pub struct RunState {
     pub status: FeatureStatus,
     /// Keyed by `step_id`. A step event that names no Step is not counted.
     pub steps: BTreeMap<String, StepState>,
+    /// Why each Step whose latest event is `step_failed` failed, when that
+    /// event gave a reason. An instance that predates the field gives none,
+    /// and its failed Steps are simply absent here.
+    pub step_failures: BTreeMap<String, FailureReason>,
     pub tickets: TicketProgress,
     /// In the order the Gates began waiting.
     pub pending_gates: Vec<PendingGate>,
@@ -82,6 +86,7 @@ enum TicketState {
 pub fn fold(events: &[RunEvent]) -> RunState {
     let mut status = FeatureStatus::Running;
     let mut steps = BTreeMap::new();
+    let mut step_failures = BTreeMap::new();
     let mut tickets = BTreeMap::new();
     let mut pending_gates: Vec<PendingGate> = Vec::new();
     let mut current_step = None;
@@ -95,15 +100,22 @@ pub fn fold(events: &[RunEvent]) -> RunState {
             RunEventKind::FeatureCancelled => status = FeatureStatus::Cancelled,
             RunEventKind::StepStarted => {
                 step(&mut steps, payload.step_id.as_ref(), StepState::Running);
+                failed(&mut step_failures, payload.step_id.as_ref(), None);
                 if payload.step_id.is_some() {
                     current_step.clone_from(&payload.step_id);
                 }
             }
             RunEventKind::StepCompleted => {
                 step(&mut steps, payload.step_id.as_ref(), StepState::Completed);
+                failed(&mut step_failures, payload.step_id.as_ref(), None);
             }
             RunEventKind::StepFailed => {
-                step(&mut steps, payload.step_id.as_ref(), StepState::Failed)
+                step(&mut steps, payload.step_id.as_ref(), StepState::Failed);
+                failed(
+                    &mut step_failures,
+                    payload.step_id.as_ref(),
+                    payload.failure,
+                );
             }
             RunEventKind::TicketStarted => {
                 ticket(
@@ -151,6 +163,7 @@ pub fn fold(events: &[RunEvent]) -> RunState {
     RunState {
         status,
         steps,
+        step_failures,
         tickets: progress(tickets.values()),
         pending_gates,
         current_step,
@@ -179,6 +192,18 @@ fn step(steps: &mut BTreeMap<String, StepState>, step_id: Option<&String>, state
     if let Some(step_id) = step_id {
         steps.insert(step_id.clone(), state);
     }
+}
+
+fn failed(
+    failures: &mut BTreeMap<String, FailureReason>,
+    step_id: Option<&String>,
+    reason: Option<FailureReason>,
+) {
+    let Some(step_id) = step_id else { return };
+    match reason {
+        Some(reason) => failures.insert(step_id.clone(), reason),
+        None => failures.remove(step_id),
+    };
 }
 
 fn ticket(
@@ -220,6 +245,7 @@ mod tests {
         step: Option<&'static str>,
         execution: Option<&'static str>,
         ticket: Option<&'static str>,
+        failure: Option<FailureReason>,
     }
 
     fn event(feature: &str, offset: u64, kind: RunEventKind, ids: Ids) -> RunEvent {
@@ -233,6 +259,7 @@ mod tests {
                 step_id: ids.step.map(str::to_owned),
                 step_execution_id: ids.execution.map(str::to_owned),
                 ticket_id: ids.ticket.map(str::to_owned),
+                failure: ids.failure,
             },
         }
     }
@@ -337,6 +364,37 @@ mod tests {
         ]);
         assert_eq!(fold(&events).current_step.as_deref(), Some("s2"));
         assert_eq!(fold(&[]).current_step, None);
+    }
+
+    #[test]
+    fn a_failed_step_keeps_the_reason_of_its_latest_failure_until_it_runs_again() {
+        let failing = |reason| Ids {
+            failure: reason,
+            ..step_id("s1")
+        };
+        let events = log([
+            (
+                RunEventKind::StepFailed,
+                failing(Some(FailureReason::VerdictFailed)),
+            ),
+            (
+                RunEventKind::StepFailed,
+                failing(Some(FailureReason::UsageLimit)),
+            ),
+        ]);
+        assert_eq!(
+            fold(&events).step_failures,
+            BTreeMap::from([("s1".to_owned(), FailureReason::UsageLimit)])
+        );
+        for (kind, ids) in [
+            (RunEventKind::StepStarted, step_id("s1")),
+            (RunEventKind::StepCompleted, step_id("s1")),
+            (RunEventKind::StepFailed, failing(None)),
+        ] {
+            let mut again = events.clone();
+            again.extend(log([(kind, ids)]));
+            assert!(fold(&again).step_failures.is_empty(), "{kind:?}");
+        }
     }
 
     #[test]

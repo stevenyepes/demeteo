@@ -18,7 +18,7 @@ use crate::store::UserId;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use demeteo_hub_protocol::{RunEvent, RunEventKind};
+use demeteo_hub_protocol::{FailureReason, RunEvent, RunEventKind};
 use serde::de::value::{Error as ValueError, StrDeserializer};
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,10 @@ pub struct StepView {
     pub step_id: String,
     pub state: StepState,
     pub title: Option<String>,
+    /// Why a `failed` Step failed, as its latest `step_failed` said. `None`
+    /// for a Step that has not failed and for one whose instance gave no
+    /// reason; [`StepView::state`] tells the two apart.
+    pub failure: Option<FailureReason>,
 }
 
 /// A [`PendingGate`](super::run_state::PendingGate) with its Step's title, when the snapshot gives one.
@@ -86,6 +90,9 @@ pub struct EventView {
     pub step_id: Option<String>,
     pub step_execution_id: Option<String>,
     pub ticket_id: Option<String>,
+    /// The event's own [`FailureReason`]. `None` on every event that is no
+    /// failure and on a failure from an instance that gave no reason.
+    pub failure: Option<FailureReason>,
 }
 
 /// Every Feature of the instances `filter` names, in the order the store
@@ -223,6 +230,7 @@ fn detail(
     labels: &RunLabels,
 ) -> RunDetailView {
     let state = fold(events);
+    let step_failures = state.step_failures;
     RunDetailView {
         instance_id: row.id.0.to_string(),
         feature_id: feature_id.to_owned(),
@@ -236,6 +244,7 @@ fn detail(
             .into_iter()
             .map(|(step_id, state)| StepView {
                 title: labels.step_title(feature_id, Some(&step_id)),
+                failure: step_failures.get(&step_id).copied(),
                 step_id,
                 state,
             })
@@ -261,6 +270,7 @@ fn detail(
                 step_id: event.payload.step_id.clone(),
                 step_execution_id: event.payload.step_execution_id.clone(),
                 ticket_id: event.payload.ticket_id.clone(),
+                failure: event.payload.failure,
             })
             .collect(),
         git_token_problem: None,

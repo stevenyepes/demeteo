@@ -79,6 +79,7 @@ judged by what that attacker cannot do.
 | Transcripts | there is no scope that sends them — §7 |
 | Diffs | the same |
 | File contents | the same; an event is an allowlisted projection, not a file |
+| Error text | a failure crosses as one variant of the closed `FailureReason` (§5 *Failure reasons*), never as the message, the verdict or the output that explained it |
 
 > **Do not add a `logs` scope.** The design opened with one — a toggle that sent
 > transcripts and diffs to the Hub when an instance turned it on. It was dropped
@@ -107,7 +108,7 @@ judged by what that attacker cannot do.
 
 | Can | Cannot |
 |---|---|
-| read what an instance reported: project and workflow names, step status | read a key, a transcript, a diff or a path — none was sent; nor a cost, which no protocol message reports (§5) |
+| read what an instance reported: project and workflow names, step status, and which of eight categories a failure fell in | read a key, an error message, a transcript, a diff or a path — none was sent; nor a cost, which no protocol message reports (§5) |
 | withhold, delay or reorder requests | forge a request: the envelope is signed and the instance verifies it against the key it pinned (§6) |
 | replay a request | replay one that works: ids are single-use and expire (§6) |
 | queue a `start_feature` for an instance that has `spend` on | declare a cap above the instance's per-run ceiling, or one that takes the 24-hour committed total above its rolling ceiling (§7). The ceilings bound declared caps, not what a run spends — §7 *The per-run ceiling bounds the declared cap, not what the run spends* |
@@ -754,8 +755,9 @@ cursor is stored if it was missing and leaves the cursor where it is.
 
 **What a mirror row holds** is the parsed `RunEvent`, serialised again — never
 the frame's text. **Nothing is stored for costs or gate summaries**, because the
-protocol types carry neither: an event is a kind from a closed list and three
-optional ids, and no kind reports a cost. Which gate summary text may cross at
+protocol types carry neither: an event is a kind from a closed list, three
+optional ids and an optional failure reason from a second closed list, and no
+kind reports a cost. Which gate summary text may cross at
 all is open (§11).
 
 **`ack` is not a delete.** `run_events` has no GC today
@@ -768,6 +770,65 @@ signalled is open (§11).
 kinds and fields that cross, and the **instance** drops anything not on the list
 before sending. A denylist on the Hub would be too late: by then the content has
 left. Transcripts, diffs and file contents are not on it (§3).
+
+### Failure reasons
+
+`step_failed` and `feature_failed`, and `feature_cancelled` when a cap ended the
+run, carry `payload.failure`: one variant of `FailureReason`
+(`crates/demeteo-hub-protocol/src/message.rs`). It is why the Hub can say *why*
+a run stopped without holding a word the instance wrote about it.
+
+**Why an enum is not a leak.** §3 forbids free text because free text can hold
+anything: a path in an error message, a line of a failing test, a secret an
+agent echoed. A `FailureReason` can hold one of eight values and nothing else.
+The instance chooses the variant from its own classification, and the choice
+is made on the instance, before the frame is built, so the text the choice was
+read from never reaches the encoder. What a Hub learns is exactly what the
+variant names — "validation failed", "the provider's usage limit" — which is
+the same order of information as a step's status, already on the wire. The
+type has no `#[serde(other)]` and the payload stays `deny_unknown_fields`, so
+the Hub refuses anything outside the list rather than storing it, and
+`crates/demeteo-hub-protocol/tests/leak_surface.rs` keeps every other wire
+field an id. A new variant is a decision about what may cross, made in review
+of that file, never a string an instance can widen at run time.
+
+**Where it comes from.** The `step_progress` and `feature_status` rows a
+failure is logged as say only that it failed. The session reads the rows of
+the same run in the `FAILURE_CONTEXT_WINDOW` offsets before it, whichever
+connection first read them, and
+[`failure_reason`](../crates/demeteo-core/src/domain/hub_socket/failure.rs)
+answers from those. The rows are the ones `run_event_record` writes on both
+transports, so a desktop and a runner classify a failure identically.
+
+| Read from | Reason |
+|---|---|
+| `retry_decision.error_class` `usage_limit` | `usage_limit` |
+| a `retry_decision` whose reason names a tripped wall-clock cap, any other class | `wall_clock_cap` |
+| an `env_not_ready` triage verdict on the Step, any class but `usage_limit` | `environment` |
+| `retry_decision.error_class` `verdict` | `verdict_failed` |
+| `retry_decision.error_class` `environment` | `environment` |
+| `retry_decision.error_class` `agent_failure` | `agent_error` |
+| `retry_decision.error_class` `non_retryable` | `not_retryable` |
+| any other class, or a Step failure with no decision since the Step last ran | `other` |
+| `feature_failed`: the reason of the latest Step failure before it, else a failed `bootstrap_progress` phase | that reason, else `environment` |
+| `feature_cancelled` after the runner's `over_budget` row | `budget_cap`, or `wall_clock_cap` for the run's wall-clock cap |
+
+A `retry_decision` answers only its own Step's current attempt: a row of the
+Step running again clears it. A failed Feature with neither a Step failure nor
+a bootstrap failure before it carries no reason, not `other`: a desktop's
+shadow of a detached run logs only its status, and `other` would claim a
+classification the desktop never made. `ticket_failed` carries none, because
+no instance sends ticket events yet (§10).
+
+**Older and newer peers.** An instance with nothing to say sends no `failure`
+key at all, so a payload without a reason is byte-for-byte the payload sent
+before the field existed. A Hub built before the field refuses one that has a
+reason (`deny_unknown_fields`), closes the socket `1008`, and the desktop stops
+reconnecting (§11 item 8). **Deploy the Hub before any instance that sends
+reasons.** A Hub with the field reads an older instance's events as before,
+with `failure` absent, and the Run view says *No reason reported* for each of
+its failures. A Hub rolled back past the field reads mirror rows stored with a
+reason as unreadable and leaves them out of the run's view.
 
 ### Snapshots
 
@@ -1373,7 +1434,7 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs`, `needs_you`, `harnesses` and `project_count` |
 | `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url, provider_kind}`, its `workflows` (graph-only, below), its `run_shape`, its `harnesses`, its `harness_catalog` and its live runs |
 | `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
-| `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, title, project, the pinned `workflow` graph, steps, ticket progress, pending gates and events in offset order |
+| `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, title, project, the pinned `workflow` graph, steps (a failed one with its latest `failure`), ticket progress, pending gates and events in offset order, each with its `failure` or `null` (§5 *Failure reasons*) |
 | `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
 | `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name; to a runner, carrying the start its Hub Project and starter resolve to (below) |
 | `POST /v1/instances/{instance_id}/runs/{feature_id}/cancel` | `spend` | `202`, a `cancel_feature` queued |
@@ -2423,7 +2484,9 @@ what a desktop client implements.
    Hub ships first:** upgrade it before any desktop that can send the new
    value. `runner_owned` is the first reason added since v1. An honest Hub
    draws it only for a shadow a desktop still reports, of a run on a runner
-   not paired to that Hub (§5 *Events and the cursor*).
+   not paired to that Hub (§5 *Events and the cursor*). The `failure` key of a
+   run event's payload, and every `FailureReason` variant, follow the same
+   order (§5 *Failure reasons*).
 9. **Defaults carried, not measured:** ES256 for the device key, EdDSA for the
    envelope, 128 bits for a request id, the field lists of the two passkey
    challenges, and an upper bound on `expires_at` an instance will accept.
