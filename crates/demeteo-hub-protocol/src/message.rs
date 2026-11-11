@@ -145,8 +145,14 @@ pub enum RefusalReason {
     AttachmentMismatch,
     LastCredential,
     SelfRevocation,
-    /// A gate of a run a `demeteo-runner` owns, which the desktop only mirrors.
+    /// A gate, or a step to retry, of a run a `demeteo-runner` owns, which the
+    /// desktop only mirrors.
     RunnerOwned,
+    /// A step whose status has no retry in it: not `failed`, `interrupted`
+    /// or `pending`, or an out-of-band sync. Drawn only in answer to a
+    /// `retry_step`, which only a Hub that can parse this reason queues, so
+    /// it reaches no older Hub.
+    StepNotRetryable,
 }
 
 /// What the instance did with a request: it acted, or it refused for a reason.

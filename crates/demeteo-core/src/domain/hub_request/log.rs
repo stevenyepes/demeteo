@@ -20,6 +20,7 @@ pub enum LogKind {
     GateDecision,
     PasskeyEndorsement,
     PasskeyRevocation,
+    RetryStep,
     Unknown,
 }
 
@@ -32,6 +33,7 @@ impl LogKind {
             RequestPayload::GateDecision(_) => Self::GateDecision,
             RequestPayload::PasskeyEndorsement(_) => Self::PasskeyEndorsement,
             RequestPayload::PasskeyRevocation(_) => Self::PasskeyRevocation,
+            RequestPayload::RetryStep(_) => Self::RetryStep,
         }
     }
 
@@ -43,6 +45,7 @@ impl LogKind {
             Self::GateDecision => "gate_decision",
             Self::PasskeyEndorsement => "passkey_endorsement",
             Self::PasskeyRevocation => "passkey_revocation",
+            Self::RetryStep => "retry_step",
             Self::Unknown => "unknown",
         }
     }
@@ -55,6 +58,7 @@ impl LogKind {
             "gate_decision" => Some(Self::GateDecision),
             "passkey_endorsement" => Some(Self::PasskeyEndorsement),
             "passkey_revocation" => Some(Self::PasskeyRevocation),
+            "retry_step" => Some(Self::RetryStep),
             "unknown" => Some(Self::Unknown),
             _ => None,
         }

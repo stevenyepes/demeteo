@@ -2,19 +2,21 @@
 //! socket (decision 64, read per instance). A Hub cancel acts on any run here,
 //! whichever desktop submitted it — the Hub is the control plane of the one
 //! tenant this runner serves, not another client of it — so it skips the
-//! owner check the socket's `cancel_run` makes, and nothing else. A Hub start
-//! is the socket's own [`submit`], owned by [`HUB_CLIENT_ID`].
+//! owner check the socket's `cancel_run` makes, and nothing else; a Hub retry
+//! likewise skips `retry_step`'s. A Hub start is the socket's own [`submit`],
+//! owned by [`HUB_CLIENT_ID`].
 //!
 //! Holds [`RunnerServices`], which is why `HubControl` and its policy writer
 //! are not among them.
 
-use crate::control;
+use super::keeper_policy::{watch, Watch};
+use crate::control::{self, Rewind};
 use crate::rpc::submit;
 use crate::services::RunnerServices;
 use async_trait::async_trait;
 use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::domain::hub_request::{runner_run_spec, runner_start_refusal};
-use demeteo_core::domain::ids::FeatureId;
+use demeteo_core::domain::ids::{FeatureId, StepExecutionId};
 use demeteo_core::domain::run_spec::RunSpecAttachment;
 use demeteo_core::error::AppError;
 use demeteo_core::paths;
@@ -47,6 +49,16 @@ pub trait HubRunCredentials: Send + Sync {
     /// credential store is already open. An `Err` does not unwind the run;
     /// it is the accepted start's note.
     async fn deliver(
+        &self,
+        run_id: &str,
+        request_id: &str,
+        feature_id: &FeatureId,
+    ) -> Result<(), String>;
+
+    /// [`Self::deliver`] for a run a Hub retry has just re-opened, whose
+    /// credential its end wiped. The Hub may still read the run as ended for
+    /// a moment, so the first refusals of that kind are waited out.
+    async fn redeliver(
         &self,
         run_id: &str,
         request_id: &str,
@@ -162,6 +174,68 @@ impl HubRunControl for RunnerHubRuns {
         let run = control::run_for_feature(self.svc.ctx.runner_runs.as_ref(), feature_id.as_ref())?
             .ok_or_else(|| AppError::not_found(format!("no run of feature {feature_id}")))?;
         control::cancel_run(&self.svc.ctx, &self.svc.creds, run).await?;
+        Ok(())
+    }
+
+    /// The control socket's `retry_step` in `retry` mode, as the desktop's
+    /// retry button sends it. A Hub-started run's credential ended with it,
+    /// so it is fetched again once the run re-opens, its window opened before
+    /// the driver exists as a launch opens it. A run whose keeper can still be
+    /// alive keeps that one. A run a desktop submitted gets its credential
+    /// from that desktop, as a retry from there injects one; until then it
+    /// parks `needs-credentials`.
+    async fn retry(
+        &self,
+        feature_id: &FeatureId,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<(), AppError> {
+        let run = control::run_for_feature(self.svc.ctx.runner_runs.as_ref(), feature_id.as_ref())?
+            .ok_or_else(|| AppError::not_found(format!("no run of feature {feature_id}")))?;
+        let keeper = self.credentials.as_ref().filter(|_| {
+            run.owner_client_id == HUB_CLIENT_ID && watch(Some(&run.status), false) == Watch::End
+        });
+        if keeper.is_some() {
+            self.svc.creds.open_delivery(&run.run_id);
+        }
+        let rewound = control::rewind_run(
+            &self.svc,
+            &run,
+            Rewind {
+                step_execution_id: step_execution_id.as_ref(),
+                replay: false,
+                model: None,
+                agent_kind: None,
+                effort: None,
+            },
+        )
+        .await;
+        let Some(credentials) = keeper else {
+            return rewound;
+        };
+        if let Err(e) = rewound {
+            self.svc.creds.close_delivery(&run.run_id);
+            return Err(e);
+        }
+        let redelivered = match self
+            .svc
+            .ctx
+            .hub_requests
+            .accepted_start_of(feature_id.as_ref())
+        {
+            Ok(Some(request_id)) => {
+                credentials
+                    .redeliver(&run.run_id, &request_id, feature_id)
+                    .await
+            }
+            Ok(None) => Err("no accepted Hub start is logged for it".to_owned()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = redelivered {
+            eprintln!(
+                "[demeteo-runner] run {}: retried without a git token: {e}",
+                run.run_id
+            );
+        }
         Ok(())
     }
 }

@@ -10,6 +10,10 @@
 //! starts ([`StartSupport::Refused`](crate::ports::hub::StartSupport::Refused)),
 //! judged before anything a start names is read or fetched.
 //!
+//! A retry lands there too, as the desktop's retry button,
+//! [`step_control::retry_step`], or a runner's control socket's retry, which
+//! also re-opens the run; `hub_requests/retry.rs` judges it first.
+//!
 //! Step assignment is the desktop's own call on every instance,
 //! [`step_control::set_step_assignment`], decision 54's resolver. A gate
 //! decision is the presenter's `gate_decide`, the desktop's own `gate_decide`
@@ -44,6 +48,7 @@ use crate::ports::hub::{
 use crate::state::AppContext;
 
 mod desktop_runs;
+mod retry;
 mod start;
 mod trust;
 
@@ -276,6 +281,7 @@ impl HubRequests {
                 self.cancel(&cancel.feature_id).await
             }
             Verdict::Execute(ExecuteKind::SetStepAssignment(change)) => self.assign(change).await,
+            Verdict::Execute(ExecuteKind::RetryStep(retry)) => self.retry(retry).await,
             Verdict::Execute(ExecuteKind::GateDecision(gate)) => {
                 self.gate(request, gate, &pins, record, trust).await
             }
@@ -412,6 +418,7 @@ impl HubRequestHandler for HubRequests {
             RequestPayload::StartFeature(_)
             | RequestPayload::CancelFeature(_)
             | RequestPayload::SetStepAssignment(_)
+            | RequestPayload::RetryStep(_)
             | RequestPayload::PasskeyEndorsement(_) => None,
         };
         let settled = self.judged(&request, now_ms, trust).await;

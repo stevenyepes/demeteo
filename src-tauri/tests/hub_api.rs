@@ -11,7 +11,7 @@ use demeteo_core::ports::notification::DomainEvent;
 use demeteo_core::ports::run_events::RunEvent as RunEventRow;
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
 use demeteo_hub::api::dispatch::{
-    cancel, dispatch, set_step_assignment, AssignmentBody, DispatchBody, EnqueuedView,
+    cancel, dispatch, retry_step, set_step_assignment, AssignmentBody, DispatchBody, EnqueuedView,
 };
 use demeteo_hub::api::fleet::{fleet, instance_detail};
 use demeteo_hub::api::gates::{
@@ -32,10 +32,10 @@ use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::pairing::testing::verifies_ed25519;
 use demeteo_hub::protocol::{
     CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, HarnessCatalogEntry,
-    ModelChoice, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload, RunEvent,
-    RunEventKind, RunEventPayload, RunShapeSettings, RunnerRepository, RunnerStart, RunnerWorkflow,
-    Scope, SetStepAssignment, Snapshot, StartFeature, StepOverride, WebAuthnAssertion,
-    WorkflowVersionSnapshot,
+    ModelChoice, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload, RetryStep,
+    RunEvent, RunEventKind, RunEventPayload, RunShapeSettings, RunnerRepository, RunnerStart,
+    RunnerWorkflow, Scope, SetStepAssignment, Snapshot, StartFeature, StepOverride,
+    WebAuthnAssertion, WorkflowVersionSnapshot,
 };
 use demeteo_hub::socket::connections::Connections;
 use demeteo_hub::socket::port::SocketStore;
@@ -1873,6 +1873,87 @@ async fn a_cancel_queues_one_cancel_feature_for_the_feature_in_the_path() {
     );
     assert_eq!(answer.request_id, row.envelope.request_id);
     assert_eq!(answer.expires_at, row.expires_at);
+}
+
+#[tokio::test]
+async fn a_retry_queues_one_retry_step_for_the_feature_and_step_in_the_path() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &[Scope::Spend]);
+
+    let answer = retry_step(
+        &parts.over(&fleet),
+        user,
+        &instance.0.to_string(),
+        "f-1",
+        "s-implement",
+        NOW,
+    )
+    .await
+    .expect("spend is granted");
+
+    let queued = fleet.requests(instance);
+    assert_eq!(queued.len(), 1);
+    let row = &queued[0];
+    assert_eq!(row.kind, "retry_step");
+    assert_eq!(
+        row.envelope.payload,
+        RequestPayload::RetryStep(RetryStep {
+            feature_id: "f-1".to_owned(),
+            step_id: "s-implement".to_owned(),
+        })
+    );
+    assert_eq!(answer.request_id, row.envelope.request_id);
+    assert_eq!(answer.expires_at, row.expires_at);
+}
+
+/// Scope first, as a cancel's: no edit to the path changes that answer.
+#[tokio::test]
+async fn a_retry_without_spend_or_with_a_bad_id_or_for_another_tenant_queues_nothing() {
+    let t = TwoTenants::new().await;
+    let parts = Parts::new();
+    let api = parts.over(&t.fleet);
+    let a_instance = t.a_instance.0.to_string();
+    let long = "x".repeat(257);
+    let invalid = (400, json!({"error": "invalid_request"}));
+    let a_before = t.fleet.requests(t.a_instance);
+    let b_before = t.fleet.requests(t.b_instance);
+
+    for (feature_id, step_id) in [
+        ("a\u{0}b", "s-implement"),
+        (long.as_str(), "s-implement"),
+        ("f-a", "s\u{0}"),
+        ("f-a", long.as_str()),
+    ] {
+        let refused = retry_step(&api, t.a, &a_instance, feature_id, step_id, NOW)
+            .await
+            .expect_err("the path is refused");
+        assert_eq!(
+            answered(refused).await,
+            invalid,
+            "{feature_id:?} {step_id:?}"
+        );
+    }
+
+    let refused = retry_step(&api, t.a, &t.b_instance.0.to_string(), "f-b", "s", NOW)
+        .await
+        .expect_err("not the tenant's");
+    assert_eq!(
+        answered(refused).await,
+        (404, json!({"error": "not_found"}))
+    );
+
+    t.fleet.scopes(t.a_instance, &[Scope::Read, Scope::Gates]);
+    let refused = retry_step(&api, t.a, &a_instance, "a\u{0}b", "s-implement", NOW)
+        .await
+        .expect_err("spend is off");
+    assert_eq!(
+        answered(refused).await,
+        (409, json!({"error": "scope_not_granted", "scope": "spend"}))
+    );
+    assert_eq!(t.fleet.requests(t.a_instance), a_before);
+    assert_eq!(t.fleet.requests(t.b_instance), b_before);
 }
 
 #[tokio::test]

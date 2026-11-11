@@ -30,6 +30,8 @@ pub(crate) struct KeptRun {
     pub run_id: String,
     pub request_id: String,
     pub feature_id: String,
+    /// The run was re-opened by a Hub retry ([`Attempts::reopened`]).
+    pub reopened: bool,
 }
 
 #[derive(Clone)]
@@ -62,7 +64,11 @@ impl HubGitCredentials {
     }
 
     async fn keep(&self, run: KeptRun) {
-        let mut attempts = Attempts::default();
+        let mut attempts = if run.reopened {
+            Attempts::reopened()
+        } else {
+            Attempts::default()
+        };
         let mut until_ms = now_ms();
         loop {
             if !self.watch_until(&run.run_id, until_ms).await {
@@ -175,6 +181,24 @@ impl HubRunCredentials for HubGitCredentials {
             run_id: run_id.to_owned(),
             request_id: request_id.to_owned(),
             feature_id: feature_id.to_string(),
+            reopened: false,
+        });
+        Ok(())
+    }
+
+    /// The first answers may be the `410` of the end being retried from,
+    /// which the keeper waits out ([`Attempts::reopened`]).
+    async fn redeliver(
+        &self,
+        run_id: &str,
+        request_id: &str,
+        feature_id: &FeatureId,
+    ) -> Result<(), String> {
+        self.spawn(KeptRun {
+            run_id: run_id.to_owned(),
+            request_id: request_id.to_owned(),
+            feature_id: feature_id.to_string(),
+            reopened: true,
         });
         Ok(())
     }
@@ -209,6 +233,7 @@ pub(crate) fn hub_runs_to_keep(svc: &RunnerServices) -> Vec<KeptRun> {
                         run_id: run.run_id,
                         request_id,
                         feature_id,
+                        reopened: false,
                     })
                 }
                 Ok(None) => {

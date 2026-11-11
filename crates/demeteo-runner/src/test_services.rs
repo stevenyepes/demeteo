@@ -171,11 +171,23 @@ impl Rig {
 #[derive(Default)]
 pub(crate) struct CancelSpy {
     cancels: Mutex<Vec<String>>,
+    /// `None` leaves `step_retry` unscripted; `Some(Err)` is a step the
+    /// executor declines, answered as its `AppError::Validation`.
+    retry_answer: Mutex<Option<Result<(), String>>>,
+    retries: Mutex<Vec<String>>,
 }
 
 impl CancelSpy {
     pub fn cancels(&self) -> Vec<String> {
         self.cancels.lock().unwrap().clone()
+    }
+
+    pub fn answer_retries(&self, answer: Result<(), String>) {
+        *self.retry_answer.lock().unwrap() = Some(answer);
+    }
+
+    pub fn retries(&self) -> Vec<String> {
+        self.retries.lock().unwrap().clone()
     }
 }
 
@@ -203,12 +215,17 @@ impl StepExecutor for CancelSpy {
     }
     async fn step_retry(
         &self,
-        _: &str,
+        execution_id: &str,
         _: Option<&str>,
         _: Option<&str>,
         _: Option<EffortLevel>,
     ) -> Result<(), AppError> {
-        Ok(unscripted("step_retry")?)
+        let answer = self.retry_answer.lock().unwrap().clone();
+        let Some(answer) = answer else {
+            return Ok(unscripted("step_retry")?);
+        };
+        self.retries.lock().unwrap().push(execution_id.to_owned());
+        answer.map_err(AppError::validation)
     }
     async fn step_set_assignment(&self, _: &str, _: StepAssignment) -> Result<(), AppError> {
         Ok(unscripted("step_set_assignment")?)

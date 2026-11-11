@@ -98,14 +98,28 @@ impl StopReason {
 pub(crate) struct Attempts {
     failures: u32,
     not_yet_since_ms: Option<u64>,
+    /// Set for a run the Hub retried, until its first token: `410` is then
+    /// waited out within the `404` budget, not stopped on. The Hub reads a
+    /// run as live again only once the `feature_started` its retry wrote has
+    /// crossed the socket, and the keeper asks as the retry is accepted, so
+    /// its first answer can still be the end it is retrying from.
+    reopened: bool,
 }
 
 impl Attempts {
+    pub fn reopened() -> Self {
+        Self {
+            reopened: true,
+            ..Self::default()
+        }
+    }
+
     pub fn after(&mut self, answer: Answer, now_ms: u64, timing: &Timing) -> Step {
         match answer {
             Answer::Token { expires_at } => {
                 self.failures = 0;
                 self.not_yet_since_ms = None;
+                self.reopened = false;
                 let replace_at = expires_at
                     .saturating_mul(1000)
                     .saturating_sub(millis(timing.refresh_margin));
@@ -122,6 +136,13 @@ impl Attempts {
                 self.retry(timing)
             }
             Answer::Refused { status: 409 } => Step::Stop(StopReason::FeatureMismatch),
+            Answer::Refused { status: 410 } if self.reopened => {
+                let since = *self.not_yet_since_ms.get_or_insert(now_ms);
+                if now_ms.saturating_sub(since) >= millis(timing.not_yet_budget) {
+                    return Step::Stop(StopReason::RunEnded);
+                }
+                self.retry(timing)
+            }
             Answer::Refused { status: 410 } => Step::Stop(StopReason::RunEnded),
             Answer::Refused { status: 422 } => Step::Stop(StopReason::NotGitHub),
             // A 401 that survived its refresh: the pairing may come back.

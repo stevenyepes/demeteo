@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 const ACCEPTED: &str = include_str!("fixtures/request_result_accepted.json");
 const REFUSED: &str = include_str!("fixtures/request_result_refused.json");
 
-const REASONS: [&str; 21] = [
+const REASONS: [&str; 22] = [
     "scope_off",
     "expired",
     "replayed",
@@ -29,6 +29,7 @@ const REASONS: [&str; 21] = [
     "last_credential",
     "self_revocation",
     "runner_owned",
+    "step_not_retryable",
 ];
 
 fn round_trip(fixture: &str) -> RequestResult {
@@ -80,8 +81,8 @@ fn outcome_serialises_as_a_tagged_object() {
 }
 
 #[test]
-fn refusal_reason_accepts_exactly_its_twenty_one_spellings() {
-    assert_eq!(REASONS.len(), 21);
+fn refusal_reason_accepts_exactly_its_twenty_two_spellings() {
+    assert_eq!(REASONS.len(), 22);
     for name in REASONS {
         let reason: RefusalReason = serde_json::from_value(json!(name)).unwrap();
         assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));
@@ -140,7 +141,7 @@ fn request_header_requires_a_request_id() {
     assert!(serde_json::from_value::<RequestHeader>(json!({"v": 1})).is_err());
 }
 
-const FIXTURES: [(&str, &str); 6] = [
+const FIXTURES: [(&str, &str); 7] = [
     (
         "signed_request_start_feature",
         include_str!("fixtures/signed_request_start_feature.json"),
@@ -165,15 +166,20 @@ const FIXTURES: [(&str, &str); 6] = [
         "signed_request_passkey_revocation",
         include_str!("fixtures/signed_request_passkey_revocation.json"),
     ),
+    (
+        "signed_request_retry_step",
+        include_str!("fixtures/signed_request_retry_step.json"),
+    ),
 ];
 
-const KINDS: [&str; 6] = [
+const KINDS: [&str; 7] = [
     "start_feature",
     "cancel_feature",
     "set_step_assignment",
     "gate_decision",
     "passkey_endorsement",
     "passkey_revocation",
+    "retry_step",
 ];
 
 /// The wildcard-free `match` stops compiling when a variant is added, so a new
@@ -186,6 +192,7 @@ fn fixture_name(payload: &RequestPayload) -> &'static str {
         RequestPayload::GateDecision(_) => "signed_request_gate_decision",
         RequestPayload::PasskeyEndorsement(_) => "signed_request_passkey_endorsement",
         RequestPayload::PasskeyRevocation(_) => "signed_request_passkey_revocation",
+        RequestPayload::RetryStep(_) => "signed_request_retry_step",
     }
 }
 
@@ -201,7 +208,7 @@ fn every_request_fixture_round_trips_and_names_its_own_variant() {
 }
 
 #[test]
-fn the_six_payload_kinds_are_spelled_as_specified() {
+fn the_seven_payload_kinds_are_spelled_as_specified() {
     let (written, serialised): (Vec<String>, Vec<String>) = FIXTURES
         .iter()
         .map(|(_, text)| {

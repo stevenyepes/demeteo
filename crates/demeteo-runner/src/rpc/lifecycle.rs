@@ -1,3 +1,4 @@
+use crate::control::{self, Rewind};
 use crate::services::RunnerServices;
 use demeteo_core::adapters::mr_monitor::record_mr_state;
 use demeteo_core::application::lifecycle::FeatureCacheRelease;
@@ -175,19 +176,9 @@ pub(crate) async fn submit(
 /// twin of the desktop app's `step_retry` / `replay_from_step` commands,
 /// which can only ever drive runs *this* machine owns (the local executor
 /// refuses a runner-owned shadow outright). `mode` picks which, and the
-/// distinction is not cosmetic — see [`RetryMode`].
-///
-/// The subtlety is the second half. The step's failure already drove the
-/// feature terminal, so this run's `await_terminal_and_push` tail has
-/// already exited and stamped the run row `failed`. `step_retry` re-arms
-/// the engine's driver, and the engine will happily run the pipeline to
-/// completion — but with nobody awaiting it, the terminal push + PR-open
-/// (which live *after* that poll loop) would never happen, and the laptop,
-/// seeing a terminal run row, would have stopped polling for progress. So
-/// re-open the run: flip it back to `running` and start a driver over the
-/// persisted spec, exactly as the restart path in `reconcile.rs` does. When a
-/// driver for the run is already live this attaches to it instead and puts the
-/// row back as it was; the live driver runs one more pass and settles it.
+/// distinction is not cosmetic — see [`RetryMode`]. Both rewind through
+/// [`control::rewind_run`], which a Hub retry shares, and which says why the
+/// run is re-opened as well.
 pub(super) async fn retry_step(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
@@ -208,46 +199,19 @@ pub(super) async fn retry_step(
         return Err(no_such_step(&params.step_execution_id));
     }
 
-    let spec: RunSpec = serde_json::from_str(&run.spec_json)
-        .map_err(|e| format!("run {} has an unparseable spec: {}", run.run_id, e))?;
-    if run.project_id.is_none() || run.feature_id.is_none() {
-        return Err(format!(
-            "run {} never bootstrapped a feature; there is no step to retry",
-            run.run_id
-        ));
-    };
-
-    match params.mode {
-        RetryMode::Retry => svc
-            .ctx
-            .executor
-            .step_retry(
-                &params.step_execution_id,
-                params.model.as_deref(),
-                params.agent_kind.as_deref(),
-                params.effort,
-            )
-            .await
-            .map_err(|e| e.to_string())?,
-        RetryMode::Replay => {
-            svc.ctx
-                .executor
-                .replay_from_step(
-                    &params.step_execution_id,
-                    params.model.as_deref(),
-                    params.agent_kind.as_deref(),
-                    params.effort,
-                )
-                .await?
-        }
-    }
-
-    let event = match params.mode {
-        RetryMode::Retry => "retried",
-        RetryMode::Replay => "replayed",
-    };
-    crate::run::emit(&svc.ctx, &run.run_id, event, &params.step_execution_id);
-    crate::run::reopen_run_driver(svc, &run.run_id, spec)?;
+    control::rewind_run(
+        svc,
+        &run,
+        Rewind {
+            step_execution_id: &params.step_execution_id,
+            replay: params.mode == RetryMode::Replay,
+            model: params.model.as_deref(),
+            agent_kind: params.agent_kind.as_deref(),
+            effort: params.effort,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     svc.ctx
         .runner_runs

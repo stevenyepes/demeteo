@@ -1,14 +1,17 @@
 //! What a tenant asks an instance to do: `POST /v1/instances/{instance_id}/runs`
-//! queues a `start_feature`, `…/runs/{feature_id}/cancel` a `cancel_feature`
-//! and `…/runs/{feature_id}/steps/{step_id}/assignment` a
-//! `set_step_assignment`.
+//! queues a `start_feature`, `…/runs/{feature_id}/cancel` a `cancel_feature`,
+//! `…/runs/{feature_id}/steps/{step_id}/assignment` a `set_step_assignment`
+//! and `…/runs/{feature_id}/steps/{step_id}/retry` a `retry_step`.
 //!
 //! A request is queued, signed, for the instance to fetch; the answer names
 //! it and says when the Hub stops offering it, and nothing more. Whether the
 //! instance acts on it is the instance's (`docs/HUB.md` §7, §8), read back
 //! through the request's status. Which steps may be reassigned is decision
-//! 54's, and the instance's to enforce: a step it will not reassign comes
-//! back as its `RefusalReason`, so nothing here judges one.
+//! 54's, and which may be retried the desktop's own retry's; both are the
+//! instance's to enforce: a step it will not reassign or retry comes back as
+//! its `RefusalReason`, so nothing here judges one. The mirror's run status
+//! is a report, and judging by it would refuse a retry the instance would
+//! take.
 //!
 //! A `start_feature` may name attachments the tenant staged for the same
 //! instance. Each is signed into the payload by its plaintext size and
@@ -44,8 +47,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use demeteo_hub_protocol::{
-    AttachmentRef, CancelFeature, Effort, RequestPayload, SetStepAssignment, StartFeature,
-    StepOverride,
+    AttachmentRef, CancelFeature, Effort, RequestPayload, RetryStep, SetStepAssignment,
+    StartFeature, StepOverride,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -245,6 +248,28 @@ pub async fn set_step_assignment(
     queue(api, user, &row, payload, now).await
 }
 
+/// Queues a `retry_step` for `step_id` of `feature_id`, refused without
+/// `spend` as [`dispatch`] is. It carries no assignment: a browser that
+/// changes the agent first queues [`set_step_assignment`] and waits for it to
+/// be accepted, since the instance answers the two in no promised order.
+pub async fn retry_step(
+    api: &ApiContext<'_>,
+    user: UserId,
+    instance_id: &str,
+    feature_id: &str,
+    step_id: &str,
+    now: u64,
+) -> Result<EnqueuedView, ApiError> {
+    let row = owned(api, user, instance_id).await?;
+    let payload = RequestPayload::RetryStep(RetryStep {
+        feature_id: feature_id.to_owned(),
+        step_id: step_id.to_owned(),
+    });
+    enqueue_verdict(&granted(&row), &payload).map_err(EnqueueError::from)?;
+    strings_verdict([feature_id, step_id].into_iter(), std::iter::empty())?;
+    queue(api, user, &row, payload, now).await
+}
+
 async fn queue(
     api: &ApiContext<'_>,
     user: UserId,
@@ -359,6 +384,26 @@ pub async fn post_assignment(
         &feature_id,
         &step_id,
         body,
+        unix_now(),
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(queued)))
+}
+
+pub async fn post_retry(
+    State(state): State<AppState>,
+    current: CurrentSession,
+    Path((instance_id, feature_id, step_id)): Path<(String, String, String)>,
+) -> Result<(StatusCode, Json<EnqueuedView>), ApiError> {
+    let store = PostgresApi::new(state.db().clone());
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
+    let queued = retry_step(
+        &api,
+        current.user,
+        &instance_id,
+        &feature_id,
+        &step_id,
         unix_now(),
     )
     .await?;

@@ -233,6 +233,10 @@ impl HubRunControl for RunnerControl {
         }
         Ok(())
     }
+
+    async fn retry(&self, _: &FeatureId, _: &StepExecutionId) -> Result<(), AppError> {
+        panic!("nothing was asked to retry")
+    }
 }
 
 /// Every wait the supervisor makes pends, so a test never redials.
