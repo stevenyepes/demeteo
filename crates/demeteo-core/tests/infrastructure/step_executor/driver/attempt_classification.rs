@@ -111,6 +111,15 @@ fn a_non_retryable_failure_is_classed_non_retryable() {
     assert_eq!(c.error_class, Some(error_class::NON_RETRYABLE));
 }
 
+/// The stored spelling is a contract the Hub reads, so it is asserted as a
+/// literal, not through the constant it would drift with.
+#[test]
+fn a_usage_limit_is_classed_usage_limit() {
+    let c = classify_of(&StepOutcome::UsageLimit("hit its usage limit".to_string()));
+    assert_eq!(c.status, "failed");
+    assert_eq!(c.error_class, Some("usage_limit"));
+}
+
 // ── the cancel that arrives mid-failure ─────────────────────────────────────
 
 /// A step that was already failing when the user cancelled is recorded as

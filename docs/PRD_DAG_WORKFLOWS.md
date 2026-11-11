@@ -174,6 +174,8 @@ pending → ready → running → { completed | failed | cancelled | skipped(rea
 
 Failure classes map 1:1 onto the existing `StepOutcome`/`VerifierError` taxonomy (`Failed`, `VerdictFailed` with failing_tests/implicated_files, `Environmental`, `NonRetryable`) — the engine already *classifies*; this makes the *response* declarative, per-node, visible in the editor, and consistent between local and remote runs. `feedback: true` = today's `RetryContext` prompt-append behavior. Exhaustion → existing `RetryBudgetExhausted` event + notification.
 
+One stored class has no policy key: `usage_limit`, a harness's provider refusing the account (usage, rate or credit limit), detected from the failure text by `domain/usage_limit.rs`. It always fails the step as `usage_limit.fail` — every attempt before the quota resets fails the same way, so no authorable rule could do anything but spend budget.
+
 **Durable checkpoints.** Everything the driver currently keeps in memory moves to the DB:
 
 - `sequence_checkpoints` → persisted per (feature, node) so a crash mid-list resumes from the exact task, not the step (closes the documented re-run-committed-tasks waste).

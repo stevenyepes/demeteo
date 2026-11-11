@@ -551,7 +551,7 @@ export interface StepAttempt {
   cost_usd?: number | null;
   tokens?: number | null;
   wall_clock_ms?: number | null;
-  /** `environment | verdict | agent_failure | non_retryable`; null for non-failures. */
+  /** `environment | verdict | agent_failure | non_retryable | usage_limit`; null for non-failures. */
   error_class?: string | null;
   failure_fingerprint?: string | null;
   /** The retry-policy rule that answered this failure, `<class>.<strategy>` (P1.10). */

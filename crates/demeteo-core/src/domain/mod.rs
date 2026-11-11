@@ -101,6 +101,7 @@ pub mod ticket_plan;
 pub mod turn_role;
 pub mod upstream_feature;
 pub mod usage;
+pub mod usage_limit;
 pub mod verifier;
 pub mod wait_backstop;
 pub mod workflow_graph;

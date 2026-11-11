@@ -193,6 +193,17 @@ fn non_retryable_always_fails() {
     assert_eq!(d.rule_id, "non_retryable.fail");
 }
 
+/// A usage limit fails even where the policy would redirect a plain agent
+/// failure: the redirected step calls the same provider on the same quota.
+/// In a real run the redirect spent the whole budget, one refused call each.
+#[test]
+fn a_usage_limit_fails_where_an_agent_failure_would_redirect() {
+    let policy = legacy_policy_for_step(&step(Some("s-implement"), Some(9)), None, None);
+    let d = evaluate(&policy, FailureClass::UsageLimit, 0, None);
+    assert_eq!(d.action, RetryAction::Fail);
+    assert_eq!(d.rule_id, "usage_limit.fail");
+}
+
 /// A class missing from the policy entirely falls to the safe floor:
 /// fail, with a rule id that still names the class.
 #[test]
@@ -223,6 +234,7 @@ fn class_names_match_the_stored_error_class_vocabulary() {
         FailureClass::NonRetryable.as_str(),
         error_class::NON_RETRYABLE
     );
+    assert_eq!(FailureClass::UsageLimit.as_str(), "usage_limit");
 }
 
 // ── Evaluation: redirect override ──────────────────────────────────────

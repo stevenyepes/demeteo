@@ -6,6 +6,7 @@ const CLASS_LABELS: Record<string, string> = {
   verdict: 'Verdict',
   agent_failure: 'Agent failure',
   non_retryable: 'Non-retryable',
+  usage_limit: 'Usage limit',
 };
 
 export function classLabel(cls: string): string {
