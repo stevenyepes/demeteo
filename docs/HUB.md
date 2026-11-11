@@ -1191,7 +1191,7 @@ except as *On a runner* says:
   nothing feature-wide. It carries no assignment: a user who changes the
   agent first queues a `set_step_assignment`, and hub-web queues the retry
   only once that is `accepted`, since requests are answered in no promised
-  order ([decision 73](DECISIONS.md#1-the-locked-decisions)).
+  order ([decision 74](DECISIONS.md#1-the-locked-decisions)).
 - **One start is handled at a time**, so two starts cannot each be judged
   against a daily total that misses the other. The handler holds that, not the
   socket session, so a start that arrives on a socket that reconnected or
@@ -1819,7 +1819,7 @@ the rolling ceiling, refused `over_rolling_ceiling` otherwise. Both bounds are
 inclusive. None of `cancel_feature`, `set_step_assignment` and `retry_step`
 counts against either. A retry commits no new cap: it re-runs a step under the
 Feature's own `max_budget_usd`, which its start was judged on, so there is no
-new amount to add to the total ([decision 73](DECISIONS.md#1-the-locked-decisions)). The arithmetic is
+new amount to add to the total ([decision 74](DECISIONS.md#1-the-locked-decisions)). The arithmetic is
 [`ceiling.rs`](../crates/demeteo-core/src/domain/hub_request/ceiling.rs).
 
 **Every gap refuses.** A start with no cap, or one arriving while the per-run
@@ -2415,7 +2415,7 @@ what a desktop client implements.
    The rolling 24-hour total counts the caps committed at start, not cost
    incurred, in integer cents; an unset ceiling and an absent cap each refuse;
    and `set_step_assignment` counts against neither ceiling, nor, since
-   decision 73, does `retry_step`. §7 *Local ceilings* has the rule. **Still
+   decision 74, does `retry_step`. §7 *Local ceilings* has the rule. **Still
    open:** the per-run ceiling bounds a start's declared cap, which is a
    per-turn budget, so nothing bounds what a Hub-started run actually spends,
    and a run retried from the Hub again and again spends more under the one
