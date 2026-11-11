@@ -2077,7 +2077,7 @@ same signatures. `ring` was proposed and is not a direct dependency: adding it i
 [AGENTS.md §6](../AGENTS.md) Gate item, and it was asked and not answered.
 
 `decision` is `approve`, `cancel` or `redirect`
-([decision 73](DECISIONS.md#1-the-locked-decisions)). A `redirect` is useful only
+([decision 75](DECISIONS.md#1-the-locked-decisions)). A `redirect` is useful only
 with its feedback, and is offered because the challenge binds that text: a
 relaying Hub that rewrote it, or added feedback to a decision signed without
 any, would hand the instance an assertion over a challenge it does not
@@ -2486,7 +2486,7 @@ does that today because the socket could not be built without an answer; no
 decision stands behind it, a human may overrule it, and until one does it is
 what a desktop client implements.
 
-1. *Decided by [decision 73](DECISIONS.md#1-the-locked-decisions), kept so the
+1. *Decided by [decision 75](DECISIONS.md#1-the-locked-decisions), kept so the
    numbering holds.* The Hub offers `redirect`, and approval notes, because the
    gate challenge binds the feedback byte for byte (§8).
 2. **What a Gate's review pane may show on the Hub.** Transcripts, diffs and file
