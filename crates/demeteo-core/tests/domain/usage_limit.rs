@@ -45,13 +45,22 @@ fn claude_code_subscription_limits_are_detected() {
 #[test]
 fn api_rate_limit_and_quota_errors_are_detected() {
     for text in [
-        r#"agent error: API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}"#,
         "agent error: Your credit balance is too low to access the Anthropic API.",
         "agent error: You exceeded your current quota, please check your plan and billing details.",
         r#"agent error: {"error":{"code":"insufficient_quota"}}"#,
-        "agent error: exceeded retry limit, last status: 429 Too Many Requests",
     ] {
         assert!(detect(text).is_some(), "not detected: {text}");
+    }
+}
+
+/// A per-minute limit lifts before the next attempt, so it keeps the retry.
+#[test]
+fn transient_rate_limits_are_not_usage_limits() {
+    for text in [
+        r#"agent error: API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}"#,
+        "agent error: exceeded retry limit, last status: 429 Too Many Requests",
+    ] {
+        assert_eq!(detect(text), None, "{text}");
     }
 }
 

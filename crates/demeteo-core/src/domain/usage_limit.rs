@@ -35,15 +35,15 @@ const MARKERS: &[&str] = &[
     "usage limit reached",
     "5-hour limit reached",
     "weekly limit reached",
-    // Anthropic API, through Claude Code: `API Error: 429 {"type":"error",
-    // "error":{"type":"rate_limit_error",…}}`, and the out-of-credit answer.
-    "rate_limit_error",
+    // Anthropic API, through Claude Code: the out-of-credit answer.
     "credit balance is too low",
     // OpenAI API (codex on an API key, hermes, pi): the `insufficient_quota`
-    // error code and its message; codex's own give-up after its retries.
+    // error code and its message.
     "insufficient_quota",
     "exceeded your current quota",
-    "429 too many requests",
+    // Not here, on purpose: a bare HTTP 429 or Anthropic's `rate_limit_error`.
+    // Those are usually per-minute limits that lift before the next attempt,
+    // so ending the step on them would throw away a run a retry would save.
     // opencode: the raw error names, and the "OpenCode Rate/Credit Limit
     // Exceeded" text `format_agent_error_message` rewrites them into.
     "freeusagelimiterror",
