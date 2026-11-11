@@ -156,6 +156,7 @@ impl Paired {
                         name: "Standard".to_owned(),
                         steps_json: "[]".to_owned(),
                     },
+                    settings: None,
                 })),
             }),
             signature: "not checked by the hub".to_owned(),

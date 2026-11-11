@@ -1,5 +1,6 @@
 use super::{StoreError, UserId};
-use demeteo_hub_protocol::Effort;
+use demeteo_hub_protocol::{Effort, RunnerSettings};
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgExecutor};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -32,6 +33,24 @@ pub struct HubProjectFields {
     pub default_effort: Option<Effort>,
     pub default_workflow_id: Option<String>,
     pub default_max_budget_cents: Option<u64>,
+    /// Signed into every start to a runner as it stands.
+    pub settings: RunnerSettings,
+    pub step_overrides: Vec<ProjectStepOverride>,
+}
+
+/// A default harness for one step of one embedded starter. A dispatch of that
+/// starter that names no override of its own for the step is given this one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectStepOverride {
+    pub workflow_id: String,
+    pub step_id: String,
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<Effort>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +73,8 @@ struct StoredProject {
     default_effort: Option<String>,
     default_workflow_id: Option<String>,
     default_max_budget_cents: Option<i64>,
+    settings: String,
+    step_overrides: String,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 }
@@ -70,6 +91,10 @@ impl TryFrom<StoredProject> for HubProjectRow {
             .default_max_budget_cents
             .map(|cents| u64::try_from(cents).map_err(|_| StoreError::BudgetOutOfRange(cents)))
             .transpose()?;
+        let settings = serde_json::from_str(&row.settings)
+            .map_err(|_| StoreError::ProjectSettingsUnreadable)?;
+        let step_overrides = serde_json::from_str(&row.step_overrides)
+            .map_err(|_| StoreError::ProjectSettingsUnreadable)?;
         Ok(Self {
             id: row.id,
             fields: HubProjectFields {
@@ -82,6 +107,8 @@ impl TryFrom<StoredProject> for HubProjectRow {
                 default_effort,
                 default_workflow_id: row.default_workflow_id,
                 default_max_budget_cents,
+                settings,
+                step_overrides,
             },
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -118,6 +145,15 @@ fn budget_column(cents: Option<u64>) -> Result<Option<i64>, StoreError> {
         .transpose()
 }
 
+/// The two JSON columns' text, as `$12::jsonb` and `$13::jsonb` take it.
+fn settings_columns(fields: &HubProjectFields) -> Result<(String, String), StoreError> {
+    let unwritable = |_| StoreError::ProjectSettingsUnreadable;
+    Ok((
+        serde_json::to_string(&fields.settings).map_err(unwritable)?,
+        serde_json::to_string(&fields.step_overrides).map_err(unwritable)?,
+    ))
+}
+
 fn write_error(err: sqlx::Error) -> StoreError {
     match err.as_database_error() {
         Some(db) if db.constraint() == Some(REPOSITORY_UNIQUE) => StoreError::ProjectExists,
@@ -129,15 +165,17 @@ fn write_error(err: sqlx::Error) -> StoreError {
 macro_rules! columns {
     () => {
         "id, name, provider_kind, host, full_name, default_agent_kind, default_model, \
-         default_effort, default_workflow_id, default_max_budget_cents, created_at, updated_at"
+         default_effort, default_workflow_id, default_max_budget_cents, \
+         settings::text AS settings, step_overrides::text AS step_overrides, created_at, updated_at"
     };
 }
 
 const INSERT: &str = concat!(
     "INSERT INTO hub_projects \
      (id, user_id, name, provider_kind, host, full_name, default_agent_kind, \
-      default_model, default_effort, default_workflow_id, default_max_budget_cents) \
-     VALUES ($2, $1, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+      default_model, default_effort, default_workflow_id, default_max_budget_cents, \
+      settings, step_overrides) \
+     VALUES ($2, $1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb) \
      RETURNING ",
     columns!()
 );
@@ -158,7 +196,8 @@ const UPDATE: &str = concat!(
     "UPDATE hub_projects SET \
      name = $3, provider_kind = $4, host = $5, full_name = $6, default_agent_kind = $7, \
      default_model = $8, default_effort = $9, default_workflow_id = $10, \
-     default_max_budget_cents = $11, updated_at = now() \
+     default_max_budget_cents = $11, settings = $12::jsonb, step_overrides = $13::jsonb, \
+     updated_at = now() \
      WHERE user_id = $1 AND id = $2 \
      RETURNING ",
     columns!()
@@ -171,6 +210,7 @@ pub async fn insert_hub_project(
     fields: &HubProjectFields,
 ) -> Result<HubProjectRow, StoreError> {
     let budget = budget_column(fields.default_max_budget_cents)?;
+    let (settings, step_overrides) = settings_columns(fields)?;
     sqlx::query_as::<_, StoredProject>(INSERT)
         .bind(user)
         .bind(id)
@@ -183,6 +223,8 @@ pub async fn insert_hub_project(
         .bind(fields.default_effort.map(effort_text))
         .bind(&fields.default_workflow_id)
         .bind(budget)
+        .bind(settings)
+        .bind(step_overrides)
         .fetch_one(db)
         .await
         .map_err(write_error)?
@@ -225,6 +267,7 @@ pub async fn update_hub_project(
     fields: &HubProjectFields,
 ) -> Result<Option<HubProjectRow>, StoreError> {
     let budget = budget_column(fields.default_max_budget_cents)?;
+    let (settings, step_overrides) = settings_columns(fields)?;
     sqlx::query_as::<_, StoredProject>(UPDATE)
         .bind(user)
         .bind(id)
@@ -237,6 +280,8 @@ pub async fn update_hub_project(
         .bind(fields.default_effort.map(effort_text))
         .bind(&fields.default_workflow_id)
         .bind(budget)
+        .bind(settings)
+        .bind(step_overrides)
         .fetch_optional(db)
         .await
         .map_err(write_error)?

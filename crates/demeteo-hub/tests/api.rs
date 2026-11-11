@@ -112,6 +112,8 @@ async fn hub_project_of(db: &Db, user: UserId) -> HubProjectId {
         default_effort: None,
         default_workflow_id: None,
         default_max_budget_cents: None,
+        settings: Default::default(),
+        step_overrides: Vec::new(),
     };
     insert_hub_project(user, db, HubProjectId::generate(), &fields)
         .await

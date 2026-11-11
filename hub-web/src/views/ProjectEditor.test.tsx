@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HubApiError } from '../lib/api';
 import type { GitHosts, RepositoryListing } from '../lib/gitHosts';
-import type { HubProject, ProjectFields } from '../lib/projects';
+import { type HubProject, NO_SETTINGS, type ProjectFields } from '../lib/projects';
 import type { HubWorkflow } from '../lib/workflows';
 import { ProjectEditor } from './ProjectEditor';
 
@@ -17,7 +17,8 @@ const api = vi.hoisted(() => ({
   listRepositories: vi.fn<() => Promise<RepositoryListing>>(),
 }));
 
-vi.mock('../lib/projects', () => ({
+vi.mock('../lib/projects', async (importOriginal) => ({
+  NO_SETTINGS: (await importOriginal<typeof import('../lib/projects')>()).NO_SETTINGS,
   listProjects: api.listProjects,
   createProject: api.createProject,
   updateProject: api.updateProject,
@@ -30,7 +31,19 @@ vi.mock('../lib/gitHosts', () => ({
 
 const WORKFLOWS: HubWorkflow[] = [
   { workflowId: 'wf-starter-feature', version: 11, name: 'Feature', description: 'Build it', graph: null },
-  { workflowId: 'wf-starter-hotfix', version: 12, name: 'Hotfix', description: 'Fix it', graph: null },
+  {
+    workflowId: 'wf-starter-hotfix',
+    version: 12,
+    name: 'Hotfix',
+    description: 'Fix it',
+    graph: {
+      nodes: [
+        { id: 's-fix', type: 'agent', title: 'Fix', position: null },
+        { id: 's-approve', type: 'gate', title: 'Approve', position: null },
+      ],
+      edges: [{ from: 's-fix', to: 's-approve' }],
+    },
+  },
 ];
 
 const HOSTS: GitHosts = {
@@ -70,6 +83,8 @@ const WIDGETS: HubProject = {
   defaultEffort: 'high',
   defaultWorkflowId: 'wf-starter-hotfix',
   defaultMaxBudgetCents: 250,
+  settings: NO_SETTINGS,
+  stepOverrides: [],
   createdAt: 1,
   updatedAt: 1,
 };
@@ -121,8 +136,21 @@ describe('ProjectEditor, adding', () => {
       defaultEffort: null,
       defaultWorkflowId: 'wf-starter-hotfix',
       defaultMaxBudgetCents: 250,
+      settings: NO_SETTINGS,
+      stepOverrides: [],
     });
     expect(window.location.hash).toBe('#/projects');
+  });
+
+  it('filters on Enter in the repository search and never saves from it', async () => {
+    setUp();
+    render(<ProjectEditor />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'acme/gadgets' }));
+    await userEvent.type(screen.getByLabelText('Search repositories'), 'widg{Enter}');
+
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'acme/gadgets' })).toBeNull();
   });
 
   it('keeps a typed name when another repository is picked', async () => {
@@ -219,6 +247,52 @@ describe('ProjectEditor, editing', () => {
       expect.objectContaining({ name: 'gadgets', host: 'github.com', fullName: 'Acme/Widgets' }),
     );
     expect(api.createProject).not.toHaveBeenCalled();
+  });
+
+  it('saves the settings a run lays over the runner, and a step override of the shown Workflow', async () => {
+    setUp({ projects: [WIDGETS] });
+    api.updateProject.mockResolvedValue(WIDGETS);
+    render(<ProjectEditor projectId="p-1" />);
+
+    await userEvent.type(await screen.findByLabelText('Test command'), 'cargo test');
+    await userEvent.type(screen.getByLabelText('Branch prefix'), 'hub/');
+    await userEvent.type(screen.getByLabelText('Loop iterations'), '5');
+    await userEvent.click(screen.getByLabelText('Push a resolved merge without review'));
+    expect(screen.getByLabelText('Workflow')).toHaveValue('wf-starter-hotfix');
+    expect(screen.queryByText('s-approve')).toBeNull();
+    const fixStep = screen.getByText('s-fix').closest('li');
+    if (fixStep === null) throw new Error('the Fix step has no row');
+    await userEvent.selectOptions(within(fixStep).getByLabelText('Agent'), 'claude-code');
+    await userEvent.selectOptions(within(fixStep).getByLabelText('Effort'), 'max');
+    await userEvent.click(screen.getByRole('button', { name: 'Save project' }));
+
+    expect(api.updateProject).toHaveBeenCalledWith(
+      'p-1',
+      expect.objectContaining({
+        settings: {
+          ...NO_SETTINGS,
+          branchPrefix: 'hub/',
+          testCommand: 'cargo test',
+          loopIterations: 5,
+          syncReviewBeforePush: false,
+        },
+        stepOverrides: [
+          { workflowId: 'wf-starter-hotfix', stepId: 's-fix', agentKind: 'claude-code', model: null, effort: 'max' },
+        ],
+      }),
+    );
+  });
+
+  it('holds the save and names the field when a setting would be refused', async () => {
+    setUp({ projects: [WIDGETS] });
+    render(<ProjectEditor projectId="p-1" />);
+
+    await userEvent.type(await screen.findByLabelText('Loop iterations'), '20');
+    await userEvent.click(screen.getByRole('button', { name: 'Save project' }));
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Loop iterations')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('A setting beside this form needs a fix');
   });
 
   it('says so when the project is gone', async () => {

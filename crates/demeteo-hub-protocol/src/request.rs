@@ -85,6 +85,55 @@ pub struct RunnerStart {
     pub source_instance_id: String,
     pub repository: RunnerRepository,
     pub workflow: RunnerWorkflow,
+    /// The Hub Project's settings overlay, or `None` when it sets none. Skipped
+    /// when `None`, for the same reason as [`StartFeature::runner`]: a runner
+    /// that predates the field refuses any start carrying it, so only a start
+    /// that has settings to send pays that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<RunnerSettings>,
+}
+
+/// What a Hub Project sets of the run's project settings, laid over what the
+/// runner detected in the clone: `None` keeps the runner's own answer, never
+/// clears it.
+///
+/// Gate autonomy is absent on purpose. A Hub-started run is unattended, and
+/// every gate it parks is decided through the Hub's passkey ceremony (HUB.md
+/// §8); a project field that approved gates by itself would let a session
+/// alone skip that ceremony for every run started from the project.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerSettings {
+    #[serde(default)]
+    pub branch_prefix: Option<String>,
+    /// Repo-relative.
+    #[serde(default)]
+    pub artifact_subdir: Option<String>,
+    #[serde(default)]
+    pub commit_artifacts: Option<bool>,
+    #[serde(default)]
+    pub review_entrypoint: Option<String>,
+    #[serde(default)]
+    pub test_command: Option<String>,
+    #[serde(default)]
+    pub build_command: Option<String>,
+    #[serde(default)]
+    pub coverage_command: Option<String>,
+    /// Repo-relative.
+    #[serde(default)]
+    pub conventions_file: Option<String>,
+    #[serde(default)]
+    pub loop_iterations: Option<u32>,
+    #[serde(default)]
+    pub sync_resolver_agent_kind: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_model: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_effort: Option<Effort>,
+    /// `Some(false)` publishes a resolved sync without waiting for review;
+    /// core's `publish_policy` holds why `Some(true)` adds nothing.
+    #[serde(default)]
+    pub sync_review_before_push: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -235,7 +284,41 @@ fn put_runner(enc: &mut Encoder, r: &RunnerStart) -> Result<(), EncodeError> {
     enc.put_str(&r.workflow.workflow_id)?;
     enc.put_u32(r.workflow.version);
     enc.put_str(&r.workflow.name)?;
-    enc.put_str(&r.workflow.steps_json)
+    enc.put_str(&r.workflow.steps_json)?;
+    // Trailing and absent-means-no-bytes, as `runner` is in `put_payload`, so
+    // a start without settings signs as it did before the field existed.
+    match &r.settings {
+        None => Ok(()),
+        Some(settings) => put_runner_settings(enc, settings),
+    }
+}
+
+fn put_runner_settings(enc: &mut Encoder, s: &RunnerSettings) -> Result<(), EncodeError> {
+    let put_text = |e: &mut Encoder, v: &String| e.put_str(v);
+    let put_flag = |e: &mut Encoder, v: bool| {
+        e.put_u8(u8::from(v));
+        Ok(())
+    };
+    enc.put_u8(1);
+    enc.put_opt(s.branch_prefix.as_ref(), put_text)?;
+    enc.put_opt(s.artifact_subdir.as_ref(), put_text)?;
+    enc.put_opt(s.commit_artifacts, put_flag)?;
+    enc.put_opt(s.review_entrypoint.as_ref(), put_text)?;
+    enc.put_opt(s.test_command.as_ref(), put_text)?;
+    enc.put_opt(s.build_command.as_ref(), put_text)?;
+    enc.put_opt(s.coverage_command.as_ref(), put_text)?;
+    enc.put_opt(s.conventions_file.as_ref(), put_text)?;
+    enc.put_opt(s.loop_iterations, |e, v| {
+        e.put_u32(v);
+        Ok(())
+    })?;
+    enc.put_opt(s.sync_resolver_agent_kind.as_ref(), put_text)?;
+    enc.put_opt(s.sync_resolver_model.as_ref(), put_text)?;
+    enc.put_opt(s.sync_resolver_effort, |e, v| {
+        e.put_u8(effort_tag(v));
+        Ok(())
+    })?;
+    enc.put_opt(s.sync_review_before_push, put_flag)
 }
 
 fn put_payload(enc: &mut Encoder, payload: &RequestPayload) -> Result<(), EncodeError> {
@@ -321,7 +404,11 @@ impl SignedRequest {
     /// [`RunnerStart`]), then [`RunnerRepository`]'s three strings and
     /// [`RunnerWorkflow`]'s `str workflow_id, u32 version, str name, str
     /// steps_json`. It cannot be confused with `None` because it is last: the
-    /// bytes either end after `attachments` or go on.
+    /// bytes either end after `attachments` or go on. `RunnerStart.settings`,
+    /// last inside it, follows the same rule: `None` is no bytes, and `Some`
+    /// is `u8 1` then [`RunnerSettings`]'s fields in declaration order, each an
+    /// `opt` (`str`, a `bool` as `u8` 0 or 1, `loop_iterations` as `u32`,
+    /// `sync_resolver_effort` as its `u8` tag).
     ///
     /// Nested, an [`AttachmentRef`] is `str id, u64 size, str sha256`; a
     /// [`StepOverride`] is `str step_id, opt<str> agent_kind, opt<str> model,

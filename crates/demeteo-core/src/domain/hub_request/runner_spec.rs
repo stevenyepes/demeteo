@@ -8,12 +8,14 @@
 //! is what the runner's `resolve` answers, and [`runner_run_spec`] applies the
 //! same checks again so no spec is built from a start that skipped them.
 
-use demeteo_hub_protocol::{RefusalReason, RunnerStart, StartFeature};
+use demeteo_hub_protocol::{RefusalReason, RunnerSettings, RunnerStart, StartFeature};
 
 use super::{effort_level, step_override};
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::models::{LaunchedBy, StepConfig};
-use crate::domain::run_spec::{RunBudget, RunOrigin, RunSpec, RunSpecAttachment, RunSpecProvider};
+use crate::domain::run_spec::{
+    ProjectSettingsOverlay, RunBudget, RunOrigin, RunSpec, RunSpecAttachment, RunSpecProvider,
+};
 
 /// The provider kinds a runner can clone from; `RunSpecProvider.kind` names
 /// one of them.
@@ -38,9 +40,10 @@ pub fn runner_start_refusal(start: &StartFeature) -> Option<RefusalReason> {
 /// The cap is both the per-turn `max_budget_usd`, as a desktop launch reads
 /// `max_budget_cents`, and the run's hard [`RunBudget`], which on a runner
 /// also carries the wall clock a desktop cannot honour. The run is
-/// unattended, as every detached run is; it starts from the default branch,
-/// since a Hub start names no origin; and it carries no project settings, so
-/// the runner's detected defaults apply.
+/// unattended, as every detached run is; and it starts from the default
+/// branch, since a Hub start names no origin. The Hub Project's settings ride
+/// as an overlay, so whatever it leaves unset keeps the runner's detected
+/// answer; its loop budget and commit-artifacts choice are the run's own.
 pub fn runner_run_spec(
     start: &StartFeature,
     runner: &RunnerStart,
@@ -48,6 +51,7 @@ pub fn runner_run_spec(
     attachments: Vec<RunSpecAttachment>,
 ) -> Result<RunSpec, RefusalReason> {
     let steps = checked_workflow(start, runner)?;
+    let settings = runner.settings.as_ref();
     let cost = start.max_budget_cents.map(|cents| cents as f64 / 100.0);
     let budget = (cost.is_some() || start.max_wall_clock_secs.is_some()).then_some(RunBudget {
         max_cost_usd: cost,
@@ -70,18 +74,35 @@ pub fn runner_run_spec(
         agent_kind: start.agent_kind.clone(),
         model: start.model.clone(),
         effort: start.effort.map(effort_level),
-        loop_iterations: None,
+        loop_iterations: settings.and_then(|settings| settings.loop_iterations),
         max_budget_usd: cost,
         step_overrides: start.step_overrides.iter().map(step_override).collect(),
-        commit_artifacts: None,
+        commit_artifacts: settings.and_then(|settings| settings.commit_artifacts),
         attachments,
         unattended: true,
         budget,
         project_settings: None,
+        settings_overlay: settings.map(settings_overlay),
         origin: Some(RunOrigin::Supported(FeatureOrigin::DefaultBranch)),
         diff_base_branch: None,
         launched_by: LaunchedBy::Hub,
     })
+}
+
+fn settings_overlay(settings: &RunnerSettings) -> ProjectSettingsOverlay {
+    ProjectSettingsOverlay {
+        branch_prefix: settings.branch_prefix.clone(),
+        artifact_subdir: settings.artifact_subdir.clone(),
+        review_entrypoint: settings.review_entrypoint.clone(),
+        test_command: settings.test_command.clone(),
+        build_command: settings.build_command.clone(),
+        coverage_command: settings.coverage_command.clone(),
+        conventions_file: settings.conventions_file.clone(),
+        sync_resolver_agent_kind: settings.sync_resolver_agent_kind.clone(),
+        sync_resolver_model: settings.sync_resolver_model.clone(),
+        sync_resolver_effort: settings.sync_resolver_effort.map(effort_level),
+        sync_review_before_push: settings.sync_review_before_push,
+    }
 }
 
 /// The workflow's steps, parsed as the runner's ingestion will parse them,

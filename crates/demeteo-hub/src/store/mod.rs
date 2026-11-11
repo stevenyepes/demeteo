@@ -152,6 +152,8 @@ pub enum StoreError {
     BudgetTooLarge(u64),
     #[error("stored budget {0} is not a count of cents")]
     BudgetOutOfRange(i64),
+    #[error("a project's settings do not convert to or from their JSON")]
+    ProjectSettingsUnreadable,
 }
 
 /// Refuses rather than saturates: a clamped time would be stored as a moment
