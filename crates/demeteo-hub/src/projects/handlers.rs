@@ -8,13 +8,13 @@ use super::postgres::PostgresProjects;
 use super::verdict::{project_verdict, remote_url, runner_ready, ProjectBody, ProjectRefusal};
 use crate::auth::handlers::{store_failed, ApiError, CurrentSession, JsonBody};
 use crate::routes::AppState;
-use crate::store::hub_projects::{HubProjectId, HubProjectRow};
+use crate::store::hub_projects::{HubProjectId, HubProjectRow, ProjectStepOverride};
 use crate::store::{StoreError, UserId};
 use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use demeteo_hub_protocol::Effort;
+use demeteo_hub_protocol::{Effort, RunnerSettings};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -41,6 +41,8 @@ pub struct ProjectView {
     default_effort: Option<Effort>,
     default_workflow_id: Option<String>,
     default_max_budget_cents: Option<u64>,
+    settings: RunnerSettings,
+    step_overrides: Vec<ProjectStepOverride>,
     /// Unix seconds.
     created_at: i64,
     /// Unix seconds.
@@ -63,6 +65,8 @@ impl From<HubProjectRow> for ProjectView {
             default_effort: fields.default_effort,
             default_workflow_id: fields.default_workflow_id,
             default_max_budget_cents: fields.default_max_budget_cents,
+            settings: fields.settings,
+            step_overrides: fields.step_overrides,
             created_at: row.created_at.unix_timestamp(),
             updated_at: row.updated_at.unix_timestamp(),
         }

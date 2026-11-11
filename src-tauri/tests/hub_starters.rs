@@ -40,6 +40,7 @@ fn start_from(starter: &Starter) -> StartFeature {
                 name: starter.name.clone(),
                 steps_json: starter.steps_json.clone(),
             },
+            settings: None,
         })),
     }
 }

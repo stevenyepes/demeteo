@@ -24,10 +24,62 @@ export type HubProject = {
   defaultEffort: EffortLevel | null;
   defaultWorkflowId: string | null;
   defaultMaxBudgetCents: number | null;
+  settings: ProjectSettings;
+  stepOverrides: ProjectStepOverride[];
   /** Unix seconds. */
   createdAt: number;
   /** Unix seconds. */
   updatedAt: number;
+};
+
+/**
+ * What a run started from the project uses in place of what the runner
+ * detects in the clone. `null` keeps the runner's own answer; nothing here
+ * clears one. There is deliberately no gate autonomy: a Hub run's gates are
+ * decided with a passkey, never by a project setting.
+ */
+export type ProjectSettings = {
+  branchPrefix: string | null;
+  /** Repo-relative. */
+  artifactSubdir: string | null;
+  commitArtifacts: boolean | null;
+  reviewEntrypoint: string | null;
+  testCommand: string | null;
+  buildCommand: string | null;
+  coverageCommand: string | null;
+  /** Repo-relative. */
+  conventionsFile: string | null;
+  loopIterations: number | null;
+  syncResolverAgentKind: string | null;
+  syncResolverModel: string | null;
+  syncResolverEffort: EffortLevel | null;
+  /** `false` publishes a resolved sync without waiting for a review; `true` is never sent, as it changes nothing. */
+  syncReviewBeforePush: boolean | null;
+};
+
+export const NO_SETTINGS: ProjectSettings = {
+  branchPrefix: null,
+  artifactSubdir: null,
+  commitArtifacts: null,
+  reviewEntrypoint: null,
+  testCommand: null,
+  buildCommand: null,
+  coverageCommand: null,
+  conventionsFile: null,
+  loopIterations: null,
+  syncResolverAgentKind: null,
+  syncResolverModel: null,
+  syncResolverEffort: null,
+  syncReviewBeforePush: null,
+};
+
+/** A default harness for one agent step of one Hub Workflow, used by every dispatch of it that overrides nothing there itself. */
+export type ProjectStepOverride = {
+  workflowId: string;
+  stepId: string;
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
 };
 
 /** What a create or an update sends: every field, since an update replaces the project whole. */
@@ -41,6 +93,32 @@ export type ProjectFields = {
   defaultEffort: EffortLevel | null;
   defaultWorkflowId: string | null;
   defaultMaxBudgetCents: number | null;
+  settings: ProjectSettings;
+  stepOverrides: ProjectStepOverride[];
+};
+
+type WireSettings = {
+  branch_prefix: string | null;
+  artifact_subdir: string | null;
+  commit_artifacts: boolean | null;
+  review_entrypoint: string | null;
+  test_command: string | null;
+  build_command: string | null;
+  coverage_command: string | null;
+  conventions_file: string | null;
+  loop_iterations: number | null;
+  sync_resolver_agent_kind: string | null;
+  sync_resolver_model: string | null;
+  sync_resolver_effort: string | null;
+  sync_review_before_push: boolean | null;
+};
+
+type WireStepOverride = {
+  workflow_id: string;
+  step_id: string;
+  agent_kind: string | null;
+  model: string | null;
+  effort: string | null;
 };
 
 type WireProject = {
@@ -56,6 +134,8 @@ type WireProject = {
   default_effort: string | null;
   default_workflow_id: string | null;
   default_max_budget_cents: number | null;
+  settings: WireSettings;
+  step_overrides: WireStepOverride[];
   created_at: number;
   updated_at: number;
 };
@@ -89,6 +169,50 @@ function bodyOf(fields: ProjectFields): Record<string, unknown> {
     default_effort: fields.defaultEffort,
     default_workflow_id: fields.defaultWorkflowId,
     default_max_budget_cents: fields.defaultMaxBudgetCents,
+    settings: wireSettingsOf(fields.settings),
+    step_overrides: fields.stepOverrides.map((entry) => ({
+      workflow_id: entry.workflowId,
+      step_id: entry.stepId,
+      agent_kind: entry.agentKind,
+      model: entry.model,
+      effort: entry.effort,
+    })),
+  };
+}
+
+function wireSettingsOf(settings: ProjectSettings): WireSettings {
+  return {
+    branch_prefix: settings.branchPrefix,
+    artifact_subdir: settings.artifactSubdir,
+    commit_artifacts: settings.commitArtifacts,
+    review_entrypoint: settings.reviewEntrypoint,
+    test_command: settings.testCommand,
+    build_command: settings.buildCommand,
+    coverage_command: settings.coverageCommand,
+    conventions_file: settings.conventionsFile,
+    loop_iterations: settings.loopIterations,
+    sync_resolver_agent_kind: settings.syncResolverAgentKind,
+    sync_resolver_model: settings.syncResolverModel,
+    sync_resolver_effort: settings.syncResolverEffort,
+    sync_review_before_push: settings.syncReviewBeforePush,
+  };
+}
+
+function settingsOf(wire: WireSettings): ProjectSettings {
+  return {
+    branchPrefix: wire.branch_prefix,
+    artifactSubdir: wire.artifact_subdir,
+    commitArtifacts: wire.commit_artifacts,
+    reviewEntrypoint: wire.review_entrypoint,
+    testCommand: wire.test_command,
+    buildCommand: wire.build_command,
+    coverageCommand: wire.coverage_command,
+    conventionsFile: wire.conventions_file,
+    loopIterations: wire.loop_iterations,
+    syncResolverAgentKind: wire.sync_resolver_agent_kind,
+    syncResolverModel: wire.sync_resolver_model,
+    syncResolverEffort: isEffortLevel(wire.sync_resolver_effort) ? wire.sync_resolver_effort : null,
+    syncReviewBeforePush: wire.sync_review_before_push,
   };
 }
 
@@ -106,6 +230,14 @@ function projectOf(wire: WireProject): HubProject {
     defaultEffort: isEffortLevel(wire.default_effort) ? wire.default_effort : null,
     defaultWorkflowId: wire.default_workflow_id,
     defaultMaxBudgetCents: wire.default_max_budget_cents,
+    settings: settingsOf(wire.settings),
+    stepOverrides: wire.step_overrides.map((entry) => ({
+      workflowId: entry.workflow_id,
+      stepId: entry.step_id,
+      agentKind: entry.agent_kind,
+      model: entry.model,
+      effort: isEffortLevel(entry.effort) ? entry.effort : null,
+    })),
     createdAt: wire.created_at,
     updatedAt: wire.updated_at,
   };
@@ -124,6 +256,8 @@ const isWireProject: Guard<WireProject> = (value): value is WireProject =>
   isStringOrNull(memberOf(value, 'default_effort')) &&
   isStringOrNull(memberOf(value, 'default_workflow_id')) &&
   isNumberOrNull(memberOf(value, 'default_max_budget_cents')) &&
+  isWireSettings(memberOf(value, 'settings')) &&
+  isWireStepOverrides(memberOf(value, 'step_overrides')) &&
   typeof memberOf(value, 'created_at') === 'number' &&
   typeof memberOf(value, 'updated_at') === 'number';
 
@@ -131,6 +265,48 @@ const isWireProjects: Guard<{ projects: WireProject[] }> = (value): value is { p
   const projects = memberOf(value, 'projects');
   return Array.isArray(projects) && projects.every(isWireProject);
 };
+
+const SETTINGS_TEXT = [
+  'branch_prefix',
+  'artifact_subdir',
+  'review_entrypoint',
+  'test_command',
+  'build_command',
+  'coverage_command',
+  'conventions_file',
+  'sync_resolver_agent_kind',
+  'sync_resolver_model',
+  'sync_resolver_effort',
+] as const;
+
+function isWireSettings(value: unknown): value is WireSettings {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    SETTINGS_TEXT.every((key) => isStringOrNull(memberOf(value, key))) &&
+    isBooleanOrNull(memberOf(value, 'commit_artifacts')) &&
+    isBooleanOrNull(memberOf(value, 'sync_review_before_push')) &&
+    isNumberOrNull(memberOf(value, 'loop_iterations'))
+  );
+}
+
+function isWireStepOverrides(value: unknown): value is WireStepOverride[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        typeof memberOf(entry, 'workflow_id') === 'string' &&
+        typeof memberOf(entry, 'step_id') === 'string' &&
+        isStringOrNull(memberOf(entry, 'agent_kind')) &&
+        isStringOrNull(memberOf(entry, 'model')) &&
+        isStringOrNull(memberOf(entry, 'effort')),
+    )
+  );
+}
+
+function isBooleanOrNull(value: unknown): value is boolean | null {
+  return value === null || typeof value === 'boolean';
+}
 
 const isNoContent: Guard<null> = (value): value is null => value === null;
 

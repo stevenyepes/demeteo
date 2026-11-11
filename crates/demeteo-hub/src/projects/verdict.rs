@@ -6,12 +6,19 @@
 //! `https://{host}/{full_name}` as given, so a pair that does not round-trip
 //! through that URL is refused rather than repaired.
 
-use crate::store::hub_projects::HubProjectFields;
+use crate::store::hub_projects::{HubProjectFields, ProjectStepOverride};
 use crate::workflows;
-use demeteo_hub_protocol::Effort;
+use demeteo_hub_protocol::{Effort, RunnerSettings};
 use serde::Deserialize;
 
 pub const MAX_NAME_CHARS: usize = 200;
+
+/// The desktop's bound on `default_loop_iterations`, which a Hub Project keeps.
+pub const LOOP_ITERATIONS: std::ops::RangeInclusive<u32> = 1..=10;
+
+/// The step kinds that run an agent, so have one to override. The browser's
+/// `isOverridable` (`hub-web/src/lib/dispatchForm.ts`) holds the same list.
+const OVERRIDABLE_KINDS: [&str; 2] = ["agent", "sequence"];
 
 const GITHUB: &str = "github";
 const GITLAB: &str = "gitlab";
@@ -35,6 +42,10 @@ pub struct ProjectBody {
     pub default_workflow_id: Option<String>,
     #[serde(default)]
     pub default_max_budget_cents: Option<u64>,
+    #[serde(default)]
+    pub settings: RunnerSettings,
+    #[serde(default)]
+    pub step_overrides: Vec<ProjectStepOverride>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +58,13 @@ pub enum ProjectRefusal {
     /// `default_workflow_id` names no embedded starter.
     UnknownWorkflow,
     Budget,
+    /// A setting that is only whitespace or holds NUL; a branch prefix a
+    /// branch name cannot start with; a folder or file that is not inside the
+    /// repository; or a loop budget outside [`LOOP_ITERATIONS`].
+    Setting,
+    /// A step override naming a starter that does not exist, a step it has
+    /// no agent on, the same step twice, or nothing to override.
+    StepOverride,
 }
 
 /// The fields to store for `body`: the host lowercased, and an empty agent
@@ -79,6 +97,8 @@ pub fn project_verdict(body: ProjectBody) -> Result<HubProjectFields, ProjectRef
     {
         return Err(ProjectRefusal::Budget);
     }
+    let settings = settings_verdict(body.settings)?;
+    let step_overrides = step_overrides_verdict(body.step_overrides)?;
     Ok(HubProjectFields {
         name: body.name,
         provider_kind: body.provider_kind,
@@ -89,7 +109,105 @@ pub fn project_verdict(body: ProjectBody) -> Result<HubProjectFields, ProjectRef
         default_effort: body.default_effort,
         default_workflow_id,
         default_max_budget_cents: body.default_max_budget_cents,
+        settings,
+        step_overrides,
     })
+}
+
+/// `settings` with every empty text read as unset. Commands and the review
+/// entrypoint are kept as typed: they are run, or read by an agent, as given.
+fn settings_verdict(settings: RunnerSettings) -> Result<RunnerSettings, ProjectRefusal> {
+    let text = |value: Option<String>| optional(value).map_err(|_| ProjectRefusal::Setting);
+    let branch_prefix = text(settings.branch_prefix)?;
+    if branch_prefix
+        .as_deref()
+        .is_some_and(|prefix| !branch_prefix_ok(prefix))
+    {
+        return Err(ProjectRefusal::Setting);
+    }
+    let artifact_subdir = text(settings.artifact_subdir)?;
+    let conventions_file = text(settings.conventions_file)?;
+    if [&artifact_subdir, &conventions_file]
+        .into_iter()
+        .flatten()
+        .any(|relative| !inside_repository(relative))
+    {
+        return Err(ProjectRefusal::Setting);
+    }
+    if settings
+        .loop_iterations
+        .is_some_and(|loops| !LOOP_ITERATIONS.contains(&loops))
+    {
+        return Err(ProjectRefusal::Setting);
+    }
+    Ok(RunnerSettings {
+        branch_prefix,
+        artifact_subdir,
+        commit_artifacts: settings.commit_artifacts,
+        review_entrypoint: text(settings.review_entrypoint)?,
+        test_command: text(settings.test_command)?,
+        build_command: text(settings.build_command)?,
+        coverage_command: text(settings.coverage_command)?,
+        conventions_file,
+        loop_iterations: settings.loop_iterations,
+        sync_resolver_agent_kind: text(settings.sync_resolver_agent_kind)?,
+        sync_resolver_model: text(settings.sync_resolver_model)?,
+        sync_resolver_effort: settings.sync_resolver_effort,
+        sync_review_before_push: settings.sync_review_before_push,
+    })
+}
+
+/// What `git check-ref-format` would refuse at the front of a branch name,
+/// short of resolving the whole name: the runner appends the Feature's slug.
+fn branch_prefix_ok(prefix: &str) -> bool {
+    const FORBIDDEN: [char; 8] = ['~', '^', ':', '?', '*', '[', '\\', ' '];
+    !prefix.starts_with(['-', '/', '.'])
+        && !prefix.contains("..")
+        && !prefix.contains("//")
+        && !prefix.contains("@{")
+        && !prefix.contains(|c: char| c.is_control() || c.is_whitespace() || FORBIDDEN.contains(&c))
+}
+
+/// Whether `relative` names something inside the clone, on every OS a runner
+/// or a desktop might read it on: not absolute, no drive, no `..` segment.
+fn inside_repository(relative: &str) -> bool {
+    let drive = relative.as_bytes().get(1) == Some(&b':');
+    !relative.starts_with(['/', '\\'])
+        && !drive
+        && !relative.contains(|c: char| c.is_control())
+        && relative.split(['/', '\\']).all(|segment| segment != "..")
+}
+
+fn step_overrides_verdict(
+    overrides: Vec<ProjectStepOverride>,
+) -> Result<Vec<ProjectStepOverride>, ProjectRefusal> {
+    let mut seen = std::collections::HashSet::new();
+    overrides
+        .into_iter()
+        .map(|entry| {
+            let starter =
+                workflows::starter(&entry.workflow_id).ok_or(ProjectRefusal::StepOverride)?;
+            let runs_an_agent = starter.graph.nodes.iter().any(|node| {
+                node.id == entry.step_id && OVERRIDABLE_KINDS.contains(&node.kind.as_str())
+            });
+            let text =
+                |value: Option<String>| optional(value).map_err(|_| ProjectRefusal::StepOverride);
+            let entry = ProjectStepOverride {
+                agent_kind: text(entry.agent_kind)?,
+                model: text(entry.model)?,
+                ..entry
+            };
+            let empty =
+                entry.agent_kind.is_none() && entry.model.is_none() && entry.effort.is_none();
+            if !runs_an_agent
+                || empty
+                || !seen.insert((entry.workflow_id.clone(), entry.step_id.clone()))
+            {
+                return Err(ProjectRefusal::StepOverride);
+            }
+            Ok(entry)
+        })
+        .collect()
 }
 
 fn optional(value: Option<String>) -> Result<Option<String>, ProjectRefusal> {
@@ -144,6 +262,8 @@ mod tests {
             default_effort: None,
             default_workflow_id: None,
             default_max_budget_cents: None,
+            settings: RunnerSettings::default(),
+            step_overrides: Vec::new(),
         }
     }
 
@@ -175,6 +295,8 @@ mod tests {
                 default_effort: Some(Effort::High),
                 default_workflow_id: Some(known_starter()),
                 default_max_budget_cents: Some(250),
+                settings: RunnerSettings::default(),
+                step_overrides: Vec::new(),
             }
         );
     }
@@ -320,6 +442,203 @@ mod tests {
                 "group/sub/repo".to_owned()
             ))
         );
+    }
+
+    fn with_settings(settings: RunnerSettings) -> Result<HubProjectFields, ProjectRefusal> {
+        project_verdict(ProjectBody {
+            settings,
+            ..body("github.com", "acme/widgets")
+        })
+    }
+
+    #[test]
+    fn empty_settings_read_as_unset_and_the_rest_are_kept_as_typed() {
+        let fields = with_settings(RunnerSettings {
+            branch_prefix: Some("hub/".to_owned()),
+            artifact_subdir: Some(String::new()),
+            test_command: Some("  cargo test --workspace".to_owned()),
+            conventions_file: Some("docs/AGENTS.md".to_owned()),
+            loop_iterations: Some(10),
+            sync_review_before_push: Some(false),
+            ..RunnerSettings::default()
+        })
+        .unwrap();
+        assert_eq!(
+            fields.settings,
+            RunnerSettings {
+                branch_prefix: Some("hub/".to_owned()),
+                artifact_subdir: None,
+                test_command: Some("  cargo test --workspace".to_owned()),
+                conventions_file: Some("docs/AGENTS.md".to_owned()),
+                loop_iterations: Some(10),
+                sync_review_before_push: Some(false),
+                ..RunnerSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_setting_a_runner_could_not_use_is_refused() {
+        let cases: [(&str, RunnerSettings); 9] = [
+            (
+                "blank command",
+                RunnerSettings {
+                    test_command: Some("  ".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "NUL",
+                RunnerSettings {
+                    review_entrypoint: Some("a\0b".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "prefix with a space",
+                RunnerSettings {
+                    branch_prefix: Some("my branch/".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "prefix like an option",
+                RunnerSettings {
+                    branch_prefix: Some("-f".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "prefix with ..",
+                RunnerSettings {
+                    branch_prefix: Some("a..b/".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "absolute folder",
+                RunnerSettings {
+                    artifact_subdir: Some("/tmp/out".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "drive",
+                RunnerSettings {
+                    artifact_subdir: Some("C:\\out".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "escaping file",
+                RunnerSettings {
+                    conventions_file: Some("docs/../../etc".to_owned()),
+                    ..RunnerSettings::default()
+                },
+            ),
+            (
+                "no loops",
+                RunnerSettings {
+                    loop_iterations: Some(0),
+                    ..RunnerSettings::default()
+                },
+            ),
+        ];
+        for (case, settings) in cases {
+            assert_eq!(
+                with_settings(settings),
+                Err(ProjectRefusal::Setting),
+                "{case}"
+            );
+        }
+        assert_eq!(
+            with_settings(RunnerSettings {
+                loop_iterations: Some(11),
+                ..RunnerSettings::default()
+            }),
+            Err(ProjectRefusal::Setting)
+        );
+    }
+
+    /// A starter with an agent step, and one of its steps that runs none.
+    fn agent_and_other_step() -> (String, String, String) {
+        workflows::starters()
+            .iter()
+            .find_map(|starter| {
+                let nodes = &starter.graph.nodes;
+                let agent = nodes.iter().find(|node| node.kind == "agent")?;
+                let other = nodes
+                    .iter()
+                    .find(|node| !OVERRIDABLE_KINDS.contains(&node.kind.as_str()))?;
+                Some((starter.id.clone(), agent.id.clone(), other.id.clone()))
+            })
+            .expect("a starter with an agent step and a gate")
+    }
+
+    fn step_override(workflow_id: &str, step_id: &str) -> ProjectStepOverride {
+        ProjectStepOverride {
+            workflow_id: workflow_id.to_owned(),
+            step_id: step_id.to_owned(),
+            agent_kind: Some("codex".to_owned()),
+            model: Some(String::new()),
+            effort: None,
+        }
+    }
+
+    fn with_overrides(
+        overrides: Vec<ProjectStepOverride>,
+    ) -> Result<HubProjectFields, ProjectRefusal> {
+        project_verdict(ProjectBody {
+            step_overrides: overrides,
+            ..body("github.com", "acme/widgets")
+        })
+    }
+
+    #[test]
+    fn a_step_override_of_an_agent_step_is_kept_with_an_empty_model_unset() {
+        let (workflow, agent, _) = agent_and_other_step();
+        let fields = with_overrides(vec![step_override(&workflow, &agent)]).unwrap();
+        assert_eq!(
+            fields.step_overrides,
+            vec![ProjectStepOverride {
+                model: None,
+                ..step_override(&workflow, &agent)
+            }]
+        );
+    }
+
+    #[test]
+    fn a_step_override_with_nothing_to_override_or_nowhere_to_land_is_refused() {
+        let (workflow, agent, other) = agent_and_other_step();
+        let cases = [
+            ("unknown starter", vec![step_override("wf-nope", &agent)]),
+            ("unknown step", vec![step_override(&workflow, "s-nope")]),
+            (
+                "step that runs no agent",
+                vec![step_override(&workflow, &other)],
+            ),
+            (
+                "twice",
+                vec![
+                    step_override(&workflow, &agent),
+                    step_override(&workflow, &agent),
+                ],
+            ),
+            (
+                "nothing set",
+                vec![ProjectStepOverride {
+                    agent_kind: None,
+                    ..step_override(&workflow, &agent)
+                }],
+            ),
+        ];
+        for (case, overrides) in cases {
+            assert_eq!(
+                with_overrides(overrides),
+                Err(ProjectRefusal::StepOverride),
+                "{case}"
+            );
+        }
     }
 
     #[test]

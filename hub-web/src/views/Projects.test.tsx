@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { HubProject } from '../lib/projects';
+import { type HubProject, NO_SETTINGS } from '../lib/projects';
 import type { HubWorkflow } from '../lib/workflows';
 import { Projects } from './Projects';
 
@@ -12,7 +12,8 @@ const api = vi.hoisted(() => ({
   listWorkflows: vi.fn<() => Promise<HubWorkflow[]>>(),
 }));
 
-vi.mock('../lib/projects', () => ({
+vi.mock('../lib/projects', async (importOriginal) => ({
+  NO_SETTINGS: (await importOriginal<typeof import('../lib/projects')>()).NO_SETTINGS,
   listProjects: api.listProjects,
   removeProject: api.removeProject,
 }));
@@ -36,6 +37,8 @@ const WIDGETS: HubProject = {
   defaultEffort: 'high',
   defaultWorkflowId: 'wf-starter-hotfix',
   defaultMaxBudgetCents: 250,
+  settings: NO_SETTINGS,
+  stepOverrides: [],
   createdAt: 1,
   updatedAt: 1,
 };

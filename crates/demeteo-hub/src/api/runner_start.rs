@@ -3,17 +3,20 @@
 //! (`docs/HUB.md` §6.4). Both are the Hub's own, never a desktop's, which
 //! supersedes decision 65's resolution through a source desktop's snapshot.
 //!
-//! A runner keeps no Projects or Workflows and runs with no project settings,
-//! so whatever is signed here is all it will run, and the Hub Project's
-//! run-shape defaults are filled in before signing or not at all. Every miss
-//! is a refusal and never a guess.
+//! A runner keeps no Projects or Workflows, so whatever is signed here is all
+//! it will run: the Hub Project's run-shape defaults and step overrides are
+//! filled in before signing or not at all, and its settings ride signed beside
+//! them, for the runner to lay over what it detected. Every miss is a refusal
+//! and never a guess.
 
 use crate::auth::handlers::ApiError;
 use crate::projects::verdict::runner_ready;
 use crate::store::hub_projects::HubProjectRow;
 use crate::workflows::Starter;
 use axum::http::StatusCode;
-use demeteo_hub_protocol::{RunnerRepository, RunnerStart, RunnerWorkflow, StartFeature};
+use demeteo_hub_protocol::{
+    RunnerRepository, RunnerSettings, RunnerStart, RunnerWorkflow, StartFeature, StepOverride,
+};
 
 /// What every Hub-built [`RunnerStart`] carries as `source_instance_id`. No
 /// runner reads the field, and every deployed runner requires it.
@@ -66,6 +69,10 @@ pub fn runner_start(
             name: starter.name.clone(),
             steps_json: starter.steps_json.clone(),
         },
+        // Omitted rather than sent empty: a runner that predates the field
+        // refuses a start carrying it, so only a project that sets something
+        // needs a runner that reads it.
+        settings: (fields.settings != RunnerSettings::default()).then(|| fields.settings.clone()),
     })
 }
 
@@ -75,8 +82,30 @@ pub fn runner_start(
 /// The default model and effort belong to the default agent: under any other
 /// agent the body names they stay unset, since a model slug is one harness's
 /// and an effort level may be one the named harness cannot run.
+///
+/// The project's step overrides for the dispatched Workflow are added for each
+/// step the body names none for. A step the body overrides is the body's
+/// whole, never merged field by field with the project's, for the same reason.
 pub fn run_shape_defaults(start: StartFeature, row: &HubProjectRow) -> StartFeature {
     let defaults = &row.fields;
+    let mut step_overrides = start.step_overrides;
+    let project_steps: Vec<StepOverride> = defaults
+        .step_overrides
+        .iter()
+        .filter(|entry| entry.workflow_id == start.workflow_id)
+        .filter(|entry| {
+            !step_overrides
+                .iter()
+                .any(|asked| asked.step_id == entry.step_id)
+        })
+        .map(|entry| StepOverride {
+            step_id: entry.step_id.clone(),
+            agent_kind: entry.agent_kind.clone(),
+            model: entry.model.clone(),
+            effort: entry.effort,
+        })
+        .collect();
+    step_overrides.extend(project_steps);
     let agent_kind = start
         .agent_kind
         .or_else(|| defaults.default_agent_kind.clone());
@@ -92,6 +121,7 @@ pub fn run_shape_defaults(start: StartFeature, row: &HubProjectRow) -> StartFeat
             .or_else(|| default_agent.then_some(defaults.default_effort).flatten()),
         max_budget_cents: start.max_budget_cents.or(defaults.default_max_budget_cents),
         agent_kind,
+        step_overrides,
         ..start
     }
 }
@@ -100,7 +130,7 @@ pub fn run_shape_defaults(start: StartFeature, row: &HubProjectRow) -> StartFeat
 mod tests {
     use super::*;
     use crate::api::snapshot_view::WorkflowGraphView;
-    use crate::store::hub_projects::{HubProjectFields, HubProjectId};
+    use crate::store::hub_projects::{HubProjectFields, HubProjectId, ProjectStepOverride};
     use demeteo_hub_protocol::Effort;
     use time::OffsetDateTime;
 
@@ -117,6 +147,8 @@ mod tests {
                 default_effort: Some(Effort::High),
                 default_workflow_id: None,
                 default_max_budget_cents: Some(900),
+                settings: RunnerSettings::default(),
+                step_overrides: Vec::new(),
             },
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -173,8 +205,21 @@ mod tests {
                     name: "Standard".to_owned(),
                     steps_json: r#"[{"id":"s-plan"}]"#.to_owned(),
                 },
+                settings: None,
             })
         );
+    }
+
+    #[test]
+    fn a_project_that_sets_anything_signs_its_settings_whole() {
+        let mut project = row("github");
+        project.fields.settings = RunnerSettings {
+            test_command: Some("cargo test".to_owned()),
+            loop_iterations: Some(4),
+            ..RunnerSettings::default()
+        };
+        let start = runner_start(Some(&project), Some(&starter())).unwrap();
+        assert_eq!(start.settings, Some(project.fields.settings));
     }
 
     #[test]
@@ -251,6 +296,55 @@ mod tests {
         bare.fields.default_effort = None;
         bare.fields.default_max_budget_cents = None;
         assert_eq!(run_shape_defaults(start(), &bare), start());
+    }
+
+    fn project_step(workflow_id: &str, step_id: &str, agent_kind: &str) -> ProjectStepOverride {
+        ProjectStepOverride {
+            workflow_id: workflow_id.to_owned(),
+            step_id: step_id.to_owned(),
+            agent_kind: Some(agent_kind.to_owned()),
+            model: None,
+            effort: Some(Effort::Max),
+        }
+    }
+
+    fn asked_step(step_id: &str, agent_kind: &str) -> StepOverride {
+        StepOverride {
+            step_id: step_id.to_owned(),
+            agent_kind: Some(agent_kind.to_owned()),
+            model: None,
+            effort: None,
+        }
+    }
+
+    #[test]
+    fn project_step_overrides_fill_the_steps_the_body_left_alone_for_this_workflow() {
+        let mut project = row("github");
+        project.fields.step_overrides = vec![
+            project_step("wf-starter-standard", "s-plan", "codex"),
+            project_step("wf-starter-standard", "s-build", "codex"),
+            project_step("wf-starter-other", "s-review", "codex"),
+        ];
+        let asked = StartFeature {
+            step_overrides: vec![asked_step("s-build", "claude-code")],
+            ..start()
+        };
+
+        let filled = run_shape_defaults(asked, &project);
+
+        assert_eq!(
+            filled.step_overrides,
+            vec![
+                asked_step("s-build", "claude-code"),
+                StepOverride {
+                    step_id: "s-plan".to_owned(),
+                    agent_kind: Some("codex".to_owned()),
+                    model: None,
+                    effort: Some(Effort::Max),
+                },
+            ],
+            "the body's own override stands whole, and another workflow's never applies"
+        );
     }
 
     #[test]

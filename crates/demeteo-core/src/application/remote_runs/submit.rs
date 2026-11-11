@@ -215,6 +215,7 @@ impl ResolvedSubmit {
             unattended: true,
             budget: self.budget.clone(),
             project_settings: self.project_settings.clone(),
+            settings_overlay: None,
             origin: Some(RunOrigin::Supported(launch.origin.clone())),
             diff_base_branch: launch.diff_base_branch.clone(),
             launched_by: launch.launched_by,

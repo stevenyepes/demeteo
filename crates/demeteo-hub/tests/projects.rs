@@ -132,6 +132,76 @@ async fn a_project_is_created_listed_replaced_and_removed() {
     .await;
 }
 
+/// An agent step of the first starter that has one.
+fn agent_step() -> (String, String) {
+    starters()
+        .iter()
+        .find_map(|starter| {
+            let node = starter
+                .graph
+                .nodes
+                .iter()
+                .find(|node| node.kind == "agent")?;
+            Some((starter.id.clone(), node.id.clone()))
+        })
+        .expect("a starter with an agent step")
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn settings_and_step_overrides_round_trip_through_their_columns() {
+    in_fresh_schema(|db| async move {
+        let (_, session) = signed_in(&db).await;
+        let base = serve_state(state_over(db.clone())).await;
+        let (workflow_id, step_id) = agent_step();
+        let mut sent = body("Widgets", "acme/widgets");
+        sent["settings"] = json!({
+            "branch_prefix": "hub/",
+            "test_command": "cargo test",
+            "artifact_subdir": "",
+            "loop_iterations": 4,
+            "commit_artifacts": true,
+            "sync_resolver_effort": "low",
+            "sync_review_before_push": false,
+        });
+        sent["step_overrides"] = json!([{
+            "workflow_id": workflow_id,
+            "step_id": step_id,
+            "agent_kind": "codex",
+            "effort": "max",
+        }]);
+
+        let (status, created) = post_as(&base, "/v1/projects", &session, &sent).await;
+        assert_eq!(status, 201, "{created}");
+        let (_, listed) = get_as(&base, "/v1/projects", &session).await;
+        let stored = &listed["projects"][0];
+        assert_eq!(stored, &created);
+        assert_eq!(stored["settings"]["branch_prefix"], "hub/");
+        assert_eq!(stored["settings"]["test_command"], "cargo test");
+        assert_eq!(stored["settings"]["artifact_subdir"], Value::Null);
+        assert_eq!(stored["settings"]["loop_iterations"], 4);
+        assert_eq!(stored["settings"]["commit_artifacts"], true);
+        assert_eq!(stored["settings"]["sync_resolver_effort"], "low");
+        assert_eq!(stored["settings"]["sync_review_before_push"], false);
+        assert_eq!(
+            stored["step_overrides"],
+            json!([{
+                "workflow_id": workflow_id,
+                "step_id": step_id,
+                "agent_kind": "codex",
+                "model": null,
+                "effort": "max",
+            }])
+        );
+
+        let mut refused = body("Gadgets", "acme/gadgets");
+        refused["settings"] = json!({ "loop_iterations": 0 });
+        let (status, _) = post_as(&base, "/v1/projects", &session, &refused).await;
+        assert_eq!(status, 400);
+    })
+    .await;
+}
+
 #[tokio::test]
 #[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
 async fn another_tenant_neither_sees_nor_changes_the_project() {
@@ -239,6 +309,8 @@ async fn removing_the_user_removes_their_projects() {
             default_effort: None,
             default_workflow_id: Some("wf-starter-dropped-by-a-later-build".to_owned()),
             default_max_budget_cents: None,
+            settings: Default::default(),
+            step_overrides: Vec::new(),
         };
         insert_hub_project(user, &db, HubProjectId::generate(), &fields)
             .await

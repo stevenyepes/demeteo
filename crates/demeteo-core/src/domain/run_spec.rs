@@ -152,6 +152,12 @@ pub struct RunSpec {
     /// re-homes it onto the run's own project.
     #[serde(default)]
     pub project_settings: Option<ProjectSettings>,
+    /// Fields laid over the settings the runner composes from
+    /// `project_settings` and its own detection, one at a time. A Hub
+    /// Project sends this rather than `project_settings`, which replaces the
+    /// detected test and build commands whole. `None` from every desktop.
+    #[serde(default)]
+    pub settings_overlay: Option<ProjectSettingsOverlay>,
     /// Where this run's branch is cut from (V41). `None` — an old client, or
     /// a launch that chose nothing — is [`FeatureOrigin::DefaultBranch`],
     /// which is what every detached run did before this field existed. Read
@@ -170,6 +176,75 @@ pub struct RunSpec {
     /// spec from a desktop that predates the field always meant.
     #[serde(default)]
     pub launched_by: LaunchedBy,
+}
+
+/// Project settings a launcher sets field by field: each `Some` replaces the
+/// field it names, and `None` leaves what is already there. Nothing here
+/// clears a field, so a launcher cannot erase a command the runner detected
+/// by leaving its own blank.
+///
+/// It names no gate autonomy: a field that let a remote launcher approve the
+/// run's gates for it would make every gate a formality (HUB.md §8).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSettingsOverlay {
+    #[serde(default)]
+    pub branch_prefix: Option<String>,
+    #[serde(default)]
+    pub artifact_subdir: Option<String>,
+    #[serde(default)]
+    pub review_entrypoint: Option<String>,
+    #[serde(default)]
+    pub test_command: Option<String>,
+    #[serde(default)]
+    pub build_command: Option<String>,
+    #[serde(default)]
+    pub coverage_command: Option<String>,
+    #[serde(default)]
+    pub conventions_file: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_agent_kind: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_model: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_effort: Option<EffortLevel>,
+    #[serde(default)]
+    pub sync_review_before_push: Option<bool>,
+}
+
+impl ProjectSettingsOverlay {
+    pub fn apply(&self, settings: &mut ProjectSettings) {
+        fn set<T: Clone>(field: &mut T, value: &Option<T>) {
+            if let Some(value) = value {
+                *field = value.clone();
+            }
+        }
+        fn set_opt<T: Clone>(field: &mut Option<T>, value: &Option<T>) {
+            if value.is_some() {
+                field.clone_from(value);
+            }
+        }
+        let strategy = &mut settings.worktree_strategy;
+        set(&mut strategy.branch_prefix, &self.branch_prefix);
+        set_opt(&mut strategy.test_command, &self.test_command);
+        set_opt(&mut strategy.build_command, &self.build_command);
+        set_opt(&mut strategy.coverage_command, &self.coverage_command);
+        set_opt(&mut strategy.conventions_file, &self.conventions_file);
+        set(&mut settings.artifact_subdir, &self.artifact_subdir);
+        set_opt(&mut settings.review_entrypoint, &self.review_entrypoint);
+        set_opt(
+            &mut settings.sync_resolver_agent_kind,
+            &self.sync_resolver_agent_kind,
+        );
+        set_opt(&mut settings.sync_resolver_model, &self.sync_resolver_model);
+        set_opt(
+            &mut settings.sync_resolver_effort,
+            &self.sync_resolver_effort,
+        );
+        set_opt(
+            &mut settings.sync_review_before_push,
+            &self.sync_review_before_push,
+        );
+    }
 }
 
 impl RunSpec {

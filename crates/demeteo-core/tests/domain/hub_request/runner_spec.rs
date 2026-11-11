@@ -4,7 +4,7 @@
 use super::*;
 use crate::domain::models::{EffortLevel, StepOverride};
 use demeteo_hub_protocol::{
-    Effort, RunnerRepository, RunnerWorkflow, StepOverride as WireOverride,
+    Effort, RunnerRepository, RunnerSettings, RunnerWorkflow, StepOverride as WireOverride,
 };
 
 fn steps_json() -> String {
@@ -31,6 +31,7 @@ fn runner() -> RunnerStart {
             name: "Ship".into(),
             steps_json: steps_json(),
         },
+        settings: None,
     }
 }
 
@@ -100,8 +101,57 @@ fn a_runner_start_maps_every_field_onto_an_unattended_hub_run() {
     assert_eq!(spec.attachments.len(), 1);
     assert!(spec.unattended);
     assert!(spec.project_settings.is_none());
+    assert_eq!(spec.settings_overlay, None);
+    assert_eq!(spec.loop_iterations, None);
+    assert_eq!(spec.commit_artifacts, None);
     assert_eq!(spec.origin_to_honour(), Ok(FeatureOrigin::DefaultBranch));
     assert_eq!(spec.launched_by, LaunchedBy::Hub);
+}
+
+#[test]
+fn a_hub_projects_settings_become_the_overlay_and_the_runs_own_limits() {
+    let mut start = start();
+    let mut runner = runner();
+    runner.settings = Some(RunnerSettings {
+        branch_prefix: Some("hub/".into()),
+        artifact_subdir: Some("reports/".into()),
+        commit_artifacts: Some(true),
+        review_entrypoint: Some("/review".into()),
+        test_command: Some("cargo test".into()),
+        build_command: Some("cargo build".into()),
+        coverage_command: Some("cargo llvm-cov".into()),
+        conventions_file: Some("AGENTS.md".into()),
+        loop_iterations: Some(5),
+        sync_resolver_agent_kind: Some("codex".into()),
+        sync_resolver_model: Some("gpt-5".into()),
+        sync_resolver_effort: Some(Effort::Xhigh),
+        sync_review_before_push: Some(false),
+    });
+    start.runner = Some(Box::new(runner));
+    let spec = spec_of(&start).expect("a spec");
+
+    assert_eq!(spec.loop_iterations, Some(5));
+    assert_eq!(spec.commit_artifacts, Some(true));
+    assert!(
+        spec.project_settings.is_none(),
+        "an overlay never replaces the detected settings"
+    );
+    assert_eq!(
+        spec.settings_overlay,
+        Some(ProjectSettingsOverlay {
+            branch_prefix: Some("hub/".into()),
+            artifact_subdir: Some("reports/".into()),
+            review_entrypoint: Some("/review".into()),
+            test_command: Some("cargo test".into()),
+            build_command: Some("cargo build".into()),
+            coverage_command: Some("cargo llvm-cov".into()),
+            conventions_file: Some("AGENTS.md".into()),
+            sync_resolver_agent_kind: Some("codex".into()),
+            sync_resolver_model: Some("gpt-5".into()),
+            sync_resolver_effort: Some(EffortLevel::XHigh),
+            sync_review_before_push: Some(false),
+        })
+    );
 }
 
 #[test]

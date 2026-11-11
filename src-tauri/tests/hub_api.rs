@@ -1635,6 +1635,8 @@ fn hub_project(provider_kind: &str, host: &str, full_name: &str) -> HubProjectFi
         default_effort: Some(Effort::Xhigh),
         default_workflow_id: None,
         default_max_budget_cents: Some(4200),
+        settings: Default::default(),
+        step_overrides: Vec::new(),
     }
 }
 
@@ -1699,6 +1701,7 @@ async fn a_runner_dispatch_signs_the_hub_projects_repository_and_the_starter() {
                 name: starter.name.clone(),
                 steps_json: starter.steps_json.clone(),
             },
+            settings: None,
         })
     );
 

@@ -118,8 +118,8 @@ export function ProjectEditor({ projectId }: ProjectEditorProps) {
       />
       <p className="-mt-3 max-w-2xl text-sm text-slate-400">
         {adding
-          ? 'Pick a repository a connected GitHub App can reach, then the defaults a dispatch to a runner starts from.'
-          : 'The defaults a dispatch to a runner starts from. The repository stays as it is.'}
+          ? 'Pick a repository a connected GitHub App can reach, then the defaults and settings a run on a runner starts from.'
+          : 'The defaults and settings a run on a runner starts from. The repository stays as it is.'}
       </p>
       {loaded === null && failure === null && <p className="text-sm text-slate-400">Loading…</p>}
       {loaded !== null && !adding && project === null && (
@@ -128,9 +128,19 @@ export function ProjectEditor({ projectId }: ProjectEditorProps) {
         </p>
       )}
       {loaded !== null && (adding || project !== null) && (
-        <div className="flex flex-wrap items-start gap-6">
-          <div className="min-w-0 flex-[3_1_420px]">
-            {adding ? (
+        <ProjectForm
+          project={project}
+          repository={repository}
+          nameHint={picked === null ? '' : suggestedName(picked.fullName)}
+          workflows={loaded.workflows}
+          busy={busy}
+          onSave={save}
+          onMissingRepository={setRepositoryError}
+          onCancel={() => {
+            window.location.hash = PROJECTS_HREF;
+          }}
+          repositoryPanel={
+            adding ? (
               <RepositoryPicker
                 listing={listing}
                 hostsConnected={loaded.hostsConnected}
@@ -144,23 +154,9 @@ export function ProjectEditor({ projectId }: ProjectEditorProps) {
               />
             ) : (
               project !== null && <FixedRepository project={project} />
-            )}
-          </div>
-          <div className="min-w-0 flex-[2_1_340px]">
-            <ProjectForm
-              project={project}
-              repository={repository}
-              nameHint={picked === null ? '' : suggestedName(picked.fullName)}
-              workflows={loaded.workflows}
-              busy={busy}
-              onSave={save}
-              onMissingRepository={setRepositoryError}
-              onCancel={() => {
-                window.location.hash = PROJECTS_HREF;
-              }}
-            />
-          </div>
-        </div>
+            )
+          }
+        />
       )}
       {failure && (
         <div className="max-w-xl">

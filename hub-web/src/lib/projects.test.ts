@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { dropSession, HubApiError, setCsrfToken } from './api';
-import { createProject, listProjects, type ProjectFields, removeProject, updateProject } from './projects';
+import {
+  createProject,
+  listProjects,
+  NO_SETTINGS,
+  type ProjectFields,
+  removeProject,
+  updateProject,
+} from './projects';
 
 type Exchange = { method: 'GET' | 'POST'; path: string; answer: Response };
 
@@ -34,6 +41,38 @@ function answer(method: 'GET' | 'POST', path: string, body: unknown, status = 20
 
 const ID = '0b7c8d9e-1f20-4a3b-8c4d-5e6f708192a3';
 
+const WIRE_SETTINGS = {
+  branch_prefix: 'hub/',
+  artifact_subdir: null,
+  commit_artifacts: true,
+  review_entrypoint: null,
+  test_command: 'cargo test',
+  build_command: null,
+  coverage_command: null,
+  conventions_file: 'AGENTS.md',
+  loop_iterations: 4,
+  sync_resolver_agent_kind: 'codex',
+  sync_resolver_model: null,
+  sync_resolver_effort: 'low',
+  sync_review_before_push: false,
+};
+
+const SETTINGS = {
+  ...NO_SETTINGS,
+  branchPrefix: 'hub/',
+  commitArtifacts: true,
+  testCommand: 'cargo test',
+  conventionsFile: 'AGENTS.md',
+  loopIterations: 4,
+  syncResolverAgentKind: 'codex',
+  syncResolverEffort: 'low' as const,
+  syncReviewBeforePush: false,
+};
+
+const WIRE_STEP = { workflow_id: 'wf-starter-feature', step_id: 's-build', agent_kind: 'codex', model: null, effort: 'max' };
+
+const STEP = { workflowId: 'wf-starter-feature', stepId: 's-build', agentKind: 'codex', model: null, effort: 'max' };
+
 const WIRE = {
   id: ID,
   name: 'widgets',
@@ -47,6 +86,8 @@ const WIRE = {
   default_effort: 'high',
   default_workflow_id: 'wf-starter-feature',
   default_max_budget_cents: 250,
+  settings: WIRE_SETTINGS,
+  step_overrides: [WIRE_STEP],
   created_at: 1_762_400_000,
   updated_at: 1_762_400_100,
 };
@@ -64,6 +105,8 @@ const PROJECT = {
   defaultEffort: 'high',
   defaultWorkflowId: 'wf-starter-feature',
   defaultMaxBudgetCents: 250,
+  settings: SETTINGS,
+  stepOverrides: [STEP],
   createdAt: 1_762_400_000,
   updatedAt: 1_762_400_100,
 };
@@ -78,6 +121,8 @@ const FIELDS: ProjectFields = {
   defaultEffort: 'low',
   defaultWorkflowId: null,
   defaultMaxBudgetCents: null,
+  settings: SETTINGS,
+  stepOverrides: [{ ...STEP, effort: null }],
 };
 
 const BODY = {
@@ -90,6 +135,8 @@ const BODY = {
   default_effort: 'low',
   default_workflow_id: null,
   default_max_budget_cents: null,
+  settings: WIRE_SETTINGS,
+  step_overrides: [{ ...WIRE_STEP, effort: null }],
 };
 
 afterEach(() => {
@@ -115,6 +162,9 @@ describe('listProjects', () => {
     ['a missing runner_ready', { runner_ready: undefined }],
     ['a numeric host', { host: 7 }],
     ['a string budget', { default_max_budget_cents: '250' }],
+    ['no settings', { settings: undefined }],
+    ['a string loop count', { settings: { ...WIRE_SETTINGS, loop_iterations: '4' } }],
+    ['a step override with no step', { step_overrides: [{ ...WIRE_STEP, step_id: undefined }] }],
   ])('refuses a project with %s', async (_case, change) => {
     stubFetch([answer('GET', '/v1/projects', { projects: [{ ...WIRE, ...change }] })]);
 

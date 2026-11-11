@@ -63,6 +63,7 @@ const ENCODER_FNS: &[&str] = &[
     "put_assignment",
     "put_assertion",
     "put_runner",
+    "put_runner_settings",
 ];
 
 fn source(file: &str) -> &'static str {
