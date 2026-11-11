@@ -45,6 +45,7 @@ pub(crate) enum FailureClass {
     Verdict,
     AgentFailure,
     NonRetryable,
+    UsageLimit,
 }
 
 impl FailureClass {
@@ -54,6 +55,7 @@ impl FailureClass {
             FailureClass::Verdict => error_class::VERDICT,
             FailureClass::AgentFailure => error_class::AGENT_FAILURE,
             FailureClass::NonRetryable => error_class::NON_RETRYABLE,
+            FailureClass::UsageLimit => error_class::USAGE_LIMIT,
         }
     }
 }
@@ -186,6 +188,10 @@ pub(crate) fn evaluate(
         FailureClass::Verdict => policy.verdict.as_ref(),
         FailureClass::AgentFailure => policy.agent_failure.as_ref(),
         FailureClass::NonRetryable => policy.non_retryable.as_ref(),
+        // No `RetryPolicy` field, on purpose: every attempt before the quota
+        // resets fails the same way, so there is no rule an author could
+        // write that would not spend budget on a call that cannot succeed.
+        FailureClass::UsageLimit => None,
     };
 
     let (strategy, rule) = match rule {

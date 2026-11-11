@@ -336,6 +336,7 @@ mod tests {
                             name: "Standard".to_owned(),
                             steps_json: "[]".to_owned(),
                         },
+                        settings: None,
                     })),
                 }),
                 signature: "s".to_owned(),

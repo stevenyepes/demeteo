@@ -65,6 +65,10 @@ export function RepositoryPicker({ listing, hostsConnected, taken, selectedKey, 
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              // The picker sits inside the project form: Enter here filters, it never saves the project.
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.preventDefault();
+              }}
               placeholder="Search repositories"
               autoComplete="off"
               spellCheck={false}

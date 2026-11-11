@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use demeteo_hub_protocol::{
-    CursorAck, Hello, RunEvent, RunEventKind, RunEventPayload, Scope, PROTOCOL_VERSION,
+    CursorAck, FailureReason, Hello, RunEvent, RunEventKind, RunEventPayload, Scope,
+    PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -58,6 +59,7 @@ fn run_event_round_trips_and_matches_hand_built_value() {
                 step_id: Some("s-implement".into()),
                 step_execution_id: Some("se-1791043500123".into()),
                 ticket_id: Some("t-3".into()),
+                failure: Some(FailureReason::VerdictFailed),
             },
         }
     );
@@ -90,7 +92,7 @@ fn run_event_serialises_exactly_the_closed_key_set() {
             "payload"
         ])
     );
-    let allowed = BTreeSet::from(["step_id", "step_execution_id", "ticket_id"]);
+    let allowed = BTreeSet::from(["step_id", "step_execution_id", "ticket_id", "failure"]);
     assert!(keys(&v["payload"]).is_subset(&allowed));
 }
 
@@ -101,8 +103,57 @@ fn empty_payload_serialises_with_only_allowed_keys() {
     let event: RunEvent = serde_json::from_value(value).unwrap();
     assert_eq!(event.payload, RunEventPayload::default());
     let out = serde_json::to_value(&event).unwrap();
-    let allowed = BTreeSet::from(["step_id", "step_execution_id", "ticket_id"]);
+    let allowed = BTreeSet::from(["step_id", "step_execution_id", "ticket_id", "failure"]);
     assert!(keys(&out["payload"]).is_subset(&allowed));
+}
+
+#[test]
+fn a_payload_without_a_reason_is_the_payload_sent_before_the_field_existed() {
+    let mut value = run_event_value();
+    value["payload"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failure")
+        .unwrap();
+    let event: RunEvent = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(event.payload.failure, None);
+    assert_eq!(serde_json::to_value(&event).unwrap(), value);
+}
+
+#[test]
+fn failure_reason_accepts_exactly_its_eight_spellings() {
+    let names = [
+        "usage_limit",
+        "wall_clock_cap",
+        "budget_cap",
+        "verdict_failed",
+        "environment",
+        "agent_error",
+        "not_retryable",
+        "other",
+    ];
+    for name in names {
+        let reason: FailureReason = serde_json::from_value(json!(name)).unwrap();
+        assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));
+    }
+}
+
+#[test]
+fn failure_reason_rejects_an_unknown_string_and_free_text() {
+    for not_a_reason in [
+        json!("rate_limited"),
+        json!("tests failed in src/main.rs"),
+        json!(null),
+    ] {
+        let mut value = run_event_value();
+        value["payload"]["failure"] = not_a_reason.clone();
+        let parsed = serde_json::from_value::<RunEvent>(value);
+        if not_a_reason.is_null() {
+            assert_eq!(parsed.unwrap().payload.failure, None);
+        } else {
+            assert!(parsed.is_err(), "{not_a_reason}");
+        }
+    }
 }
 
 #[test]

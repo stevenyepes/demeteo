@@ -333,6 +333,9 @@ async fn execute_run_inner(
         project.id.clone(),
         origin.base_branch(spec.diff_base_branch.as_deref()),
     );
+    if let Some(overlay) = &spec.settings_overlay {
+        overlay.apply(&mut settings);
+    }
     // The engine applies the gate autonomy itself, identically on every
     // transport; the runner's only part is the floor an unattended run needs.
     settings.gate_autonomy = settings.gate_autonomy.for_run(spec.unattended);
@@ -621,7 +624,8 @@ async fn await_terminal_and_push_inner(
                     )
                 } else {
                     format!(
-                        "wall clock {}s exceeded cap {}s",
+                        "{} {}s exceeded cap {}s",
+                        demeteo_core::domain::hub_socket::OVER_WALL_CLOCK_CAP,
                         started.elapsed().as_secs(),
                         budget.max_wall_clock_secs.unwrap_or_default()
                     )

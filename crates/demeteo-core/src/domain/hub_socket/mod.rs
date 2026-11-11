@@ -3,7 +3,8 @@
 //! See [`crate::domain`] for why nothing here is `async`;
 //! `src-tauri/tests/hub_layout.rs` fails the build if anything here becomes
 //! one. What crosses the socket is decided here and only here: [`hub_event`]
-//! is the allowlist a `run_events` row has to pass, [`hello`] the scopes
+//! is the allowlist a `run_events` row has to pass, [`failure_reason`] the
+//! closed cause a failure carries with it, [`hello`] the scopes
 //! an instance announces, and [`snapshot`] what an instance reports of its
 //! Projects, with [`outbound_catalog`] deciding what of its harness probe
 //! crosses and [`probe_due`] when that probe runs. Which `feature_status`
@@ -20,6 +21,7 @@ use crate::domain::hub_request::HubLocalPolicy;
 use demeteo_hub_protocol::{Hello, Scope, PROTOCOL_VERSION};
 
 pub mod connection;
+mod failure;
 mod harness_catalog;
 mod projection;
 mod reporting;
@@ -27,6 +29,10 @@ mod run_end;
 mod snapshot;
 mod verdict;
 
+pub use failure::{
+    classified, failure_reason, may_carry_failure, FAILURE_CONTEXT_WINDOW, OVER_WALL_CLOCK_CAP,
+    WALL_CLOCK_CAP_PHRASE,
+};
 pub use harness_catalog::{
     merged, outbound_catalog, probe_due, CatalogEntry, HarnessProbe, HarnessProbeOutcome,
     ProbeTrigger, HARNESS_PROBE_CONNECT_FLOOR_SECS, HARNESS_PROBE_INTERVAL_SECS,

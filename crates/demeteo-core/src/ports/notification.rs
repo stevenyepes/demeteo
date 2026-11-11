@@ -247,8 +247,8 @@ pub enum DomainEvent {
         feature_id: FeatureId,
         step_id: String,
         /// Failure class (`environment | verdict | agent_failure |
-        /// non_retryable`) — also the prefix of `rule_id`, kept explicit
-        /// so consumers don't parse identifiers.
+        /// non_retryable | usage_limit`) — also the prefix of `rule_id`,
+        /// kept explicit so consumers don't parse identifiers.
         error_class: String,
         rule_id: String,
         action: String,

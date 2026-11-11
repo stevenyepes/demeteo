@@ -21,13 +21,13 @@
 //! first snapshot goes out with whatever the catalog held, and a finished
 //! probe reaches the Hub through [`SessionContext::snapshot_wake`].
 
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::ready;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use demeteo_hub_protocol::{CursorAck, RequestHeader, RequestResult};
+use demeteo_hub_protocol::{CursorAck, FailureReason, RequestHeader, RequestResult};
 use serde::Serialize;
 use tokio::sync::{mpsc, watch, Mutex, Notify, OwnedMutexGuard};
 use tokio::time::{interval_at, sleep_until, timeout, Instant, MissedTickBehavior};
@@ -35,7 +35,8 @@ use tokio::time::{interval_at, sleep_until, timeout, Instant, MissedTickBehavior
 use crate::adapters::hub::run_keys::ReportedAsIs;
 use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
-    hello, hub_event, ProbeTrigger, SocketEnd, HARNESS_PROBE_INTERVAL_SECS, LIVENESS_DEADLINE_SECS,
+    failure_reason, hello, hub_event, may_carry_failure, ProbeTrigger, SocketEnd,
+    FAILURE_CONTEXT_WINDOW, HARNESS_PROBE_INTERVAL_SECS, LIVENESS_DEADLINE_SECS,
     MAX_UNACKED_EVENTS, PAGE_SIZE, SNAPSHOT_DEBOUNCE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 use crate::ports::hub::{
@@ -526,12 +527,14 @@ impl Outbox {
             let rows = run_events.list_after(after, PAGE_SIZE)?;
             let keys: BTreeSet<String> = rows.iter().map(|row| row.run_id.clone()).collect();
             let ids = run_keys.reported_ids(&keys)?;
-            Ok::<_, String>((rows, ids))
+            let reported = rows.iter().filter(|row| ids.contains_key(&row.run_id));
+            let reasons = failure_reasons(run_events.as_ref(), reported)?;
+            Ok::<_, String>((rows, ids, reasons))
         })
         .await
         .map_err(|e| e.to_string())
         .and_then(|page| page);
-        let (rows, ids) = page.map_err(|error| {
+        let (rows, ids, reasons) = page.map_err(|error| {
             tracing::warn!(%error, "the run log could not be read for the Hub");
             Exit::Failed
         })?;
@@ -544,7 +547,12 @@ impl Outbox {
             Some(RunEvent { run_id, ..row })
         });
         let mut unseen = false;
-        for event in reported.filter_map(|row| hub_event(&row)) {
+        let projected = reported.filter_map(|row| {
+            let mut event = hub_event(&row)?;
+            event.payload.failure = reasons.get(&row.offset).copied();
+            Some(event)
+        });
+        for event in projected {
             if !self.seen.contains(&event.feature_id) {
                 unseen = true;
                 self.seen.insert(event.feature_id.clone());
@@ -561,6 +569,24 @@ impl Outbox {
             self.in_flight.pop_front();
         }
     }
+}
+
+/// The [`FailureReason`] of each failure among `rows`, by offset, read from
+/// the rows of its own run just before it. Only a failure pays for the read,
+/// and the window bounds it however long the run's log has grown.
+fn failure_reasons<'a>(
+    run_events: &dyn RunEventsPort,
+    rows: impl Iterator<Item = &'a RunEvent>,
+) -> Result<HashMap<i64, FailureReason>, String> {
+    let mut reasons = HashMap::new();
+    for row in rows.filter(|row| may_carry_failure(row)) {
+        let from = row.offset.saturating_sub(FAILURE_CONTEXT_WINDOW);
+        let before = run_events.list_since(&row.run_id, from)?;
+        if let Some(reason) = failure_reason(row, &before) {
+            reasons.insert(row.offset, reason);
+        }
+    }
+    Ok(reasons)
 }
 
 /// Resolves once `stop` reads `true`, or its sender is gone.

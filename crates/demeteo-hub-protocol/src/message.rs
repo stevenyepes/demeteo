@@ -38,12 +38,14 @@ pub enum RunEventKind {
     GateDecided,
 }
 
-/// Which Step, execution and Ticket an event concerns — ids only.
+/// Which Step, execution and Ticket an event concerns — ids, and for a
+/// failure, which of a closed list of causes it was.
 ///
 /// There is deliberately no message, error or summary field. Free text here
 /// would be a leak: transcripts, agent output, diffs and file contents never
 /// leave an instance (HUB.md §3), and the only way to guarantee that is a
-/// payload with no place to put them. Do not add a `String` that is not an id.
+/// payload with no place to put them. Do not add a `String` that is not an id;
+/// a new thing to say goes in an enum, as [`FailureReason`] does.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunEventPayload {
@@ -53,6 +55,45 @@ pub struct RunEventPayload {
     pub step_execution_id: Option<String>,
     #[serde(default)]
     pub ticket_id: Option<String>,
+    /// Omitted, never `null`, when absent: an older Hub refuses the key
+    /// itself (`deny_unknown_fields`), so an instance that has no reason to
+    /// give must send exactly the payload it sent before this field existed.
+    /// One that has a reason needs a Hub that knows the field, which is why
+    /// the Hub ships first (HUB.md §11 item 8). Absent on a Hub means the
+    /// instance gave no reason, not that there was none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<FailureReason>,
+}
+
+/// Why a Step or Feature failed, or a Feature was cancelled, in the
+/// instance's own classification. A closed list, not a message: a variant
+/// names a category the instance chose, so the Hub learns which of eight
+/// things happened and nothing of the text that said so (HUB.md §3).
+///
+/// Deliberately no `#[serde(other)]`: an unknown reason must fail to parse.
+/// A variant added here therefore needs the Hub deployed before any instance
+/// that can send it, exactly as [`RefusalReason`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureReason {
+    /// The model provider refused for quota or rate limits.
+    UsageLimit,
+    /// A turn, a verifier or the run ran past its wall-clock cap.
+    WallClockCap,
+    /// The run passed its declared cost cap.
+    BudgetCap,
+    /// A verifier or harness judged the work and failed it.
+    VerdictFailed,
+    /// The machine broke, not the work: a dead process, a missing
+    /// dependency, a worktree that would not provision.
+    Environment,
+    /// The agent itself reported an error.
+    AgentError,
+    /// A failure the instance stops on because retrying cannot fix it, such
+    /// as a missing project setting or criteria nothing can judge.
+    NotRetryable,
+    /// A failure the instance did not classify.
+    Other,
 }
 
 /// One entry of the instance's run log, relayed to the Hub. `offset` is the

@@ -95,6 +95,11 @@ pub(crate) fn classify(
             Some(error_class::NON_RETRYABLE),
             Some(normalize_failure_fingerprint(msg, target_dir)),
         ),
+        StepOutcome::UsageLimit(msg) => (
+            "failed",
+            Some(error_class::USAGE_LIMIT),
+            Some(normalize_failure_fingerprint(msg, target_dir)),
+        ),
         // Not a failure: the step ran, decided it needs a person, and
         // stopped. No `error_class` because no retry rule answers it, and
         // no fingerprint because there is no failure to compare. The row

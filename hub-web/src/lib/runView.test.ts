@@ -15,6 +15,7 @@ function event(overrides: Partial<RunEvent>): RunEvent {
     stepId: null,
     stepExecutionId: null,
     ticketId: null,
+    failure: null,
     ...overrides,
   };
 }
@@ -22,9 +23,9 @@ function event(overrides: Partial<RunEvent>): RunEvent {
 describe('statusByNode', () => {
   it('passes running, completed and failed through', () => {
     const steps: StepView[] = [
-      { stepId: 'build', state: 'running', title: null },
-      { stepId: 'research', state: 'completed', title: null },
-      { stepId: 'test', state: 'failed', title: null },
+      { stepId: 'build', state: 'running', title: null, failure: null },
+      { stepId: 'research', state: 'completed', title: null, failure: null },
+      { stepId: 'test', state: 'failed', title: null, failure: null },
     ];
 
     expect(statusByNode(steps, [])).toEqual({
@@ -41,7 +42,7 @@ describe('statusByNode', () => {
   });
 
   it('lets a pending gate win over running for the same step', () => {
-    const steps: StepView[] = [{ stepId: 'approve', state: 'running', title: null }];
+    const steps: StepView[] = [{ stepId: 'approve', state: 'running', title: null, failure: null }];
 
     expect(statusByNode(steps, [gate('approve', 'exec-1')])).toEqual({
       approve: { status: 'awaiting_gate', stepExecutionId: 'exec-1' },
@@ -49,7 +50,7 @@ describe('statusByNode', () => {
   });
 
   it('infers nothing for a step the reply does not report', () => {
-    const map = statusByNode([{ stepId: 'build', state: 'running', title: null }], [gate(null, 'exec-2')]);
+    const map = statusByNode([{ stepId: 'build', state: 'running', title: null, failure: null }], [gate(null, 'exec-2')]);
 
     expect(Object.keys(map)).toEqual(['build']);
     expect(map).not.toHaveProperty('deploy');
@@ -58,23 +59,23 @@ describe('statusByNode', () => {
 
 describe('sameStatusMap', () => {
   it('is true for equal maps built separately', () => {
-    const steps: StepView[] = [{ stepId: 'build', state: 'running', title: null }];
+    const steps: StepView[] = [{ stepId: 'build', state: 'running', title: null, failure: null }];
     const gates = [gate('approve', 'exec-1')];
 
     expect(sameStatusMap(statusByNode(steps, gates), statusByNode(steps, gates))).toBe(true);
   });
 
   it('is false when a status, an execution id or the key set differs', () => {
-    const base = statusByNode([{ stepId: 'build', state: 'running', title: null }], [gate('approve', 'exec-1')]);
+    const base = statusByNode([{ stepId: 'build', state: 'running', title: null, failure: null }], [gate('approve', 'exec-1')]);
 
-    expect(sameStatusMap(base, statusByNode([{ stepId: 'build', state: 'completed', title: null }], [gate('approve', 'exec-1')]))).toBe(
+    expect(sameStatusMap(base, statusByNode([{ stepId: 'build', state: 'completed', title: null, failure: null }], [gate('approve', 'exec-1')]))).toBe(
       false,
     );
-    expect(sameStatusMap(base, statusByNode([{ stepId: 'build', state: 'running', title: null }], [gate('approve', 'exec-2')]))).toBe(
+    expect(sameStatusMap(base, statusByNode([{ stepId: 'build', state: 'running', title: null, failure: null }], [gate('approve', 'exec-2')]))).toBe(
       false,
     );
-    expect(sameStatusMap(base, statusByNode([{ stepId: 'build', state: 'running', title: null }], []))).toBe(false);
-    expect(sameStatusMap(statusByNode([{ stepId: 'build', state: 'running', title: null }], []), base)).toBe(false);
+    expect(sameStatusMap(base, statusByNode([{ stepId: 'build', state: 'running', title: null, failure: null }], []))).toBe(false);
+    expect(sameStatusMap(statusByNode([{ stepId: 'build', state: 'running', title: null, failure: null }], []), base)).toBe(false);
   });
 });
 

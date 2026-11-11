@@ -1,6 +1,8 @@
 import { useId, useState } from 'react';
 
 import { buttonClasses } from '../../../src/components/ui/Button';
+import { TONE_TEXT } from '../../../src/lib/runStatus';
+import { eventReasonText } from '../lib/failureReason';
 import { elapsedText } from '../lib/fleetSummary';
 import type { RunEvent } from '../lib/runs';
 
@@ -67,6 +69,7 @@ export function RunEvents({ events, now, stepTitles = {} }: RunEventsProps) {
                   {event.ticketId !== null && (
                     <span className="font-mono text-xs text-slate-400"> · {event.ticketId}</span>
                   )}
+                  <EventReason kind={event.kind} reason={event.failure} />
                 </span>
                 <time
                   dateTime={new Date(event.occurredAt * 1000).toISOString()}
@@ -90,4 +93,16 @@ export function RunEvents({ events, now, stepTitles = {} }: RunEventsProps) {
       )}
     </section>
   );
+}
+
+/**
+ * Ruby whenever a cause was given: every one is a failure or a cap that ended
+ * the run, which `runStatus.ts` already tones ruby as over budget. "No reason
+ * reported" is the absence of a status, so it stays neutral.
+ */
+function EventReason({ kind, reason }: { kind: string; reason: string | null }) {
+  const text = eventReasonText(kind, reason);
+  if (text === null) return null;
+  const tone = reason === null ? 'text-slate-400' : TONE_TEXT.ruby;
+  return <span className={`block text-xs ${tone}`}>{text}</span>;
 }

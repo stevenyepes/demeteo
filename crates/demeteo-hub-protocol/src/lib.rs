@@ -31,13 +31,13 @@ pub use canonical::{
     EncodeError,
 };
 pub use message::{
-    CursorAck, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult, RunEvent,
-    RunEventKind, RunEventPayload,
+    CursorAck, FailureReason, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult,
+    RunEvent, RunEventKind, RunEventPayload,
 };
 pub use request::{
     AttachmentRef, CancelFeature, GateDecision, PasskeyEndorsement, PasskeyRevocation,
-    RequestPayload, RetryStep, RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment,
-    SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
+    RequestPayload, RetryStep, RunnerRepository, RunnerSettings, RunnerStart, RunnerWorkflow,
+    SetStepAssignment, SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
 };
 pub use scope::{Decision, Effort, Scope};
 pub use snapshot::{

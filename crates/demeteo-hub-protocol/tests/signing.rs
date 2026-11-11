@@ -1,8 +1,8 @@
 use demeteo_hub_protocol::{
     endorsement_challenge, gate_challenge, revocation_challenge, AttachmentRef, CancelFeature,
     Decision, Effort, GateDecision, PasskeyEndorsement, PasskeyRevocation, RequestPayload,
-    RetryStep, RunnerRepository, RunnerStart, RunnerWorkflow, SetStepAssignment, SignedRequest,
-    StartFeature, StepOverride, WebAuthnAssertion,
+    RetryStep, RunnerRepository, RunnerSettings, RunnerStart, RunnerWorkflow, SetStepAssignment,
+    SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
 };
 
 fn assertion() -> WebAuthnAssertion {
@@ -54,6 +54,7 @@ fn runner_start() -> RunnerStart {
             name: "n".into(),
             steps_json: "[]".into(),
         },
+        settings: None,
     }
 }
 
@@ -257,9 +258,114 @@ fn every_runner_field_changes_the_bytes() {
     }
 }
 
+/// Every field set, so each one has a value to change.
+fn full_settings() -> RunnerSettings {
+    RunnerSettings {
+        branch_prefix: Some("bp/".into()),
+        artifact_subdir: Some("art/".into()),
+        commit_artifacts: Some(false),
+        review_entrypoint: Some("/review".into()),
+        test_command: Some("t".into()),
+        build_command: Some("b".into()),
+        coverage_command: Some("c".into()),
+        conventions_file: Some("AGENTS.md".into()),
+        loop_iterations: Some(3),
+        sync_resolver_agent_kind: Some("codex".into()),
+        sync_resolver_model: Some("m".into()),
+        sync_resolver_effort: Some(Effort::Low),
+        sync_review_before_push: Some(false),
+    }
+}
+
+#[test]
+fn runner_settings_append_after_the_unchanged_runner_bytes() {
+    let without = minimal_start(Some(Box::new(runner_start())))
+        .signing_bytes()
+        .unwrap();
+    let mut r = runner_start();
+    r.settings = Some(RunnerSettings {
+        branch_prefix: Some("bp/".into()),
+        commit_artifacts: Some(true),
+        loop_iterations: Some(2),
+        sync_resolver_effort: Some(Effort::High),
+        ..RunnerSettings::default()
+    });
+    let suffix: Vec<u8> = [
+        &[0x01][..], // u8: settings present
+        &[0x01, 0, 0, 0, 3],
+        b"bp/",              // opt<str> branch_prefix
+        &[0x00],             // opt<str> artifact_subdir
+        &[0x01, 0x01],       // opt<bool> commit_artifacts
+        &[0x00],             // opt<str> review_entrypoint
+        &[0x00],             // opt<str> test_command
+        &[0x00],             // opt<str> build_command
+        &[0x00],             // opt<str> coverage_command
+        &[0x00],             // opt<str> conventions_file
+        &[0x01, 0, 0, 0, 2], // opt<u32> loop_iterations
+        &[0x00],             // opt<str> sync_resolver_agent_kind
+        &[0x00],             // opt<str> sync_resolver_model
+        &[0x01, 0x03],       // opt<u8> sync_resolver_effort
+        &[0x00],             // opt<bool> sync_review_before_push
+    ]
+    .concat();
+    assert_eq!(
+        minimal_start(Some(Box::new(r))).signing_bytes(),
+        Ok([without, suffix].concat())
+    );
+}
+
+#[test]
+fn every_runner_settings_field_changes_the_bytes() {
+    let with_settings = |f: fn(&mut RunnerSettings)| {
+        let mut settings = full_settings();
+        f(&mut settings);
+        let mut r = runner_start();
+        r.settings = Some(settings);
+        bytes(&with_start(|b| b.runner = Some(Box::new(r))))
+    };
+    let base = with_settings(|_| {});
+    type Change = fn(&mut RunnerSettings);
+    let unset: [(&str, Change); 13] = [
+        ("branch_prefix", |s| s.branch_prefix = None),
+        ("artifact_subdir", |s| s.artifact_subdir = None),
+        ("commit_artifacts", |s| s.commit_artifacts = Some(true)),
+        ("review_entrypoint", |s| s.review_entrypoint = None),
+        ("test_command", |s| s.test_command = None),
+        ("build_command", |s| s.build_command = None),
+        ("coverage_command", |s| s.coverage_command = None),
+        ("conventions_file", |s| s.conventions_file = None),
+        ("loop_iterations", |s| s.loop_iterations = Some(4)),
+        ("sync_resolver_agent_kind", |s| {
+            s.sync_resolver_agent_kind = None
+        }),
+        ("sync_resolver_model", |s| s.sync_resolver_model = None),
+        ("sync_resolver_effort", |s| {
+            s.sync_resolver_effort = Some(Effort::Max)
+        }),
+        ("sync_review_before_push", |s| {
+            s.sync_review_before_push = Some(true)
+        }),
+    ];
+    for (field, change) in unset {
+        assert_ne!(
+            with_settings(change),
+            base,
+            "changing {field} must change the bytes"
+        );
+    }
+}
+
+#[test]
+fn a_runner_start_without_settings_serialises_without_the_key() {
+    let json = serde_json::to_value(runner_start()).unwrap();
+    assert!(json.get("settings").is_none(), "{json}");
+}
+
 #[test]
 fn a_runner_start_bytes_survive_a_json_round_trip() {
-    let sent = with_start(|b| b.runner = Some(Box::new(runner_start())));
+    let mut runner = runner_start();
+    runner.settings = Some(full_settings());
+    let sent = with_start(|b| b.runner = Some(Box::new(runner)));
     let json = serde_json::to_string(&sent).unwrap();
     let received: SignedRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(received, sent);

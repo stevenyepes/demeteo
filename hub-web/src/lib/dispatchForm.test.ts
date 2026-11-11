@@ -21,7 +21,7 @@ import {
   usdOfCents,
 } from './dispatchForm';
 import type { HarnessCatalog, InstanceDetail, WorkflowChoice } from './fleet';
-import type { HubProject } from './projects';
+import { type HubProject, NO_SETTINGS } from './projects';
 
 const INSTANCE: InstanceDetail = {
   id: '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21',
@@ -176,6 +176,8 @@ const HUB_PROJECT: HubProject = {
   defaultEffort: 'high',
   defaultWorkflowId: 'wf-starter-hotfix',
   defaultMaxBudgetCents: 250,
+  settings: NO_SETTINGS,
+  stepOverrides: [],
   createdAt: 1_700_000_000,
   updatedAt: 1_700_000_000,
 };

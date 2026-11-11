@@ -27,8 +27,12 @@ export type RunSummary = {
   tickets: TicketProgress;
 };
 
-/** Only the steps that have emitted an event; a step not yet started is not listed. */
-export type StepView = { stepId: string; state: StepState; title: string | null };
+/**
+ * Only the steps that have emitted an event; a step not yet started is not
+ * listed. `failure` is why a `failed` step failed, `null` when it has not
+ * failed or its instance gave no reason (`lib/failureReason.ts`).
+ */
+export type StepView = { stepId: string; state: StepState; title: string | null; failure: string | null };
 
 /** `stepExecutionId` is what a gate decision names; `stepId` is the workflow node. */
 export type PendingGate = {
@@ -47,6 +51,8 @@ export type RunEvent = {
   stepId: string | null;
   stepExecutionId: string | null;
   ticketId: string | null;
+  /** The instance's closed `FailureReason`, `null` when the event gave none. */
+  failure: string | null;
 };
 
 export type RunDetail = {
@@ -86,7 +92,7 @@ export type WireRunSummary = {
   tickets: TicketProgress;
 };
 
-type WireStepView = { step_id: string; state: StepState; title: string | null };
+type WireStepView = { step_id: string; state: StepState; title: string | null; failure: string | null };
 
 type WirePendingGate = {
   feature_id: string;
@@ -103,6 +109,7 @@ type WireRunEvent = {
   step_id: string | null;
   step_execution_id: string | null;
   ticket_id: string | null;
+  failure: string | null;
 };
 
 type WireRunDetail = {
@@ -170,7 +177,12 @@ function runDetailOf(wire: WireRunDetail): RunDetail {
     title: wire.title,
     projectId: wire.project_id,
     projectName: wire.project_name,
-    steps: wire.steps.map((step) => ({ stepId: step.step_id, state: step.state, title: step.title })),
+    steps: wire.steps.map((step) => ({
+      stepId: step.step_id,
+      state: step.state,
+      title: step.title,
+      failure: step.failure,
+    })),
     tickets: ticketProgressOf(wire.tickets),
     pendingGates: wire.pending_gates.map(pendingGateOf),
     events: wire.events.map(runEventOf),
@@ -196,6 +208,7 @@ function runEventOf(wire: WireRunEvent): RunEvent {
     stepId: wire.step_id,
     stepExecutionId: wire.step_execution_id,
     ticketId: wire.ticket_id,
+    failure: wire.failure,
   };
 }
 
@@ -219,7 +232,8 @@ const isRuns: Guard<{ runs: WireRunSummary[] }> = (value): value is { runs: Wire
 const isWireStepView: Guard<WireStepView> = (value): value is WireStepView =>
   typeof memberOf(value, 'step_id') === 'string' &&
   STEP_STATES.includes(memberOf(value, 'state')) &&
-  isStringOrNull(memberOf(value, 'title'));
+  isStringOrNull(memberOf(value, 'title')) &&
+  isStringOrNull(memberOf(value, 'failure'));
 
 const isTicketProgress: Guard<TicketProgress> = (value): value is TicketProgress =>
   typeof memberOf(value, 'completed') === 'number' &&
@@ -239,7 +253,8 @@ const isWireRunEvent: Guard<WireRunEvent> = (value): value is WireRunEvent =>
   typeof memberOf(value, 'occurred_at') === 'number' &&
   isStringOrNull(memberOf(value, 'step_id')) &&
   isStringOrNull(memberOf(value, 'step_execution_id')) &&
-  isStringOrNull(memberOf(value, 'ticket_id'));
+  isStringOrNull(memberOf(value, 'ticket_id')) &&
+  isStringOrNull(memberOf(value, 'failure'));
 
 const isDrawnNode: Guard<{ id: string }> = (value): value is { id: string } =>
   typeof memberOf(value, 'id') === 'string';

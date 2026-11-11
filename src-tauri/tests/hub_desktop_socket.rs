@@ -64,8 +64,9 @@ use demeteo_hub::pairing::grant::{refresh_change, FamilyChange, FreshPair, Token
 use demeteo_hub::pairing::signing_key::SigningKey;
 use demeteo_hub::pairing::testing::MemoryFamily;
 use demeteo_hub::protocol::{
-    CursorAck, Hello, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload,
-    RequestResult, RunEvent, RunEventKind, RunEventPayload, Scope, Snapshot, PROTOCOL_VERSION,
+    CursorAck, FailureReason, Hello, ProjectSnapshot, RefusalReason, RequestOutcome,
+    RequestPayload, RequestResult, RunEvent, RunEventKind, RunEventPayload, Scope, Snapshot,
+    PROTOCOL_VERSION,
 };
 use demeteo_hub::routes::AppState;
 use demeteo_hub::socket::connections::Connections;
@@ -1278,6 +1279,81 @@ async fn a_second_connection_sends_nothing_at_or_below_the_hubs_cursor() {
         .iter()
         .all(|&offset| offset > cursor));
     assert_eq!(bridged.dialer.hub.mirror_len(), 5);
+    assert_eq!(second.stopped().await, (SessionEnd::Stopped, true));
+}
+
+/// A failure reaches the Hub with the cause the rows before it gave, read
+/// from the run's own log — even when those rows sit below the Hub's cursor,
+/// read by an earlier connection that had nothing to send of them.
+#[tokio::test]
+async fn a_failure_carries_its_reason_though_its_cause_was_read_by_an_earlier_connection() {
+    let bridged = Bridged::new(&[
+        ("f-a", "feature_status", json!({"status": "running"})),
+        (
+            "f-a",
+            "step_progress",
+            json!({"status": "running", "step_id": "s-1"}),
+        ),
+        (
+            "f-a",
+            "retry_decision",
+            json!({
+                "step_id": "s-1",
+                "error_class": "usage_limit",
+                "rule_id": "usage_limit.fail",
+                "action": "fail",
+                "reason": "429 from the provider",
+            }),
+        ),
+        ("f-b", "feature_status", json!({"status": "running"})),
+    ])
+    .await;
+    let first = bridged.connect().await;
+    bridged.acked_through(4).await;
+    assert_eq!(first.stopped().await, (SessionEnd::Stopped, true));
+    assert_eq!(bridged.hub_sessions_ended().await, [Ended::PeerGone]);
+
+    let step_failed = bridged.append(&(
+        "f-a",
+        "step_progress",
+        json!({"status": "failed", "step_id": "s-1"}),
+    ));
+    let feature_failed = bridged.append(&("f-a", "feature_status", json!({"status": "failed"})));
+    let second = bridged.connect().await;
+    bridged.acked_through(feature_failed).await;
+
+    let reason = Some(FailureReason::UsageLimit);
+    let mirror = bridged.dialer.hub.mirror();
+    let sent: Vec<&MirrorRow> = mirror.iter().filter(|row| row.offset > 4).collect();
+    assert_eq!(
+        sent,
+        [
+            &mirrored(
+                "f-a",
+                step_failed,
+                RunEventKind::StepFailed,
+                RunEventPayload {
+                    failure: reason,
+                    ..step("s-1")
+                },
+            ),
+            &mirrored(
+                "f-a",
+                feature_failed,
+                RunEventKind::FeatureFailed,
+                RunEventPayload {
+                    failure: reason,
+                    ..RunEventPayload::default()
+                },
+            ),
+        ]
+    );
+    let never_sent = ["429", "usage_limit.fail", "provider"];
+    for frame in bridged.heard() {
+        for text in never_sent {
+            assert!(!frame.contains(text), "{text} crossed in {frame}");
+        }
+    }
     assert_eq!(second.stopped().await, (SessionEnd::Stopped, true));
 }
 

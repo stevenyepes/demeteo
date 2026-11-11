@@ -127,6 +127,7 @@ fn started(feature_id: &str) -> RunEvent {
             step_id: None,
             step_execution_id: None,
             ticket_id: None,
+            failure: None,
         },
     }
 }
@@ -473,6 +474,7 @@ fn event(
             step_id: step_id.map(str::to_owned),
             step_execution_id: step_execution_id.map(str::to_owned),
             ticket_id: ticket_id.map(str::to_owned),
+            failure: None,
         },
     }
 }
@@ -1228,23 +1230,23 @@ async fn a_run_shows_its_steps_tickets_pending_gates_and_events_in_offset_order(
             "project_id": null,
             "project_name": null,
             "git_token_problem": null,
-            "steps": [{"step_id": "s1", "state": "running", "title": null}],
+            "steps": [{"step_id": "s1", "state": "running", "title": null, "failure": null}],
             "tickets": {"completed": 1, "failed": 0, "running": 1},
             "pending_gates": [{"feature_id": "F1", "step_execution_id": "e1",
                 "step_id": "s-gate", "since": at(10), "step_title": null}],
             "events": [
                 {"offset": 1, "kind": "feature_started", "occurred_at": at(1),
-                 "step_id": null, "step_execution_id": null, "ticket_id": null},
+                 "step_id": null, "step_execution_id": null, "ticket_id": null, "failure": null},
                 {"offset": 3, "kind": "step_started", "occurred_at": at(3),
-                 "step_id": "s1", "step_execution_id": null, "ticket_id": null},
+                 "step_id": "s1", "step_execution_id": null, "ticket_id": null, "failure": null},
                 {"offset": 4, "kind": "ticket_started", "occurred_at": at(4),
-                 "step_id": "s1", "step_execution_id": null, "ticket_id": "t1"},
+                 "step_id": "s1", "step_execution_id": null, "ticket_id": "t1", "failure": null},
                 {"offset": 6, "kind": "ticket_completed", "occurred_at": at(6),
-                 "step_id": "s1", "step_execution_id": null, "ticket_id": "t1"},
+                 "step_id": "s1", "step_execution_id": null, "ticket_id": "t1", "failure": null},
                 {"offset": 8, "kind": "ticket_started", "occurred_at": at(8),
-                 "step_id": "s1", "step_execution_id": null, "ticket_id": "t2"},
+                 "step_id": "s1", "step_execution_id": null, "ticket_id": "t2", "failure": null},
                 {"offset": 10, "kind": "gate_pending", "occurred_at": at(10),
-                 "step_id": "s-gate", "step_execution_id": "e1", "ticket_id": null},
+                 "step_id": "s-gate", "step_execution_id": "e1", "ticket_id": null, "failure": null},
             ],
         })
     );
@@ -1635,6 +1637,8 @@ fn hub_project(provider_kind: &str, host: &str, full_name: &str) -> HubProjectFi
         default_effort: Some(Effort::Xhigh),
         default_workflow_id: None,
         default_max_budget_cents: Some(4200),
+        settings: Default::default(),
+        step_overrides: Vec::new(),
     }
 }
 
@@ -1699,6 +1703,7 @@ async fn a_runner_dispatch_signs_the_hub_projects_repository_and_the_starter() {
                 name: starter.name.clone(),
                 steps_json: starter.steps_json.clone(),
             },
+            settings: None,
         })
     );
 

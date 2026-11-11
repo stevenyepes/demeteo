@@ -92,3 +92,49 @@ fn an_unreadable_origin_does_not_cost_the_rest_of_the_spec() {
     assert_eq!(spec.title, "review PR 12");
     assert_eq!(spec.diff_base_branch.as_deref(), Some("develop"));
 }
+
+fn detected_settings() -> ProjectSettings {
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.worktree_strategy.branch_prefix = "feature/".into();
+    settings.worktree_strategy.test_command = Some("npm test".into());
+    settings.worktree_strategy.build_command = Some("npm run build".into());
+    settings.review_entrypoint = Some("/detected".into());
+    settings
+}
+
+#[test]
+fn an_empty_overlay_leaves_every_detected_setting_alone() {
+    let mut settings = detected_settings();
+    ProjectSettingsOverlay::default().apply(&mut settings);
+    assert_eq!(
+        serde_json::to_value(&settings).expect("settings serialise"),
+        serde_json::to_value(detected_settings()).expect("settings serialise"),
+    );
+}
+
+#[test]
+fn an_overlay_replaces_only_the_fields_it_sets() {
+    let mut settings = detected_settings();
+    ProjectSettingsOverlay {
+        branch_prefix: Some("hub/".into()),
+        test_command: Some("cargo test".into()),
+        artifact_subdir: Some("reports/".into()),
+        sync_resolver_effort: Some(EffortLevel::Low),
+        sync_review_before_push: Some(false),
+        ..ProjectSettingsOverlay::default()
+    }
+    .apply(&mut settings);
+
+    let strategy = &settings.worktree_strategy;
+    assert_eq!(strategy.branch_prefix, "hub/");
+    assert_eq!(strategy.test_command.as_deref(), Some("cargo test"));
+    assert_eq!(
+        strategy.build_command.as_deref(),
+        Some("npm run build"),
+        "a command the overlay leaves unset keeps the detected one"
+    );
+    assert_eq!(settings.artifact_subdir, "reports/");
+    assert_eq!(settings.review_entrypoint.as_deref(), Some("/detected"));
+    assert_eq!(settings.sync_resolver_effort, Some(EffortLevel::Low));
+    assert_eq!(settings.sync_review_before_push, Some(false));
+}

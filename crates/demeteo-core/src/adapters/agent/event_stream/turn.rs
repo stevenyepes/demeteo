@@ -225,8 +225,8 @@ where
             _ = &mut wall_sleep => {
                 let elapsed = start_instant.elapsed().as_secs();
                 run_failed = Some(FailedEnding::Environmental(format!(
-                    "Agent step exceeded wall clock cap ({}s / {}s elapsed)",
-                    timeouts.wall_cap_s, elapsed,
+                    "Agent step {} ({}s / {}s elapsed)",
+                    crate::domain::hub_socket::WALL_CLOCK_CAP_PHRASE, timeouts.wall_cap_s, elapsed,
                 )));
                 break;
             }

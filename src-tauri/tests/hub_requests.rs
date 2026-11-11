@@ -3559,6 +3559,7 @@ mod handler {
                             name: "W".into(),
                             steps_json: "[]".into(),
                         },
+                        settings: None,
                     }))
                 }),
             ];

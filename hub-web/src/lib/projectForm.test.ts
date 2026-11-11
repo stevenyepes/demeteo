@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { draftOf, type ProjectDraft, type ProjectRepository, projectVerdict, suggestedName } from './projectForm';
-import type { HubProject } from './projects';
+import {
+  BLANK_SETTINGS,
+  draftOf,
+  type OverridableWorkflow,
+  type ProjectDraft,
+  type ProjectRepository,
+  projectVerdict,
+  suggestedName,
+} from './projectForm';
+import { type HubProject, NO_SETTINGS } from './projects';
 
 const DRAFT: ProjectDraft = {
   name: ' widgets ',
@@ -10,6 +18,19 @@ const DRAFT: ProjectDraft = {
   effort: '',
   workflowId: '',
   maxCostUsd: '',
+  settings: BLANK_SETTINGS,
+  stepOverrides: [],
+};
+
+const FEATURE_WORKFLOW: OverridableWorkflow = {
+  workflowId: 'wf-starter-feature',
+  graph: {
+    nodes: [
+      { id: 's-build', type: 'agent', title: 'Build', position: null },
+      { id: 's-approve', type: 'gate', title: 'Approve', position: null },
+    ],
+    edges: [],
+  },
 };
 
 const WIDGETS_REPO: ProjectRepository = { providerKind: 'github', host: 'github.com', fullName: 'Acme/Widgets' };
@@ -37,6 +58,8 @@ describe('projectVerdict', () => {
         defaultEffort: null,
         defaultWorkflowId: null,
         defaultMaxBudgetCents: null,
+        settings: NO_SETTINGS,
+        stepOverrides: [],
       },
     });
   });
@@ -91,6 +114,8 @@ describe('draftOf', () => {
       effort: '',
       workflowId: '',
       maxCostUsd: '',
+      settings: BLANK_SETTINGS,
+      stepOverrides: [],
     });
   });
 
@@ -108,10 +133,21 @@ describe('draftOf', () => {
       defaultEffort: 'max',
       defaultWorkflowId: 'wf-starter-feature',
       defaultMaxBudgetCents: 1_005,
+      settings: {
+        ...NO_SETTINGS,
+        branchPrefix: 'hub/',
+        commitArtifacts: true,
+        testCommand: 'cargo test',
+        loopIterations: 4,
+        syncResolverAgentKind: 'codex',
+        syncResolverEffort: 'low',
+        syncReviewBeforePush: false,
+      },
+      stepOverrides: [{ workflowId: 'wf-starter-feature', stepId: 's-build', agentKind: 'codex', model: null, effort: null }],
       createdAt: 1,
       updatedAt: 2,
     };
-    expect(projectVerdict(draftOf(project, ['wf-starter-feature']), project)).toEqual({
+    expect(projectVerdict(draftOf(project, [FEATURE_WORKFLOW]), project)).toEqual({
       ok: true,
       fields: {
         name: 'widgets',
@@ -123,6 +159,8 @@ describe('draftOf', () => {
         defaultEffort: 'max',
         defaultWorkflowId: 'wf-starter-feature',
         defaultMaxBudgetCents: 1_005,
+        settings: project.settings,
+        stepOverrides: project.stepOverrides,
       },
     });
   });
@@ -141,12 +179,90 @@ describe('draftOf', () => {
       defaultEffort: null,
       defaultWorkflowId: 'wf-starter-dropped',
       defaultMaxBudgetCents: null,
+      settings: NO_SETTINGS,
+      stepOverrides: [],
       createdAt: 1,
       updatedAt: 2,
     };
-    const draft = draftOf(project, ['wf-starter-feature']);
+    const draft = draftOf(project, [FEATURE_WORKFLOW]);
     expect(draft.workflowId).toBe('');
     const verdict = projectVerdict(draft, project);
     expect(verdict.ok && verdict.fields.defaultWorkflowId).toBeNull();
+  });
+});
+
+describe('settings', () => {
+  const withSettings = (settings: Partial<ProjectDraft['settings']>) =>
+    projectVerdict({ ...DRAFT, settings: { ...BLANK_SETTINGS, ...settings } }, WIDGETS_REPO);
+
+  it('sends blank settings as null, an unchecked box as null rather than false', () => {
+    const verdict = withSettings({ testCommand: '   ', commitArtifacts: false, pushResolvedSync: false });
+    expect(verdict.ok && verdict.fields.settings).toEqual(NO_SETTINGS);
+  });
+
+  it('sends a checked push-without-review as false, the one value the runner reads', () => {
+    const verdict = withSettings({ pushResolvedSync: true, commitArtifacts: true });
+    expect(verdict.ok && verdict.fields.settings).toMatchObject({ syncReviewBeforePush: false, commitArtifacts: true });
+  });
+
+  it.each([
+    ['branchPrefix', { branchPrefix: 'my branch/' }],
+    ['branchPrefix', { branchPrefix: '-f' }],
+    ['branchPrefix', { branchPrefix: 'a..b/' }],
+    ['artifactSubdir', { artifactSubdir: '/tmp/out' }],
+    ['artifactSubdir', { artifactSubdir: 'C:\\out' }],
+    ['conventionsFile', { conventionsFile: 'docs/../../etc' }],
+    ['loopIterations', { loopIterations: '0' }],
+    ['loopIterations', { loopIterations: '11' }],
+    ['loopIterations', { loopIterations: '2.5' }],
+  ])('refuses %s as the Hub would', (field, settings) => {
+    const verdict = withSettings(settings);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(Object.keys(verdict.errors)).toEqual([field]);
+  });
+
+  it('accepts what the Hub accepts', () => {
+    const verdict = withSettings({
+      branchPrefix: 'team/hub-',
+      artifactSubdir: 'docs/reports/',
+      conventionsFile: 'AGENTS.md',
+      loopIterations: '10',
+    });
+    expect(verdict.ok && verdict.fields.settings).toMatchObject({
+      branchPrefix: 'team/hub-',
+      artifactSubdir: 'docs/reports/',
+      conventionsFile: 'AGENTS.md',
+      loopIterations: 10,
+    });
+  });
+});
+
+describe('step overrides in draftOf', () => {
+  it('drops an override of a Workflow or a step this build no longer offers', () => {
+    const kept = { workflowId: 'wf-starter-feature', stepId: 's-build', agentKind: 'codex', model: null, effort: null };
+    const project: HubProject = {
+      id: 'p-1',
+      name: 'widgets',
+      providerKind: 'github',
+      host: 'github.com',
+      fullName: 'acme/widgets',
+      remoteUrl: 'https://github.com/acme/widgets',
+      runnerReady: true,
+      defaultAgentKind: null,
+      defaultModel: null,
+      defaultEffort: null,
+      defaultWorkflowId: null,
+      defaultMaxBudgetCents: null,
+      settings: NO_SETTINGS,
+      stepOverrides: [
+        kept,
+        { ...kept, stepId: 's-gone' },
+        { ...kept, stepId: 's-approve' },
+        { ...kept, workflowId: 'wf-starter-dropped' },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    expect(draftOf(project, [FEATURE_WORKFLOW]).stepOverrides).toEqual([kept]);
   });
 });

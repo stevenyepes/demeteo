@@ -57,7 +57,9 @@ impl ExecutionDriver {
                 unreachable!("ProducerFault is normalized into Failed above")
             }
             StepOutcome::Environmental(msg) => self.apply_environmental(step_exec, msg, dr).await,
-            StepOutcome::NonRetryable(msg) => self.apply_non_retryable(step_exec, msg, dr).await,
+            StepOutcome::NonRetryable(msg) | StepOutcome::UsageLimit(msg) => {
+                self.apply_non_retryable(step_exec, msg, dr).await
+            }
             StepOutcome::AwaitHumanDecision(park) => {
                 self.apply_await_human(step_exec, park, dr).await
             }
