@@ -371,6 +371,7 @@ impl ExecutionDriver {
             StepOutcome::Failed(msg)
             | StepOutcome::Environmental(msg)
             | StepOutcome::NonRetryable(msg)
+            | StepOutcome::UsageLimit(msg)
             | StepOutcome::ProducerFault { reason: msg, .. } => ("failed", Some(msg.clone())),
             StepOutcome::RedirectTo(_) => ("completed", None),
             // A command node never asks for a human mid-step; the outcome

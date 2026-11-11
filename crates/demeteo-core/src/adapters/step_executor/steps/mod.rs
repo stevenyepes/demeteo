@@ -31,6 +31,12 @@ pub(crate) enum StepOutcome {
     /// (e.g. verifier infrastructure error: timeout, spawn failure, parse error).
     /// Fails the step immediately without consulting evaluate_on_failure.
     NonRetryable(String),
+    /// The harness's provider refused the account (usage, rate or credit
+    /// limit). Ends the step like [`Self::NonRetryable`], under its own
+    /// `usage_limit` class. Handlers never return it: the driver derives
+    /// it from a non-verdict failure's text in one place, since the
+    /// provider's refusal reaches each handler as an ordinary agent error.
+    UsageLimit(String),
     /// The artifact this step was handed is defective, and the step that
     /// wrote it is the only one that can repair it.
     ///

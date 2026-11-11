@@ -156,6 +156,10 @@ impl ExecutionDriver {
             }
             other => (other, None, None),
         };
+        let outcome = usage_limit_outcome(
+            outcome,
+            verdict_failure.is_some() || producer_fault.is_some(),
+        );
 
         // Evaluate the declarative retry policy (P1.10) for failure
         // outcomes *before* the attempt row closes, so the row can
@@ -208,6 +212,9 @@ impl ExecutionDriver {
             StepOutcome::NonRetryable(_) => {
                 Some(self.retry_decision_for(step_conf, FailureClass::NonRetryable, 0, None))
             }
+            StepOutcome::UsageLimit(_) => {
+                Some(self.retry_decision_for(step_conf, FailureClass::UsageLimit, 0, None))
+            }
             _ => None,
         };
 
@@ -247,3 +254,25 @@ impl ExecutionDriver {
         })
     }
 }
+
+/// Re-classify a provider's usage-limit refusal out of the class it arrived
+/// in — see [`crate::domain::usage_limit`]. A verdict is never read: once
+/// flattened it is a `Failed` too, carrying the project's test output, which
+/// may mention a rate limit without one having been hit.
+fn usage_limit_outcome(outcome: StepOutcome, is_verdict_class: bool) -> StepOutcome {
+    use crate::domain::usage_limit::{detect, terminal_message};
+    if is_verdict_class {
+        return outcome;
+    }
+    let limit = match &outcome {
+        StepOutcome::Failed(msg) | StepOutcome::Environmental(msg) => {
+            detect(msg).map(|limit| terminal_message(&limit, msg))
+        }
+        _ => None,
+    };
+    limit.map_or(outcome, StepOutcome::UsageLimit)
+}
+
+#[cfg(test)]
+#[path = "../../../../../tests/infrastructure/step_executor/driver/usage_limit_outcome.rs"]
+mod usage_limit_outcome_tests;

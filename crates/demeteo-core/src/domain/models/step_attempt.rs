@@ -26,6 +26,11 @@ pub mod error_class {
     pub const AGENT_FAILURE: &str = "agent_failure";
     /// Failed in a way retrying the implementation cannot fix.
     pub const NON_RETRYABLE: &str = "non_retryable";
+    /// The harness's provider refused the account — usage, rate or credit
+    /// limit ([`crate::domain::usage_limit`]). Never retried, and not a
+    /// retry-policy key a workflow can author. The Hub maps this exact
+    /// spelling to its own failure reason, so it is a wire contract.
+    pub const USAGE_LIMIT: &str = "usage_limit";
 }
 
 /// One attempt row. `attempt_no` is 1-based and dense per step
