@@ -18,8 +18,8 @@ use demeteo_core::domain::git_push::without_userinfo;
 use demeteo_core::domain::hub_pairing::HubPins;
 use demeteo_core::domain::hub_socket::RunnerHubState;
 use demeteo_core::domain::hub_socket::{
-    merged, outbound_catalog, probe_due, snapshot, CatalogEntry, FeatureInput, HarnessProbe,
-    HarnessProbeOutcome, ProbeTrigger, ProjectInput, SnapshotInput,
+    merged, outbound_catalog, probe_due, snapshot, snapshot_as, CatalogEntry, FeatureInput,
+    HarnessProbe, HarnessProbeOutcome, ProbeTrigger, ProjectInput, Reporter, SnapshotInput,
     HARNESS_PROBE_CONNECT_FLOOR_SECS, HARNESS_PROBE_INTERVAL_SECS, MAX_CATALOG_CHARS,
     MAX_CATALOG_MODELS, MAX_PINNED_VERSIONS, MAX_REPORTED_FEATURES, MAX_TITLE_CHARS,
 };
@@ -986,6 +986,35 @@ fn harnesses_exclude_the_noop_and_stub_runtimes() {
         ..only(Vec::new())
     });
     assert_eq!(shot.harnesses, Some(vec!["codex".to_owned()]));
+}
+
+/// A runner's Projects are one per run, named after it; reported, the Hub
+/// lists every past run as a Project. Its Features still go out.
+#[test]
+fn a_runner_reports_its_features_but_no_projects_or_run_shape() {
+    let input = SnapshotInput {
+        projects: vec![ProjectInput {
+            settings: Some(settings(
+                "p1",
+                serde_json::json!({ "default_effort": "high" }),
+            )),
+            repositories: vec![repository("p1", "gh", "acme/app")],
+            ..bare("p1", "Retry webhooks")
+        }],
+        providers: vec![provider("gh", "github.com")],
+        features: vec![unpinned(feature("f-1", "p1", "Retry webhooks", 0))],
+        ..only(Vec::new())
+    };
+
+    let desktop = snapshot_as(Reporter::Desktop, &input);
+    assert_eq!(desktop.projects.len(), 1);
+    assert_eq!(desktop.run_shape.len(), 1);
+
+    let runner = snapshot_as(Reporter::Runner, &input);
+    assert!(runner.projects.is_empty(), "{:?}", runner.projects);
+    assert!(runner.run_shape.is_empty(), "{:?}", runner.run_shape);
+    let ids: Vec<&str> = runner.features.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, ["f-1"]);
 }
 
 const MINUTE_MS: i64 = 60 * 1000;

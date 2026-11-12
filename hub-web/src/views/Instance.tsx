@@ -136,15 +136,7 @@ function Loaded({ detail }: { detail: InstanceDetail }) {
               </ul>
             )}
           </Section>
-          <Section title="Projects" note={detail.projects === null ? undefined : 'Names and remotes only. Local paths stay on the machine.'}>
-            {detail.projects === null ? (
-              <Withheld what="Projects" />
-            ) : detail.projects.length === 0 ? (
-              <p>No projects reported.</p>
-            ) : (
-              <InstanceProjectsTable projects={detail.projects} workflows={detail.workflows} runShape={detail.runShape} />
-            )}
-          </Section>
+          <ProjectsSection detail={detail} />
           <Section title="Harnesses">
             {detail.harnesses === null ? (
               detail.readGranted ? (
@@ -235,6 +227,42 @@ function Section({ title, note, children }: { title: string; note?: string; chil
 }
 
 /** `null` is withheld without `read` (docs/HUB.md §6.4); an empty list would claim there is nothing. */
+/**
+ * A runner's own Projects are one per run, named after it (`demeteo-runner`
+ * `run.rs`), and the Hub dispatches to a runner only from its own Projects
+ * (docs/HUB.md §6.4) — so a runner's list, which older runners still send, is
+ * never shown as if it were the user's.
+ */
+function ProjectsSection({ detail }: { detail: InstanceDetail }) {
+  if (detail.kind === 'runner') {
+    return (
+      <Section title="Projects">
+        <p>
+          A runner has no projects of its own. Work runs here from the Hub's{' '}
+          <a href={routeHref({ name: 'projects' })} className="text-accent-ink transition-colors hover:text-white">
+            projects
+          </a>
+          .
+        </p>
+      </Section>
+    );
+  }
+  return (
+    <Section
+      title="Projects"
+      note={detail.projects === null ? undefined : 'Names and remotes only. Local paths stay on the machine.'}
+    >
+      {detail.projects === null ? (
+        <Withheld what="Projects" />
+      ) : detail.projects.length === 0 ? (
+        <p>No projects reported.</p>
+      ) : (
+        <InstanceProjectsTable projects={detail.projects} workflows={detail.workflows} runShape={detail.runShape} />
+      )}
+    </Section>
+  );
+}
+
 function Withheld({ what }: { what: string }) {
   return (
     <p>

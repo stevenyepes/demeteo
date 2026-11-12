@@ -119,6 +119,20 @@ describe('Instance', () => {
     expect(hrefs).not.toContain('git@github.com:acme/notes.git');
   });
 
+  it('lists no projects for a runner, even one that still reports its per-run ones', async () => {
+    await renderLoaded(
+      detail({
+        kind: 'runner',
+        projects: [{ id: 'p-1', name: 'Retry webhooks', remote_url: 'https://github.com/acme/demeteo.git' }],
+      }),
+    );
+
+    const projects = screen.getByRole('region', { name: 'Projects' });
+    expect(projects).not.toHaveTextContent('Retry webhooks');
+    expect(projects).toHaveTextContent(/no projects of its own/i);
+    expect(within(projects).getByRole('link', { name: 'projects' })).toHaveAttribute('href', routeHref({ name: 'projects' }));
+  });
+
   it('redacts userinfo from a remote URL', async () => {
     const { container } = await renderLoaded(
       detail({ projects: [{ id: 'p-1', name: 'demeteo', remote_url: 'https://user:tok@github.com/acme/demeteo.git' }] }),

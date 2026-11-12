@@ -45,8 +45,9 @@ pub use reporting::{
 };
 pub use run_end::{removal_logs_cancel, run_has_ended, status_backfill};
 pub use snapshot::{
-    snapshot, FeatureInput, ProjectInput, SnapshotInput, MAX_PINNED_VERSIONS,
-    MAX_REPORTED_FEATURES, MAX_SNAPSHOT_BYTES, MAX_TITLE_CHARS, SNAPSHOT_DEBOUNCE_SECS,
+    snapshot, snapshot_as, FeatureInput, ProjectInput, Reporter, SnapshotInput,
+    MAX_PINNED_VERSIONS, MAX_REPORTED_FEATURES, MAX_SNAPSHOT_BYTES, MAX_TITLE_CHARS,
+    SNAPSHOT_DEBOUNCE_SECS,
 };
 pub use verdict::{
     after, after_close, after_refresh, backoff, refresh_refusal, resets_backoff, Reconnect,
