@@ -26,7 +26,7 @@ pub(crate) const RP_ID: &str = "hub.example";
 pub(crate) const ORIGIN: &str = "https://hub.example";
 pub(crate) const UP_AND_UV: u8 = FLAG_USER_PRESENT | FLAG_USER_VERIFIED;
 
-/// The six fields `gate_challenge` binds.
+/// The fields `gate_challenge` binds.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Gate {
     pub instance_id: &'static str,
@@ -35,6 +35,7 @@ pub(crate) struct Gate {
     pub decision: Decision,
     pub request_id: &'static str,
     pub expires_at: u64,
+    pub feedback: Option<&'static str>,
 }
 
 /// The docs/HUB.md §8 example, which every assertion is checked against.
@@ -45,6 +46,7 @@ pub(crate) const GATE: Gate = Gate {
     decision: Decision::Approve,
     request_id: "Zk3m0R8pQnVx2tL5aYw9bA",
     expires_at: 1_791_020_400,
+    feedback: None,
 };
 
 pub(crate) fn digest(gate: Gate) -> [u8; 32] {
@@ -55,6 +57,7 @@ pub(crate) fn digest(gate: Gate) -> [u8; 32] {
         gate.decision,
         gate.request_id,
         gate.expires_at,
+        gate.feedback,
     )
     .expect("the gate challenge encodes")
 }

@@ -103,6 +103,7 @@ pub fn gate_challenge_pre_image(
     decision: Decision,
     request_id: &RequestId,
     expires_at: u64,
+    feedback: Option<&str>,
 ) -> Result<Vec<u8>, EncodeError> {
     demeteo_hub_protocol::gate_challenge(
         &instance.0.to_string(),
@@ -111,6 +112,7 @@ pub fn gate_challenge_pre_image(
         decision,
         &base64url_encode(request_id),
         expires_at,
+        feedback,
     )
 }
 
@@ -122,6 +124,7 @@ pub fn gate_challenge_digest(
     decision: Decision,
     request_id: &RequestId,
     expires_at: u64,
+    feedback: Option<&str>,
 ) -> Result<[u8; 32], EncodeError> {
     gate_challenge_pre_image(
         instance,
@@ -130,6 +133,7 @@ pub fn gate_challenge_digest(
         decision,
         request_id,
         expires_at,
+        feedback,
     )
     .map(|pre_image| digest(&pre_image))
 }
@@ -303,6 +307,7 @@ mod tests {
             Decision::Approve,
             REQUEST_ID,
             EXPIRES_AT,
+            Some("rework the parser"),
         )
         .unwrap();
         let expected: [u8; 32] = Sha256::digest(&pre_image).into();
@@ -315,6 +320,7 @@ mod tests {
                 Decision::Approve,
                 &GATE_REQUEST_ID,
                 EXPIRES_AT,
+                Some("rework the parser"),
             ),
             Ok(expected)
         );
@@ -326,6 +332,7 @@ mod tests {
                 Decision::Approve,
                 &GATE_REQUEST_ID,
                 EXPIRES_AT,
+                Some("rework the parser"),
             ),
             Ok(pre_image)
         );
@@ -355,6 +362,7 @@ mod tests {
                 Decision::Cancel,
                 &envelope.request_id,
                 envelope.expires_at,
+                Some("rework the parser"),
             ),
             gate_challenge_pre_image(
                 instance(),
@@ -363,6 +371,7 @@ mod tests {
                 Decision::Cancel,
                 &minted.id,
                 minted.expires_at,
+                Some("rework the parser"),
             )
         );
     }

@@ -4192,9 +4192,8 @@ mod handler {
 
         const FEATURE: &str = "f-1";
         pub(super) const STEP_EXECUTION: &str = "se-gate";
-        /// Every gate decision carries it and no presenter is scripted with
-        /// it: the desktop drops Hub feedback, so if it ever reaches
-        /// `gate_decide` the strict double refuses the call.
+        /// Every gate decision carries it, signed into its challenge, so a
+        /// presenter that is not scripted with it refuses the call.
         const FEEDBACK: &str = "ship it";
         const EXPIRES_AT: u64 = NOW + 600;
 
@@ -4264,6 +4263,7 @@ mod handler {
                 decision,
                 request_id,
                 EXPIRES_AT,
+                Some(FEEDBACK),
             )
             .expect("encode the gate challenge");
             SignedRequest {
@@ -4305,7 +4305,11 @@ mod handler {
             let hub = Hub::new();
             let a = SoftAuthenticator::new().with_sign_count(7);
             let dir = trusting(tag, &hub, &[&a]).await;
-            let presenter = Arc::new(ScriptedGatePresenter::expecting(STEP_EXECUTION, word, None));
+            let presenter = Arc::new(ScriptedGatePresenter::expecting(
+                STEP_EXECUTION,
+                word,
+                Some(FEEDBACK),
+            ));
             let desktop = Desktop::presenting(&dir, presenter.clone());
             desktop.seed_pending_gate(STEP_EXECUTION);
             let text = hub.signed(gate("r-gate", decision, &a)).await;
@@ -4333,7 +4337,7 @@ mod handler {
                     LogKind::GateDecision,
                     Some(Scope::Gates),
                     LogOutcome::Accepted,
-                    None,
+                    Some(format!("signed by {}", a.credential_id()).as_str()),
                     Some(FEATURE)
                 ),
                 "{tag}"
@@ -4341,7 +4345,11 @@ mod handler {
             assert!(!format!("{entry:?}").contains(FEEDBACK), "{tag}: {entry:?}");
             assert_eq!(
                 presenter.calls(),
-                [(STEP_EXECUTION.to_owned(), word.to_owned(), None)],
+                [(
+                    STEP_EXECUTION.to_owned(),
+                    word.to_owned(),
+                    Some(FEEDBACK.to_owned())
+                )],
                 "{tag}"
             );
             assert_eq!(presenter.unexpected(), 0, "{tag}");
@@ -4358,6 +4366,11 @@ mod handler {
         #[tokio::test]
         async fn a_cancel_by_a_trusted_key_is_the_presenters_gate_decide() {
             assert_decided("cancel", Decision::Cancel, "cancel").await;
+        }
+
+        #[tokio::test]
+        async fn a_redirect_by_a_trusted_key_carries_its_signed_feedback() {
+            assert_decided("redirect", Decision::Redirect, "redirect").await;
         }
 
         /// A desktop trusting `trusted` whose presenter takes no call. The
@@ -4586,7 +4599,7 @@ mod handler {
             let presenter = Arc::new(ScriptedGatePresenter::expecting(
                 STEP_EXECUTION,
                 "approve",
-                None,
+                Some(FEEDBACK),
             ));
             let desktop = Desktop::presenting(&dir, presenter.clone());
             desktop.seed_pending_gate(STEP_EXECUTION);
@@ -4613,7 +4626,11 @@ mod handler {
             assert_eq!(result.outcome, RequestOutcome::Accepted, "{tag}");
             assert_eq!(
                 presenter.calls(),
-                [(STEP_EXECUTION.to_owned(), "approve".to_owned(), None)],
+                [(
+                    STEP_EXECUTION.to_owned(),
+                    "approve".to_owned(),
+                    Some(FEEDBACK.to_owned())
+                )],
                 "{tag}"
             );
             assert_eq!(presenter.unexpected(), 0, "{tag}");
@@ -4812,7 +4829,7 @@ mod handler {
             let presenter = Arc::new(ScriptedGatePresenter::expecting(
                 STEP_EXECUTION,
                 "approve",
-                None,
+                Some(FEEDBACK),
             ));
             let desktop = Desktop::presenting(&dir, presenter.clone());
             desktop.seed_pending_gate(STEP_EXECUTION);
@@ -4823,7 +4840,7 @@ mod handler {
                     "first",
                     RequestOutcome::Accepted,
                     LogOutcome::Accepted,
-                    None,
+                    Some(format!("signed by {}", a.credential_id())),
                 ),
                 (
                     "second",
@@ -4842,7 +4859,11 @@ mod handler {
             }
             assert_eq!(
                 presenter.calls(),
-                [(STEP_EXECUTION.to_owned(), "approve".to_owned(), None)]
+                [(
+                    STEP_EXECUTION.to_owned(),
+                    "approve".to_owned(),
+                    Some(FEEDBACK.to_owned())
+                )]
             );
             assert_eq!(presenter.unexpected(), 0);
             assert_eq!(stored_count(&dir, &a), 7);
@@ -4986,7 +5007,7 @@ mod handler {
             let presenter = Arc::new(ScriptedGatePresenter::expecting(
                 STEP_EXECUTION,
                 "approve",
-                None,
+                Some(FEEDBACK),
             ));
             let desktop = Desktop::presenting(&dir, presenter.clone());
             desktop.seed_pending_gate(STEP_EXECUTION);

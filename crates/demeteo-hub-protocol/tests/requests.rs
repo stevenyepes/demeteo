@@ -250,10 +250,16 @@ fn start_feature_optionals_and_lists_default_when_absent() {
 }
 
 #[test]
-fn decision_rejects_redirect() {
-    assert!(serde_json::from_value::<Decision>(json!("redirect")).is_err());
+fn a_gate_decision_carries_a_redirect_and_rejects_an_unknown_word() {
     let mut value: Value = serde_json::from_str(FIXTURES[3].1).unwrap();
     value["payload"]["body"]["decision"] = json!("redirect");
+    let request: SignedRequest = serde_json::from_value(value.clone()).unwrap();
+    let RequestPayload::GateDecision(body) = request.payload else {
+        panic!("not a gate_decision");
+    };
+    assert_eq!(body.decision, Decision::Redirect);
+
+    value["payload"]["body"]["decision"] = json!("reject");
     assert!(serde_json::from_value::<SignedRequest>(value).is_err());
 }
 

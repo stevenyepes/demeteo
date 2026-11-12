@@ -197,19 +197,21 @@ pub struct RetryStep {
     pub step_id: String,
 }
 
+/// The longest `GateDecision.feedback`, in UTF-8 bytes. The Hub refuses a
+/// longer one before holding a challenge, and an instance refuses one before
+/// verifying the assertion: the text lands in an agent's prompt.
+pub const MAX_GATE_FEEDBACK_BYTES: usize = 8 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateDecision {
     pub feature_id: String,
     pub step_execution_id: String,
     pub decision: Decision,
-    /// NOT bound by `gate_challenge`: the assertion signs the decision, not
-    /// this text, so a relaying Hub can rewrite it. The Hub's API queues
-    /// none, and an instance discards any it receives
-    /// ([`docs/HUB.md`](../../../docs/HUB.md) §8). It stays on the wire so a
-    /// request from a Hub that still sent it parses. No consumer may give it
-    /// authority. Do not add a `redirect` decision to carry it (see
-    /// [`Decision`]).
+    /// The human's words, bound by [`gate_challenge`](crate::gate_challenge):
+    /// the instance recomputes the challenge with this exact text, so one
+    /// byte rewritten in relay fails the assertion. At most
+    /// [`MAX_GATE_FEEDBACK_BYTES`], which both ends enforce.
     #[serde(default)]
     pub feedback: Option<String>,
     pub assertion: WebAuthnAssertion,
@@ -436,10 +438,9 @@ impl SignedRequest {
     /// opt<u8> effort`; a [`WebAuthnAssertion`] is its four strings in
     /// declaration order. `signature` is excluded.
     ///
-    /// Unlike [`gate_challenge`](crate::gate_challenge), `GateDecision.feedback`
-    /// **is** covered here, so a relaying party cannot rewrite it without
-    /// breaking the Hub's signature. It still carries no authority: the human's
-    /// assertion does not bind it.
+    /// `GateDecision.feedback` is covered here as an `opt<str>`, and by
+    /// [`gate_challenge`](crate::gate_challenge) too: the Hub's signature
+    /// says the Hub relayed it, the human's assertion says the human wrote it.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, EncodeError> {
         let mut enc = Encoder::begin("demeteo-hub/v1/request", self.v)?;
         enc.put_str(&self.request_id)?;

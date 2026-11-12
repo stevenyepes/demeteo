@@ -5,7 +5,7 @@
 //! shapes are spelled, so the two ends cannot drift.
 //!
 //! What is deliberately absent is the point of the crate. There is no `logs`
-//! scope and no `configure` scope, no `redirect` decision, and no field shaped
+//! scope and no `configure` scope, no unsigned human text, and no field shaped
 //! to carry a path, a transcript, a diff or a secret: a payload the protocol
 //! cannot express is a payload no caller can leak.
 //!
@@ -38,6 +38,7 @@ pub use request::{
     AttachmentRef, CancelFeature, GateDecision, PasskeyEndorsement, PasskeyRevocation,
     RequestPayload, RetryStep, RunnerRepository, RunnerSettings, RunnerStart, RunnerWorkflow,
     SetStepAssignment, SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
+    MAX_GATE_FEEDBACK_BYTES,
 };
 pub use scope::{Decision, Effort, Scope};
 pub use snapshot::{

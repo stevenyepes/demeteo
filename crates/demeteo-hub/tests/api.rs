@@ -396,6 +396,7 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
             decision.decision,
             &envelope.request_id,
             envelope.expires_at,
+            decision.feedback.as_deref(),
         )
         .unwrap();
         let challenged = challenge["gate_challenge"]
@@ -412,6 +413,81 @@ async fn a_gate_decision_queues_one_request_whose_envelope_recomputes_the_challe
             (&read["kind"], &read["status"]),
             (&json!("gate_decision"), &json!("queued"))
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_redirect_queues_the_feedback_its_challenge_signed() {
+    in_fresh_schema(|db| async move {
+        let a = Tenant::new(&db, &["gates"]).await;
+        let base = serve_state(state_over(db.clone())).await;
+        let feedback = "Split the parser out of main.rs first";
+        let asked = json!({
+            "feature_id": "f-a",
+            "step_execution_id": "e1",
+            "decision": "redirect",
+            "feedback": feedback,
+        });
+
+        let (status, challenge) =
+            post_as(&base, &a.at("/gates/challenge"), &a.session, &asked).await;
+        assert_eq!(status, 200, "{challenge}");
+        let assertion: WebAuthnAssertion = a.key.assert(&rp(), &digest_in(&challenge));
+        let decided = json!({
+            "ceremony_id": challenge["ceremony_id"],
+            "request_id": challenge["request_id"],
+            "assertion": assertion,
+        });
+        let (status, queued) = post_as(&base, &a.at("/gates/decision"), &a.session, &decided).await;
+        assert_eq!(status, 202, "{queued}");
+
+        let queued = list_queued_requests(a.user, &db, a.instance).await.unwrap();
+        let QueuedEnvelope::Readable(envelope) = &queued[0].envelope else {
+            panic!("{:?}", queued[0].envelope);
+        };
+        let RequestPayload::GateDecision(decision) = &envelope.payload else {
+            panic!("{:?}", envelope.payload);
+        };
+        assert_eq!(
+            (decision.decision, decision.feedback.as_deref()),
+            (Decision::Redirect, Some(feedback))
+        );
+        let recomputed = gate_challenge(
+            &envelope.instance_id,
+            &decision.feature_id,
+            &decision.step_execution_id,
+            decision.decision,
+            &envelope.request_id,
+            envelope.expires_at,
+            Some(feedback),
+        )
+        .unwrap();
+        let challenged = challenge["gate_challenge"]
+            .as_str()
+            .and_then(base64url_decode)
+            .expect("a base64url pre-image");
+        assert_eq!(recomputed, challenged);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn feedback_over_the_cap_holds_no_challenge() {
+    in_fresh_schema(|db| async move {
+        let a = Tenant::new(&db, &["gates"]).await;
+        let base = serve_state(state_over(db.clone())).await;
+        let asked = json!({
+            "feature_id": "f-a",
+            "step_execution_id": "e1",
+            "decision": "redirect",
+            "feedback": "x".repeat(demeteo_hub_protocol::MAX_GATE_FEEDBACK_BYTES + 1),
+        });
+
+        let refused = post_as(&base, &a.at("/gates/challenge"), &a.session, &asked).await;
+        assert_eq!(refused, (400, json!({"error": "invalid_request"})));
     })
     .await;
 }

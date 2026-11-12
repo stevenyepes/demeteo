@@ -532,6 +532,10 @@ fn other_variants_react_to_their_fields() {
         ),
         ("decision", gate(|b| b.decision = Decision::Cancel)),
         (
+            "decision redirect",
+            gate(|b| b.decision = Decision::Redirect),
+        ),
+        (
             "assertion.credential_id",
             gate(|b| b.assertion.credential_id = "c2".into()),
         ),
@@ -597,8 +601,6 @@ fn other_variants_react_to_their_fields() {
 
 #[test]
 fn gate_decision_feedback_is_covered_by_the_request_signature() {
-    // `gate_challenge` has no feedback parameter, so the human's assertion
-    // cannot bind it; the Hub's signature over these bytes is what does.
     let with = |feedback: Option<&str>| {
         let mut b = gate_decision();
         b.feedback = feedback.map(str::to_owned);
@@ -612,7 +614,7 @@ fn gate_decision_feedback_is_covered_by_the_request_signature() {
 
 #[test]
 fn request_pre_image_never_equals_a_challenge_pre_image() {
-    let gate = gate_challenge("inst", "feat", "exec", Decision::Approve, "req", 200).unwrap();
+    let gate = gate_challenge("inst", "feat", "exec", Decision::Approve, "req", 200, None).unwrap();
     let endorse = endorsement_challenge("inst", "req", 200, "nc", "nk").unwrap();
     let revoke = revocation_challenge("inst", "req", 200, "c").unwrap();
 
@@ -681,6 +683,74 @@ fn gate_challenge_matches_the_hub_md_vector() {
         Decision::Approve,
         "Zk3m0R8pQnVx2tL5aYw9bA",
         1_791_020_400,
+        None,
     );
     assert_eq!(actual, Ok(golden));
+}
+
+fn vector_with(decision: Decision, feedback: Option<&str>) -> Vec<u8> {
+    gate_challenge(
+        "i-7f3a9c",
+        "f-1791004167577",
+        "se-0042",
+        decision,
+        "Zk3m0R8pQnVx2tL5aYw9bA",
+        1_791_020_400,
+        feedback,
+    )
+    .unwrap()
+}
+
+#[test]
+fn gate_challenge_feedback_is_appended_after_the_published_vector() {
+    // A decision without feedback must sign exactly the HUB.md §8 bytes, so a
+    // build that predates the field still verifies approve and cancel.
+    let bare = vector_with(Decision::Approve, None);
+    let mut expected = bare.clone();
+    expected.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x02, b'o', b'k']);
+    assert_eq!(vector_with(Decision::Approve, Some("ok")), expected);
+}
+
+#[test]
+fn gate_challenge_binds_every_byte_of_the_feedback() {
+    let base = vector_with(Decision::Redirect, Some("rework the parser"));
+    for (what, other) in [
+        ("no feedback", vector_with(Decision::Redirect, None)),
+        ("empty", vector_with(Decision::Redirect, Some(""))),
+        (
+            "one byte",
+            vector_with(Decision::Redirect, Some("rework the parsex")),
+        ),
+        (
+            "a suffix",
+            vector_with(Decision::Redirect, Some("rework the parser ")),
+        ),
+        (
+            "a step id",
+            vector_with(Decision::Redirect, Some("implement")),
+        ),
+        (
+            "approve",
+            vector_with(Decision::Approve, Some("rework the parser")),
+        ),
+    ] {
+        assert_ne!(other, base, "{what} must change the challenge");
+    }
+    assert_ne!(
+        vector_with(Decision::Redirect, Some("")),
+        vector_with(Decision::Redirect, None)
+    );
+}
+
+#[test]
+fn redirect_is_decision_tag_3() {
+    let approve = vector_with(Decision::Approve, None);
+    let redirect = vector_with(Decision::Redirect, None);
+    let at = approve
+        .iter()
+        .zip(&redirect)
+        .position(|(a, r)| a != r)
+        .unwrap();
+    assert_eq!((approve[at], redirect[at]), (0x01, 0x03));
+    assert_eq!(approve.len(), redirect.len());
 }

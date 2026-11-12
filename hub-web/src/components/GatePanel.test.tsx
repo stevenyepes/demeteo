@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAX_GATE_FEEDBACK_BYTES } from '../lib/gates';
 import { GatePanel } from './GatePanel';
 
 const INSTANCE_ID = '7f3e2a10-9c4b-4d2e-8f1a-0b6c5d4e3f21';
@@ -137,7 +138,11 @@ function button(name: string): HTMLElement {
   return screen.getByRole('button', { name });
 }
 
-const LABELS = { approve: 'Approve', cancel: 'Abort feature' } as const;
+const LABELS = { approve: 'Approve', cancel: 'Abort feature', redirect: 'Redirect' } as const;
+
+function typeFeedback(text: string) {
+  fireEvent.change(screen.getByLabelText('Feedback'), { target: { value: text } });
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
@@ -155,7 +160,7 @@ afterEach(() => {
 });
 
 describe('GatePanel', () => {
-  it.each(['approve', 'cancel'] as const)(
+  it.each(['approve', 'cancel', 'redirect'] as const)(
     '%s: challenge, then one required-UV passkey prompt, then the decision',
     async (decision) => {
       const { sent } = stubHub({
@@ -219,23 +224,85 @@ describe('GatePanel', () => {
     expect(onDecided.mock.calls).toEqual([[DECIDED]]);
   });
 
-  it('shows Redirect disabled, saying the Hub does not offer it yet', () => {
-    stubHub({});
+  it.each([
+    ['redirect', '  Split the parser out first\n', '  Split the parser out first\n'],
+    ['approve', '  Drop the CLI flag  ', 'Drop the CLI flag'],
+  ] as const)('%s: puts the feedback on the challenge, never on the decision', async (decision, typed, signed) => {
+    const { sent } = stubHub({
+      [`POST ${CHALLENGE_PATH}`]: [challenge],
+      [`POST ${DECISION_PATH}`]: [ticket],
+    });
+    stubWebAuthn();
     renderPanel();
 
-    const redirect = button('Redirect');
-    expect(redirect).toBeDisabled();
-    expect(redirect).toHaveAccessibleDescription(/not available from the Hub yet/i);
+    typeFeedback(typed);
+    fireEvent.click(button(LABELS[decision]));
+    await advance(0);
+
+    expect(sent[0]?.body).toStrictEqual({
+      feature_id: FEATURE_ID,
+      step_execution_id: STEP_EXECUTION_ID,
+      decision,
+      feedback: signed,
+    });
+    expect(sent[1]?.body).toStrictEqual({ ceremony_id: 'cer-9', request_id: REQUEST_ID, assertion: ASSERTION_FIELDS });
   });
 
-  it('says every decision asks for the passkey, and offers no feedback the instance would discard', () => {
+  it.each([
+    ['cancel', 'Not needed any more'],
+    ['redirect', ' \n '],
+  ] as const)('%s with %j signs no feedback', async (decision, typed) => {
+    const { sent } = stubHub({
+      [`POST ${CHALLENGE_PATH}`]: [challenge],
+      [`POST ${DECISION_PATH}`]: [ticket],
+    });
+    stubWebAuthn();
+    renderPanel();
+
+    typeFeedback(typed);
+    fireEvent.click(button(LABELS[decision]));
+    await advance(0);
+
+    expect(sent[0]?.body).toStrictEqual({
+      feature_id: FEATURE_ID,
+      step_execution_id: STEP_EXECUTION_ID,
+      decision,
+    });
+  });
+
+  it('says every decision asks for the passkey, and that the passkey signs the feedback', () => {
     stubHub({});
     renderPanel();
 
     expect(screen.getByText(/every gate decision asks for your passkey/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/feedback/i)).toBeNull();
-    expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.getByText(/feedback can only be given on the desktop/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Feedback')).toHaveAccessibleDescription(/passkey signs it/i);
+  });
+
+  it('refuses feedback over the cap before any passkey prompt, but still lets the feature be aborted', () => {
+    stubHub({});
+    const credentials = stubWebAuthn();
+    renderPanel();
+
+    typeFeedback('é'.repeat(MAX_GATE_FEEDBACK_BYTES / 2 + 1));
+
+    expect(screen.getByLabelText('Feedback')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Feedback')).toHaveAccessibleDescription(/too long/i);
+    expect(button('Approve')).toBeDisabled();
+    expect(button('Redirect')).toBeDisabled();
+    expect(button('Abort feature')).toBeEnabled();
+    fireEvent.click(button('Redirect'));
+    expect(credentials.get).not.toHaveBeenCalled();
+  });
+
+  it('counts the cap in UTF-8 bytes, so text at the cap is still sent', () => {
+    stubHub({});
+    stubWebAuthn();
+    renderPanel();
+
+    typeFeedback('é'.repeat(MAX_GATE_FEEDBACK_BYTES / 2));
+
+    expect(screen.getByLabelText('Feedback')).toHaveAttribute('aria-invalid', 'false');
+    expect(button('Redirect')).toBeEnabled();
   });
 
   it('disables every button while the ceremony is in flight, so a double click spends one challenge', async () => {

@@ -840,12 +840,16 @@ async fn a_signed_cancel_of_a_feature_with_no_run_is_unknown_feature() {
     runner.assert_untouched();
 }
 
+/// Signed into the challenge, so the runner hands it to the gate as the
+/// human's words.
+const REDIRECT_FEEDBACK: &str = "Split the parser out of main.rs first";
+
 /// A gate of a run the runner owns, named by the Feature id it reports the
 /// run under, is decided: the runner has no mirror row, so it is neither
 /// `runner_owned` nor, under that id, `unknown_feature`. The run's rows and
 /// its snapshot entry go out under that id and never under the run id.
 #[tokio::test]
-async fn a_signed_gate_decision_on_a_runners_run_by_feature_id_is_decided() {
+async fn a_signed_redirect_on_a_runners_run_by_feature_id_carries_its_feedback() {
     let passkey = SoftAuthenticator::new().with_sign_count(7);
     let runner = Runner::start(
         "gate",
@@ -854,7 +858,7 @@ async fn a_signed_gate_decision_on_a_runners_run_by_feature_id_is_decided() {
             credential_id: passkey.credential_id(),
             public_key: base64url_encode(&passkey.public_key_cose()),
         }],
-        ScriptedGatePresenter::expecting(GATE_STEP, "approve", None),
+        ScriptedGatePresenter::expecting(GATE_STEP, "redirect", Some(REDIRECT_FEEDBACK)),
         seed_gate,
     )
     .await;
@@ -863,16 +867,17 @@ async fn a_signed_gate_decision_on_a_runners_run_by_feature_id_is_decided() {
         INSTANCE,
         FEATURE,
         GATE_STEP,
-        Decision::Approve,
+        Decision::Redirect,
         "r-gate",
         expires_at,
+        Some(REDIRECT_FEEDBACK),
     )
     .expect("encode the gate challenge");
     let gate = RequestPayload::GateDecision(GatePayload {
         feature_id: FEATURE.into(),
         step_execution_id: GATE_STEP.into(),
-        decision: Decision::Approve,
-        feedback: None,
+        decision: Decision::Redirect,
+        feedback: Some(REDIRECT_FEEDBACK.into()),
         assertion: passkey.assert(&runner.origin.rp(), &challenge),
     });
     let text = runner.signed("r-gate", gate, expires_at).await;
@@ -882,11 +887,19 @@ async fn a_signed_gate_decision_on_a_runners_run_by_feature_id_is_decided() {
     assert_eq!(outcome, RequestOutcome::Accepted);
     assert_eq!(
         runner.presenter.calls(),
-        [(GATE_STEP.to_owned(), "approve".to_owned(), None)]
+        [(
+            GATE_STEP.to_owned(),
+            "redirect".to_owned(),
+            Some(REDIRECT_FEEDBACK.to_owned())
+        )]
     );
     assert_eq!(
         runner.last_log(),
-        (LogKind::GateDecision, LogOutcome::Accepted, None)
+        (
+            LogKind::GateDecision,
+            LogOutcome::Accepted,
+            Some(format!("signed by {}", passkey.credential_id()))
+        )
     );
     let events = runner
         .sent_until(|events: &[RunEvent]| !events.is_empty())

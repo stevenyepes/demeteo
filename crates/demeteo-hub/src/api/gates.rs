@@ -34,25 +34,31 @@ use axum::http::StatusCode;
 use axum::Json;
 use demeteo_hub_protocol::{
     Decision, EncodeError, GateDecision, RequestPayload, Scope, WebAuthnAssertion,
+    MAX_GATE_FEEDBACK_BYTES,
 };
 use serde::{Deserialize, Serialize};
 
-/// The gate and the decision a passkey is asked to sign.
+/// The gate, the decision and the feedback a passkey is asked to sign.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateChallengeBody {
     pub feature_id: String,
     pub step_execution_id: String,
     pub decision: Decision,
+    /// Signed into the challenge, so it is fixed here and never on the
+    /// decision. Whitespace-only text is held as none.
+    #[serde(default)]
+    pub feedback: Option<String>,
 }
 
 /// A signed decision on a held challenge. It names no gate: what is decided
 /// is what the challenge held.
 ///
 /// It takes no `feedback`, and `deny_unknown_fields` refuses a body that
-/// names one before the challenge is taken. An instance discards the
-/// protocol's unbound feedback (`docs/HUB.md` §8), so a field accepted here
-/// would tell its sender the text arrived when nothing reads it.
+/// names one before the challenge is taken. The feedback the instance acts on
+/// is the text the passkey signed, held since the challenge (`docs/HUB.md`
+/// §8); one offered here would either repeat it or differ from what was
+/// signed.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateDecisionBody {
@@ -91,9 +97,10 @@ pub async fn gate_challenge(
 ) -> Result<GateChallengeView, ApiError> {
     let row = owned(api, user, instance_id).await?;
     gates_verdict(&row)?;
+    let feedback = held_feedback(body.feedback)?;
     strings_verdict(
         [body.feature_id.as_str(), body.step_execution_id.as_str()].into_iter(),
-        std::iter::empty(),
+        feedback.as_deref().into_iter(),
     )?;
     let minted = fresh_minted(now).map_err(|failed| ceremony_not_held(failed.into()))?;
     let pre_image = gate_challenge_pre_image(
@@ -103,6 +110,7 @@ pub async fn gate_challenge(
         body.decision,
         &minted.id,
         minted.expires_at,
+        feedback.as_deref(),
     )
     .map_err(too_long)?;
     let challenge = gate_challenge_digest(
@@ -112,6 +120,7 @@ pub async fn gate_challenge(
         body.decision,
         &minted.id,
         minted.expires_at,
+        feedback.as_deref(),
     )
     .map_err(too_long)?;
     let trusted = api
@@ -127,6 +136,7 @@ pub async fn gate_challenge(
         feature_id: body.feature_id,
         step_execution_id: body.step_execution_id,
         decision: body.decision,
+        feedback,
         request_id: minted.id,
         expires_at: minted.expires_at,
         challenge,
@@ -145,8 +155,8 @@ pub async fn gate_challenge(
 }
 
 /// Queues the decision `body` signs on the challenge it names, under the
-/// request id and expiry the challenge minted. The feature, step execution
-/// and decision are the held challenge's, never the body's.
+/// request id and expiry the challenge minted. The feature, step execution,
+/// decision and feedback are the held challenge's, never the body's.
 ///
 /// The challenge is taken before it is judged, so a submission refused for
 /// its request id, its assertion or its expiry spends it: the next one is
@@ -169,7 +179,7 @@ pub async fn gate_decision(
         feature_id: held.feature_id,
         step_execution_id: held.step_execution_id,
         decision: held.decision,
-        feedback: None,
+        feedback: held.feedback,
         assertion: body.assertion,
     });
     queue_as(api, user, &row, held.minted, payload, now).await
@@ -181,6 +191,7 @@ struct HeldGate {
     feature_id: String,
     step_execution_id: String,
     decision: Decision,
+    feedback: Option<String>,
     minted: Minted,
     challenge: [u8; 32],
 }
@@ -202,6 +213,7 @@ fn held_gate(
             feature_id,
             step_execution_id,
             decision,
+            feedback,
             request_id,
             expires_at,
             challenge,
@@ -209,6 +221,7 @@ fn held_gate(
             feature_id,
             step_execution_id,
             decision,
+            feedback,
             minted: Minted {
                 id: request_id,
                 expires_at,
@@ -231,6 +244,18 @@ fn decision_verdict(held: &HeldGate, body: &GateDecisionBody, now: u64) -> Resul
     match delivery_verdict(held.minted.expires_at, now) {
         Delivery::Deliver => Ok(()),
         Delivery::Expire => Err(ApiError::CEREMONY_EXPIRED),
+    }
+}
+
+/// The feedback a challenge holds: none for absent or whitespace-only text,
+/// and `invalid_request` past [`MAX_GATE_FEEDBACK_BYTES`], which an instance
+/// would refuse anyway, after the human had already signed it. The text is
+/// otherwise held exactly as sent, since the bytes are what the passkey signs.
+fn held_feedback(feedback: Option<String>) -> Result<Option<String>, ApiError> {
+    match feedback {
+        Some(text) if text.len() > MAX_GATE_FEEDBACK_BYTES => Err(ApiError::INVALID_REQUEST),
+        Some(text) if text.trim().is_empty() => Ok(None),
+        other => Ok(other),
     }
 }
 
@@ -425,6 +450,24 @@ mod tests {
     }
 
     #[test]
+    fn held_feedback_is_kept_byte_for_byte_up_to_the_cap() {
+        let at_cap = "x".repeat(MAX_GATE_FEEDBACK_BYTES);
+        for kept in [" split the parser\n", "implement", at_cap.as_str()] {
+            assert_eq!(
+                held_feedback(Some(kept.to_owned())),
+                Ok(Some(kept.to_owned()))
+            );
+        }
+        for none in [None, Some(String::new()), Some(" \n\t".to_owned())] {
+            assert_eq!(held_feedback(none.clone()), Ok(None), "{none:?}");
+        }
+        assert_eq!(
+            held_feedback(Some(format!("{at_cap}x"))),
+            Err(ApiError::INVALID_REQUEST)
+        );
+    }
+
+    #[test]
     fn only_the_held_request_id_matches() {
         let held = base64url_encode(&REQUEST_ID);
         assert!(held_matches(&REQUEST_ID, &held));
@@ -446,7 +489,8 @@ mod tests {
         HeldGate {
             feature_id: "f-1".to_owned(),
             step_execution_id: "e1".to_owned(),
-            decision: Decision::Approve,
+            decision: Decision::Redirect,
+            feedback: Some("split the parser".to_owned()),
             minted: Minted {
                 id: REQUEST_ID,
                 expires_at: EXPIRES,
@@ -462,7 +506,8 @@ mod tests {
             instance,
             feature_id: "f-1".to_owned(),
             step_execution_id: "e1".to_owned(),
-            decision: Decision::Approve,
+            decision: Decision::Redirect,
+            feedback: Some("split the parser".to_owned()),
             request_id: REQUEST_ID,
             expires_at: EXPIRES,
             challenge: DIGEST,
