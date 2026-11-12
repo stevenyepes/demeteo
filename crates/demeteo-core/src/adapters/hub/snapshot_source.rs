@@ -17,7 +17,7 @@ use std::sync::Arc;
 use demeteo_hub_protocol::Snapshot;
 
 use super::run_keys::ReportedAsIs;
-use crate::domain::hub_socket::{snapshot, FeatureInput, ProjectInput, SnapshotInput};
+use crate::domain::hub_socket::{snapshot_as, FeatureInput, ProjectInput, Reporter, SnapshotInput};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, ProjectRepository, WorkflowRepository,
 };
@@ -31,6 +31,7 @@ pub struct RepoSnapshotSource {
     harnesses: Vec<String>,
     run_keys: Arc<dyn HubRunKeys>,
     harness_catalog: Arc<dyn HarnessCatalogSource>,
+    reporter: Reporter,
 }
 
 impl RepoSnapshotSource {
@@ -49,6 +50,7 @@ impl RepoSnapshotSource {
             harnesses,
             run_keys: Arc::new(ReportedAsIs),
             harness_catalog: Arc::new(NoHarnessCatalog),
+            reporter: Reporter::Desktop,
         }
     }
 
@@ -61,6 +63,12 @@ impl RepoSnapshotSource {
     /// No catalog is reported until this says otherwise.
     pub fn with_harness_catalog(mut self, harness_catalog: Arc<dyn HarnessCatalogSource>) -> Self {
         self.harness_catalog = harness_catalog;
+        self
+    }
+
+    /// Reported as a desktop until this says otherwise.
+    pub fn reporting_as(mut self, reporter: Reporter) -> Self {
+        self.reporter = reporter;
         self
     }
 
@@ -122,6 +130,6 @@ impl RepoSnapshotSource {
 
 impl HubSnapshotSource for RepoSnapshotSource {
     fn snapshot(&self) -> Result<Snapshot, String> {
-        Ok(snapshot(&self.input()?))
+        Ok(snapshot_as(self.reporter, &self.input()?))
     }
 }

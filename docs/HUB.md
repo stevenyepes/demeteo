@@ -854,6 +854,14 @@ are carried defaults (§11 *The desktop socket's carried defaults*). The builder
 what one connection sends of it is
 [`adapters/hub/socket/snapshot_send.rs`](../crates/demeteo-core/src/adapters/hub/socket/snapshot_send.rs).
 
+**A runner reports no Projects and no run shape.** `demeteo-runner` creates a
+Project for each run it executes, named after the run, so its list is one row
+per past run rather than anything a user set up, and the Hub dispatches to a
+runner only from its own Projects (§6.4). Its Features are still reported, each
+naming a `project_id` the snapshot does not carry, so a run has a title but no
+project name. Instance shows no project list for a runner, which also covers
+a runner built before this change that still sends one.
+
 **Features and harnesses ride the snapshot** ([decision 70](DECISIONS.md#1-the-locked-decisions)).
 `features` names the instance's newest 100 Features that are neither archived
 nor deleted, each as `{id, project_id, title, workflow_id, workflow_version}`:

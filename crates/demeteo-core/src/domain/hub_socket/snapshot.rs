@@ -86,14 +86,36 @@ pub struct ProjectInput {
 /// Output is sorted by project id, workflows by workflow id then version,
 /// and features by id, so equal inputs give equal snapshots, which is what makes the session's "same as last sent?" comparison meaningful.
 pub fn snapshot(input: &SnapshotInput) -> Snapshot {
-    let mut projects: Vec<ProjectSnapshot> = input
-        .projects
+    snapshot_as(Reporter::Desktop, input)
+}
+
+/// Which kind of instance is reporting, which decides whether its Projects
+/// mean anything to the Hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reporter {
+    Desktop,
+    /// Reports no Projects and no run shape. A runner's Projects are not a
+    /// user's: `demeteo-runner` creates one per run, named after the run's
+    /// title, to hang that run's clone and settings on — so reporting them
+    /// lists every past run as a Project. The Hub dispatches to a runner only
+    /// from its own Projects (docs/HUB.md §6.4) and reads nothing of a
+    /// runner's. Its Features are still reported, read through those
+    /// Projects, and name a `project_id` the snapshot does not carry.
+    Runner,
+}
+
+/// [`snapshot`], as the given kind of instance reports it.
+pub fn snapshot_as(reporter: Reporter, input: &SnapshotInput) -> Snapshot {
+    let reported_projects: &[ProjectInput] = match reporter {
+        Reporter::Desktop => &input.projects,
+        Reporter::Runner => &[],
+    };
+    let mut projects: Vec<ProjectSnapshot> = reported_projects
         .iter()
         .filter_map(|p| project(p, &input.providers))
         .collect();
     projects.sort_by(|a, b| a.id.cmp(&b.id));
-    let mut run_shape: Vec<RunShapeSettings> = input
-        .projects
+    let mut run_shape: Vec<RunShapeSettings> = reported_projects
         .iter()
         .filter_map(|p| run_shape(p.settings.as_ref()?))
         .collect();

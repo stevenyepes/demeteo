@@ -514,7 +514,11 @@ fn build_core_context_parts(
                         .map(|runtime| runtime.kind().to_owned())
                         .filter(|kind| crate::domain::models::AgentKind::is_supported(kind))
                         .collect(),
-                ),
+                )
+                .reporting_as(match execution_mode {
+                    ExecutionMode::Router => crate::domain::hub_socket::Reporter::Desktop,
+                    ExecutionMode::LocalOnly => crate::domain::hub_socket::Reporter::Runner,
+                }),
                 harness_catalog(&agent_registry, &exec_inner, &snapshot_wake, &runtime),
                 snapshot_wake,
                 runtime.clone(),
