@@ -724,7 +724,7 @@ async fn disconnect_cancels_a_pending_device_pairing() {
         .expect("disconnect is not refused or held by the pending pairing")
         .expect("a disconnect");
 
-    assert_eq!(status.state, HubPairingState::Unpaired);
+    assert_eq!(status.status.state, HubPairingState::Unpaired);
     assert_eq!(rig.hub.device_pairing(), DevicePairing::Idle);
     assert!(rig
         .secrets

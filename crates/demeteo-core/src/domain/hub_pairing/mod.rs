@@ -28,6 +28,7 @@ pub mod keyring_names;
 pub mod pkce;
 pub mod runner_view;
 pub mod sealed;
+pub mod unpair;
 
 pub use answer::{
     GitTokenAnswer, HubPins, IssuedTokens, PairingAnswer, PinnedPasskey, RefreshAnswer,

@@ -18,6 +18,7 @@ function run(instanceId: string, featureId: string, overrides: Partial<RunSummar
     stepId: null,
     stepTitle: null,
     tickets: { completed: 0, failed: 0, running: 0 },
+    instanceRemoved: false,
     ...overrides,
   };
 }
@@ -92,6 +93,26 @@ describe('bandRuns', () => {
     expect(bands['needs-you']).toEqual([]);
     expect(bands.active.map((listed) => [listed.run.featureId, listed.instanceLabel])).toEqual([['f-1', 'a']]);
     expect(bands.finished).toHaveLength(1);
+  });
+
+  it('bands a run whose instance was removed as finished, even with a gate or a running status', () => {
+    const fleet = [instance('a', 'workstation', [gate('a', 'f-gated', 10)])];
+    const bands = bandRuns(
+      [
+        run('a', 'f-gated', { instanceRemoved: true }),
+        run('a', 'f-live', { instanceRemoved: true }),
+        run('a', 'f-done', { status: 'completed', instanceRemoved: true }),
+      ],
+      fleet,
+    );
+
+    expect(bands['needs-you']).toEqual([]);
+    expect(bands.active).toEqual([]);
+    expect(bands.finished.map((listed) => [listed.run.featureId, listed.gate])).toEqual([
+      ['f-gated', null],
+      ['f-live', null],
+      ['f-done', null],
+    ]);
   });
 
   it('newest update first within a band', () => {

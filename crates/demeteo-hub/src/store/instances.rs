@@ -1,5 +1,9 @@
-use super::device_keys::{insert_device_key, lock_instance_of_key, NewDeviceKey};
+use super::device_keys::{
+    insert_device_key, lock_instance_of_key, lock_keys_of_instance, rebind_revoked_key,
+    revoke_keys_of_instance, LockedKey, NewDeviceKey,
+};
 use super::passkeys::{list_passkeys, Passkey};
+use super::requests::expire_queued_requests;
 use super::tokens::{insert_token, retire_tokens_of_key, NewToken, TokenKind};
 use super::{timestamp, Db, InstanceId, StoreError, UserId};
 use crate::pairing::authorize::{scope_name, scope_named};
@@ -64,6 +68,17 @@ pub struct Instance {
     pub connection_id: Option<Uuid>,
     pub connected_at: Option<OffsetDateTime>,
     pub event_cursor: i64,
+    /// When the instance was removed from the Hub ([`remove_instance`]).
+    /// A removed row is kept for its run history: the fleet and the instance
+    /// reads leave it out, the runs reads show it as removed, and nothing is
+    /// queued for it.
+    pub removed_at: Option<OffsetDateTime>,
+}
+
+impl Instance {
+    pub fn is_removed(&self) -> bool {
+        self.removed_at.is_some()
+    }
 }
 
 /// What [`record_hello`] read from the row it wrote.
@@ -123,7 +138,7 @@ pub struct Paired {
 pub async fn list_instances(user: UserId, db: &Db) -> Result<Vec<Instance>, StoreError> {
     Ok(sqlx::query_as::<_, Instance>(
         "SELECT id, user_id, kind, name, os, arch, version, last_seen, granted_scopes, \
-                created_at, install_id, connection_id, connected_at, event_cursor \
+                created_at, install_id, connection_id, connected_at, event_cursor, removed_at \
          FROM instances WHERE user_id = $1 ORDER BY created_at, id",
     )
     .bind(user)
@@ -140,7 +155,7 @@ pub async fn find_instance(
 ) -> Result<Option<Instance>, StoreError> {
     Ok(sqlx::query_as::<_, Instance>(
         "SELECT id, user_id, kind, name, os, arch, version, last_seen, granted_scopes, \
-                created_at, install_id, connection_id, connected_at, event_cursor \
+                created_at, install_id, connection_id, connected_at, event_cursor, removed_at \
          FROM instances WHERE user_id = $1 AND id = $2",
     )
     .bind(user)
@@ -165,7 +180,7 @@ pub async fn insert_instance(
         "INSERT INTO instances (id, user_id, name, os, arch, version, granted_scopes, kind) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          RETURNING id, user_id, kind, name, os, arch, version, last_seen, granted_scopes, \
-                   created_at, install_id, connection_id, connected_at, event_cursor",
+                   created_at, install_id, connection_id, connected_at, event_cursor, removed_at",
     )
     .bind(new.id)
     .bind(user)
@@ -224,7 +239,9 @@ fn scopes_named(names: Vec<String>) -> Result<Vec<Scope>, StoreError> {
 
 /// Writes what an instance's `hello` reported onto the row its pairing
 /// created, and makes `connection_id` the one connection the instance is
-/// present through. `None` when the tenant has no such instance. It never
+/// present through. `None` when the tenant has no such instance, or has
+/// removed it: a socket admitted just before [`remove_instance`] committed
+/// must not mark a removed instance present again. It never
 /// inserts: a row made here would be an instance that no device key and no
 /// consent stand behind.
 ///
@@ -257,6 +274,7 @@ pub async fn record_hello(
              connection_id = $8, connected_at = $9, last_seen = $9 \
          FROM instances AS was \
          WHERE i.user_id = $1 AND i.id = $2 AND was.user_id = $1 AND was.id = $2 \
+           AND i.removed_at IS NULL \
          RETURNING i.event_cursor, was.install_id",
     )
     .bind(user)
@@ -357,8 +375,18 @@ fn is_one_pairing(new: &NewPairing) -> bool {
 /// this tenant's alone: a thumbprint another tenant holds is a first pairing
 /// here and touches none of that tenant's rows.
 ///
-/// `granted_scopes` holds [`Scope`]'s wire names. `device_keys.revoked_at`
-/// is neither read nor written.
+/// A key whose instance was removed ([`remove_instance`]) is paired as a
+/// first pairing would be, under a new instance id, and its one
+/// `device_keys` row moves to that instance and is live again. The removed
+/// instance stays removed, with its run history, and is never revived:
+/// removing was the tenant's decision, and the pairing that follows is a
+/// fresh consent, so its runs start a history of their own rather than being
+/// filed under an id the tenant took out of the fleet. Refusing the key
+/// instead would strand an instance that was removed while it was offline:
+/// it still holds that key, and pairing again is the recovery the 4003 close
+/// tells it to make (`docs/HUB.md` §4 *Revocation*).
+///
+/// `granted_scopes` holds [`Scope`]'s wire names.
 ///
 /// A `new` whose parts disagree with each other is
 /// [`StoreError::PairingDisagrees`] and writes nothing.
@@ -370,22 +398,25 @@ pub async fn pair_instance(user: UserId, db: &Db, new: &NewPairing) -> Result<Pa
     let jkt = new.device_key.jkt.as_str();
 
     let mut tx = db.begin().await?;
-    let instance_id = match lock_instance_of_key(user, &mut *tx, jkt).await? {
-        Some(id) => {
-            relabel_instance(user, &mut *tx, id, new, &granted_scopes).await?;
+    let locked = lock_instance_of_key(user, &mut *tx, jkt).await?;
+    let instance_id = match locked {
+        Some(LockedKey {
+            instance,
+            revoked: false,
+        }) => {
+            relabel_instance(user, &mut *tx, instance, new, &granted_scopes).await?;
             retire_tokens_of_key(user, &mut tx, jkt).await?;
-            id
+            instance
+        }
+        Some(LockedKey { revoked: true, .. }) => {
+            let instance = new_instance(new, granted_scopes);
+            insert_instance(user, &mut *tx, &instance).await?;
+            rebind_revoked_key(user, &mut *tx, instance.id, &new.device_key).await?;
+            retire_tokens_of_key(user, &mut tx, jkt).await?;
+            instance.id
         }
         None => {
-            let instance = NewInstance {
-                id: InstanceId::generate(),
-                kind: new.kind,
-                name: new.instance.name.clone(),
-                os: new.instance.os.clone(),
-                arch: new.instance.arch.clone(),
-                version: new.instance.version.clone(),
-                granted_scopes,
-            };
+            let instance = new_instance(new, granted_scopes);
             insert_instance(user, &mut *tx, &instance).await?;
             insert_device_key(user, &mut *tx, instance.id, &new.device_key).await?;
             instance.id
@@ -399,6 +430,68 @@ pub async fn pair_instance(user: UserId, db: &Db, new: &NewPairing) -> Result<Pa
         instance_id,
         passkeys,
     })
+}
+
+fn new_instance(new: &NewPairing, granted_scopes: Vec<String>) -> NewInstance {
+    NewInstance {
+        id: InstanceId::generate(),
+        kind: new.kind,
+        name: new.instance.name.clone(),
+        os: new.instance.os.clone(),
+        arch: new.instance.arch.clone(),
+        version: new.instance.version.clone(),
+        granted_scopes,
+    }
+}
+
+/// Removes the tenant's instance from the Hub, in one transaction, and says
+/// whether it did: `false` when the tenant has no such instance or it was
+/// already removed, and nothing is written.
+///
+/// - `removed_at` is set and the row's presence cleared. The row is kept,
+///   and with it the run mirror, snapshot and requests that cascade from it.
+/// - Every device key of the instance is revoked, so
+///   [`instance_of_key`](super::device_keys::instance_of_key) admits none of
+///   its tokens on any route again.
+/// - Every live token of those keys is retired, refresh tokens included, so
+///   the family ends now rather than when the refresh token expires.
+/// - Every request still `queued` for it is marked `expired`: nothing will
+///   ever deliver it, and a status read should say so rather than `queued`.
+///
+/// The keys' rows are locked first, as every writer of a key's tokens locks
+/// them ([`lock_instance_of_key`]), so a rotation in flight either commits
+/// before this reads the tokens or finds its token retired.
+///
+/// The live socket, if any, is not this function's: the caller closes it
+/// once this has committed.
+pub async fn remove_instance(
+    user: UserId,
+    db: &Db,
+    id: InstanceId,
+    now: u64,
+) -> Result<bool, StoreError> {
+    let at = timestamp(now)?;
+    let mut tx = db.begin().await?;
+    let keys = lock_keys_of_instance(user, &mut *tx, id).await?;
+    let removed = sqlx::query(
+        "UPDATE instances SET removed_at = $3, connection_id = NULL, connected_at = NULL \
+         WHERE user_id = $1 AND id = $2 AND removed_at IS NULL",
+    )
+    .bind(user)
+    .bind(id)
+    .bind(at)
+    .execute(&mut *tx)
+    .await?;
+    if removed.rows_affected() == 0 {
+        return Ok(false);
+    }
+    revoke_keys_of_instance(user, &mut *tx, id, at).await?;
+    for jkt in &keys {
+        retire_tokens_of_key(user, &mut tx, jkt).await?;
+    }
+    expire_queued_requests(user, &mut *tx, id).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -417,6 +510,7 @@ mod tests {
             family_id,
             jkt: jkt.to_owned(),
             expires_at: OffsetDateTime::UNIX_EPOCH,
+            issued_for: None,
         }
     }
 

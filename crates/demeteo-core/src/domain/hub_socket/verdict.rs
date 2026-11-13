@@ -41,6 +41,14 @@ const _: () = assert!(PAGE_SIZE <= 256 && MAX_UNACKED_EVENTS <= 256);
 /// not.
 pub const PREMATURE_EXPIRY_MARGIN_SECS: u64 = 60;
 
+/// How long after it first sent a refresh that went unanswered the
+/// supervisor may still send it again. Mirrors `LOST_ANSWER_GRACE_SECS` in
+/// `crates/demeteo-hub/src/pairing/mod.rs`, which records why it is that
+/// long (decision 76). Counted from before the first request left, so a
+/// replay inside it is inside the Hub's, which counts from the rotation that
+/// request caused.
+pub const REFRESH_REPLAY_GRACE_SECS: u64 = 120;
+
 /// How one connection attempt ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketEnd {
@@ -66,6 +74,9 @@ pub enum Reconnect {
     /// dialled again. The session that ended in it does not count as
     /// connected (see [`resets_backoff`]), so each of these waits longer.
     RefreshAfterBackoff,
+    /// A refresh went unanswered: wait as [`replay_wait`] says, then send it
+    /// again with the refresh token still stored, once (decision 76).
+    ReplayRefresh,
     Stop(StopReason),
 }
 
@@ -79,6 +90,10 @@ pub enum StopReason {
     /// clients of one instance would displace each other forever (docs/HUB.md
     /// §5 *Close codes*).
     Displaced,
+    /// Closed `4003`: the instance was removed on the Hub, its device key
+    /// revoked and its tokens retired, so every redial and refresh would be
+    /// refused. Only pairing again rejoins (docs/HUB.md §4 *Revocation*).
+    Removed,
     /// Closed `1008`: the Hub would refuse the same frame again.
     ProtocolViolation,
     /// A `401` to an access token issued for this very attempt.
@@ -87,9 +102,10 @@ pub enum StopReason {
     /// The refresh token was refused (`invalid_grant`): only pairing again
     /// gets a new one.
     NeedsRepair,
-    /// A refresh was sent and no answer read. The Hub may have rotated the
-    /// token, and presenting the old one again would be a reuse that revokes
-    /// the whole family, so it is never retried.
+    /// A refresh was sent and no answer read, twice, or once with no time
+    /// left to send it again inside [`REFRESH_REPLAY_GRACE_SECS`]. The Hub
+    /// may have rotated the token, and presenting it past that grace would
+    /// be a reuse that revokes the whole family.
     RefreshUncertain,
     ClockSkew,
     /// Asked to stop, by an unpair or app shutdown. No [`SocketEnd`] or
@@ -109,6 +125,7 @@ pub fn after(end: SocketEnd) -> Reconnect {
         SocketEnd::Closed(Some(4001)) => Reconnect::RefreshNow,
         // Never redial: see `StopReason::Displaced`.
         SocketEnd::Closed(Some(4002)) => Reconnect::Stop(StopReason::Displaced),
+        SocketEnd::Closed(Some(4003)) => Reconnect::Stop(StopReason::Removed),
         SocketEnd::Closed(Some(1008)) => Reconnect::Stop(StopReason::ProtocolViolation),
         SocketEnd::Closed(_) | SocketEnd::Silent | SocketEnd::Unreachable => {
             Reconnect::AfterBackoff
@@ -184,9 +201,9 @@ pub enum RefreshEnd {
 }
 
 /// Which way a sent refresh went unanswered. It changes no verdict — every
-/// one is [`StopReason::RefreshUncertain`] — and exists so a stopped socket
-/// says in its log whether the Hub, a gateway or the network lost the
-/// answer. A category only, never a URL, body or transport message: those
+/// one is [`Reconnect::ReplayRefresh`], and a second one
+/// [`StopReason::RefreshUncertain`] — and exists so a stopped socket says in
+/// its log whether the Hub, a gateway or the network lost the answer. A category only, never a URL, body or transport message: those
 /// can carry the refresh token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoAnswer {
@@ -221,12 +238,16 @@ pub fn refresh_refusal(status: u16, body: &[u8]) -> RefreshEnd {
 /// can have rotated is waited out: a request never sent, and the one `503`
 /// the refresh grant sends, `too_many_requests`, a full proof cache. So is a
 /// bare `503`, which is only assumed not to have reached the Hub (see
-/// [`RefreshEnd::Unavailable`]). Everything else stops, because retrying a
-/// refresh token the Hub may already have rotated revokes the family.
+/// [`RefreshEnd::Unavailable`]). A request that may have rotated the token
+/// is [`Reconnect::ReplayRefresh`], whatever lost its answer: the Hub takes
+/// the same token back once inside its grace, while nobody has used the
+/// pair it issued (decision 76), and [`replay_wait`] holds the supervisor to
+/// that. Everything else stops, because retrying a refresh token the Hub
+/// may already have rotated, outside that grace, revokes the family.
 pub fn after_refresh(end: RefreshEnd) -> Reconnect {
     match end {
         RefreshEnd::Unsent | RefreshEnd::Unavailable => Reconnect::AfterBackoff,
-        RefreshEnd::Unanswered(_) => Reconnect::Stop(StopReason::RefreshUncertain),
+        RefreshEnd::Unanswered(_) => Reconnect::ReplayRefresh,
         RefreshEnd::Refused(HubPairingError::ClockSkew) => Reconnect::Stop(StopReason::ClockSkew),
         RefreshEnd::Refused(HubPairingError::HubRefused { error }) => match error.as_str() {
             "invalid_grant" => Reconnect::Stop(StopReason::NeedsRepair),
@@ -234,6 +255,30 @@ pub fn after_refresh(end: RefreshEnd) -> Reconnect {
             _ => Reconnect::Stop(StopReason::Refused),
         },
         RefreshEnd::Refused(_) => Reconnect::Stop(StopReason::Refused),
+    }
+}
+
+/// How long to wait before replaying an unanswered refresh, or why not to.
+/// `replayed` is whether this refresh was already sent a second time,
+/// `since_first_sent` how long ago its first request left, and `backoff`
+/// the wait the supervisor would take anyway.
+///
+/// Once only: an answer lost twice is a Hub or a path that is not answering,
+/// and every replay spends grace a third would need. The wait is the backoff
+/// cut to what is left of [`REFRESH_REPLAY_GRACE_SECS`], so a backoff grown
+/// long by earlier failed dials does not forfeit the one replay; with
+/// nothing left, it stops. A replay that lands late anyway is answered
+/// `invalid_grant` and ends as [`StopReason::NeedsRepair`], which costs what
+/// stopping here would have.
+pub fn replay_wait(
+    replayed: bool,
+    since_first_sent: Duration,
+    backoff: Duration,
+) -> Result<Duration, StopReason> {
+    let left = Duration::from_secs(REFRESH_REPLAY_GRACE_SECS).checked_sub(since_first_sent);
+    match left {
+        Some(left) if !replayed && !left.is_zero() => Ok(backoff.min(left)),
+        _ => Err(StopReason::RefreshUncertain),
     }
 }
 

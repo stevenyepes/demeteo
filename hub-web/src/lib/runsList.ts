@@ -25,6 +25,9 @@ function runKey(instanceId: string, featureId: string): string {
  * The runs list reports no gate, so a waiting gate is read from the fleet: a
  * run that has one is still `running` there, and is banded as needing you.
  * Without the fleet, every run lands in its status's own band.
+ *
+ * A run whose instance was removed is finished whatever its last status: no
+ * request reaches it, so nothing about it can move or be decided again.
  */
 export function bandRuns(runs: RunSummary[], fleet: FleetInstance[] | null): RunsBands {
   const labels = new Map<string, string>();
@@ -39,12 +42,18 @@ export function bandRuns(runs: RunSummary[], fleet: FleetInstance[] | null): Run
   }
   const bands: RunsBands = { 'needs-you': [], active: [], finished: [] };
   for (const run of [...runs].sort((a, b) => b.updatedAt - a.updatedAt)) {
-    const gate = gates.get(runKey(run.instanceId, run.featureId)) ?? null;
-    const band: RunsBand = gate !== null ? 'needs-you' : run.status === 'running' ? 'active' : 'finished';
+    const gate = run.instanceRemoved ? null : (gates.get(runKey(run.instanceId, run.featureId)) ?? null);
+    const band: RunsBand = bandOf(run, gate);
     bands[band].push({ run, band, instanceLabel: labels.get(run.instanceId) ?? run.instanceId, gate });
   }
   bands['needs-you'].sort((a, b) => (a.gate?.since ?? 0) - (b.gate?.since ?? 0));
   return bands;
+}
+
+function bandOf(run: RunSummary, gate: NeedsYou | null): RunsBand {
+  if (run.instanceRemoved) return 'finished';
+  if (gate !== null) return 'needs-you';
+  return run.status === 'running' ? 'active' : 'finished';
 }
 
 /** `null` when no ticket has reported, so a run with no tickets says nothing rather than "0 of 0". */

@@ -1,4 +1,5 @@
 import {
+  deleteJson,
   dropSession,
   type Guard,
   getJson,
@@ -90,13 +91,22 @@ export async function signOut(): Promise<void> {
  * again safe. It is sent again once, and only into the session this tab signed
  * in with; whatever that attempt answers is the outcome.
  */
-export async function postInSession<T>(path: string, body: unknown, guard: Guard<T>): Promise<T> {
+export function postInSession<T>(path: string, body: unknown, guard: Guard<T>): Promise<T> {
+  return inSession(() => postJson(path, body, guard));
+}
+
+/** `deleteJson` with `postInSession`'s one resend into the same session. */
+export function deleteInSession<T>(path: string, body: unknown, guard: Guard<T>): Promise<T> {
+  return inSession(() => deleteJson(path, body, guard));
+}
+
+async function inSession<T>(send: () => Promise<T>): Promise<T> {
   try {
-    return await postJson(path, body, guard);
+    return await send();
   } catch (refusal) {
     if (!isCsrfRefusal(refusal) || !(await sessionStillHeld())) throw refusal;
   }
-  return postJson(path, body, guard);
+  return send();
 }
 
 /**

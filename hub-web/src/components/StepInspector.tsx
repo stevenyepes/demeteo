@@ -9,6 +9,7 @@ import type { RequestTicket } from '../lib/requests';
 import type { RunDetail } from '../lib/runs';
 import { AssignmentForm } from './AssignmentForm';
 import { GatePanel } from './GatePanel';
+import { InstanceRemovedNote } from './InstanceRemoved';
 import { RequestStatus } from './RequestStatus';
 import { RetryForm } from './RetryForm';
 import { Button } from '../../../src/components/ui/Button';
@@ -27,6 +28,8 @@ interface StepInspectorProps {
   detail: Pick<RunDetail, 'status' | 'workflow' | 'steps' | 'pendingGates'>;
   /** The instance's granted scopes; `null` while they load or when they could not be read. */
   scopes: HubScope[] | null;
+  /** The run's instance was removed from the Hub, so no request is offered here. */
+  instanceRemoved?: boolean;
   /**
    * Held by the run, not the gate panel: the mirror drops a gate once the
    * instance acts on its decision, which is exactly when `accepted` arrives.
@@ -49,6 +52,7 @@ export function StepInspector({
   stepId,
   detail,
   scopes,
+  instanceRemoved = false,
   gateDecisions,
   onGateDecided,
   onGateSettled,
@@ -107,7 +111,9 @@ export function StepInspector({
           </>
         )}
       </dl>
-      {detail.status === 'failed' && step?.state === 'failed' ? (
+      {instanceRemoved ? (
+        <InstanceRemovedNote className="mt-4 border-t border-hairline pt-4" />
+      ) : detail.status === 'failed' && step?.state === 'failed' ? (
         <RetryForm
           key={stepId}
           instanceId={instanceId}
@@ -128,7 +134,7 @@ export function StepInspector({
           scopes={scopes}
         />
       )}
-      {gate !== undefined && (
+      {gate !== undefined && !instanceRemoved && (
         <GatePanel
           key={gate.stepExecutionId}
           instanceId={instanceId}

@@ -1,4 +1,10 @@
-import type { HubRequestKind, HubScope, HubStopReason, HubSyncState } from "./hub";
+import type {
+  HubRequestKind,
+  HubScope,
+  HubStopReason,
+  HubSyncState,
+  HubUnpairNotice,
+} from "./hub";
 
 /** Mirrors the Rust `RefusalReason` (`demeteo-hub-protocol/src/message.rs`).
  *  A log row's `reason` is a plain string, since accepted rows carry notes, so
@@ -113,6 +119,7 @@ export function refusalReasonCopy(reason: string, scope: HubScope | null = null)
 
 const STOP_COPY: Readonly<Record<HubStopReason, string>> = {
   displaced: "another connection for this instance took over",
+  removed: "removed from the Hub — pair again to rejoin",
   protocol_violation: "the Hub rejected a message from this desktop",
   unauthorized: "the Hub refused this desktop's credentials",
   refused: "the Hub refused the connection",
@@ -154,4 +161,18 @@ export function logKindLabel(kind: HubRequestKind): string {
 
 export function formatEventNumber(offset: number): string {
   return `#${offset.toLocaleString("en-US")}`;
+}
+
+/** What to tell the user after a disconnect, or null when the Hub was told
+ *  or nothing was paired. A missing notice comes from a runner older than
+ *  `POST /unpair`, which told the Hub nothing. */
+export function unpairNoticeCopy(
+  notice: HubUnpairNotice | null | undefined,
+): { message: string; reason: string | null } | null {
+  if (notice?.outcome === "removed" || notice?.outcome === "not_paired") return null;
+  return {
+    message:
+      "Disconnected here, but the Hub was not told. It still lists this machine: remove it on the Hub's Instance page.",
+    reason: notice?.outcome === "not_told" ? notice.reason : null,
+  };
 }

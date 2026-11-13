@@ -1,7 +1,8 @@
 //! What pairing with the Demeteo Hub, and the requests it relays, need from
 //! the outside world: the OS keyring (or a runner's sealed store), SQLite,
-//! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`
-//! and `/git-token`, a browser, and the harnesses installed on this machine.
+//! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`,
+//! `/git-token` and `/unpair`, a browser, and the harnesses installed on this
+//! machine.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
@@ -11,6 +12,7 @@ use async_trait::async_trait;
 use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 
 use crate::domain::hub_pairing::device::{DeviceAuthorization, DeviceGrantEnd};
+use crate::domain::hub_pairing::unpair::UnpairFailure;
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
@@ -26,10 +28,18 @@ use crate::error::AppError;
 /// the account names in [`crate::domain::hub_pairing::keyring_names`].
 ///
 /// The stored refresh token has a **single writer**. The Hub rotates it on
-/// every use and treats a replayed one as theft: two concurrent refreshes, or
-/// a retry after an answer that was lost in transit, revoke the whole token
-/// family and unpair this desktop. Whatever refreshes must serialize on one
-/// owner and never retry a refresh it cannot prove went unanswered.
+/// every use and treats a retired one presented again as theft: two
+/// refreshes racing, or a retry the Hub does not take for a replay, revoke
+/// the whole token family and unpair this desktop. Whatever refreshes must
+/// serialize on one owner, and write the store only with an answer it read
+/// whole: a refresh with no answer leaves the token it presented stored.
+///
+/// One retry is sanctioned, because the Hub takes it back (decision 76): a
+/// refresh sent and not answered may be sent once more with that same
+/// stored token, inside `REFRESH_REPLAY_GRACE_SECS` of the first request
+/// and before anything uses the pair the lost answer carried
+/// ([`replay_wait`](crate::domain::hub_socket::replay_wait)). Any other
+/// retry of a refresh that may have reached the Hub is reuse.
 pub trait HubSecretStore: Send + Sync {
     fn status(&self) -> KeyringStatus;
     /// A missing entry is `Ok(None)`, not an error.
@@ -178,8 +188,9 @@ pub trait HubTokenEndpoint: Send + Sync {
 /// to answer the other.
 #[async_trait]
 pub trait HubRefreshEndpoint: Send + Sync {
-    /// POST `form_body` with exactly one DPoP header, **never retried**: see
-    /// the single-writer note on [`HubSecretStore`]. The error says how far
+    /// POST `form_body` with exactly one DPoP header, **never retried**
+    /// here: the one replay the single-writer note on [`HubSecretStore`]
+    /// allows is the caller's to decide. The error says how far
     /// the request got, which is what decides whether the stored refresh
     /// token may be presented again.
     async fn refresh(
@@ -188,6 +199,22 @@ pub trait HubRefreshEndpoint: Send + Sync {
         form_body: String,
         dpop: String,
     ) -> Result<RefreshAnswer, RefreshEnd>;
+}
+
+/// The Hub's `POST /unpair`: this instance asking the Hub to remove it
+/// (docs/HUB.md §4 *Revocation*). A trait of its own, so a double of the
+/// other endpoints is not obliged to answer it.
+#[async_trait]
+pub trait HubUnpairEndpoint: Send + Sync {
+    /// POST with `Authorization: DPoP <access>`, exactly one `DPoP` header
+    /// and no body, under a short timeout: a disconnect waits on it. Never
+    /// retried here.
+    async fn unpair(
+        &self,
+        url: &str,
+        access: &SecretString,
+        dpop: String,
+    ) -> Result<(), UnpairFailure>;
 }
 
 /// The device authorization grant: `POST /device_authorization` and the

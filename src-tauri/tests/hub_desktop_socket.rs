@@ -62,7 +62,7 @@ use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::dpop::{verify, Expected};
 use demeteo_hub::pairing::grant::{refresh_change, FamilyChange, FreshPair, TokenSecret};
 use demeteo_hub::pairing::signing_key::SigningKey;
-use demeteo_hub::pairing::testing::MemoryFamily;
+use demeteo_hub::pairing::testing::{FamilyAccess, MemoryFamily};
 use demeteo_hub::protocol::{
     CursorAck, FailureReason, Hello, ProjectSnapshot, RefusalReason, RequestOutcome,
     RequestPayload, RequestResult, RunEvent, RunEventKind, RunEventPayload, Scope, Snapshot,
@@ -76,10 +76,8 @@ use demeteo_hub::socket::requests;
 use demeteo_hub::socket::session::{self, Ended, Limits};
 use demeteo_hub::socket::testing::{MemoryHub, MirrorRow, RequestView};
 use demeteo_hub::store::requests::RequestStatus;
-use demeteo_hub::store::tokens::TokenHash;
-use demeteo_hub::store::{InstanceId, StoreError, UserId};
+use demeteo_hub::store::{InstanceId, UserId};
 use serde_json::{json, Value};
-use std::future::ready;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -165,21 +163,13 @@ impl PairedDesktop {
     /// store: the admission, or what the desktop is sent in its place. The
     /// reads answer what the rows say and nothing else.
     async fn admit(&self, authorization: &str, proof: &str) -> Result<Admission, (u16, Value)> {
-        let find_token =
-            |hash: TokenHash| ready(Ok::<_, StoreError>(self.tokens.find(&hash).cloned()));
-        let instance_of_key = |user: UserId, jkt: String| {
-            let held = user == self.user && jkt == self.key.jkt();
-            ready(Ok::<_, StoreError>(held.then_some(self.instance)))
+        let store = FamilyAccess {
+            tokens: &self.tokens,
+            instance_of_key: |user: UserId, jkt: &str| {
+                (user == self.user && jkt == self.key.jkt()).then_some(self.instance)
+            },
         };
-        let outcome = admitted(
-            &self.state,
-            Some(authorization),
-            Some(proof),
-            NOW,
-            find_token,
-            instance_of_key,
-        )
-        .await;
+        let outcome = admitted(&self.state, Some(authorization), Some(proof), NOW, &store).await;
         match outcome {
             Ok(admission) => Ok(admission),
             Err(refusal) => Err(answered(refusal).await),
@@ -2593,6 +2583,21 @@ async fn a_socket_closed_4002_stops_displaced_and_never_redials() {
         panic!("one dial, got {upgrades:?}");
     };
     assert_eq!(only.access_token.expose(), issued.access.text());
+    assert_eq!(supervised.endpoint.calls().len(), 1);
+    assert_eq!(supervised.waits(), Vec::<Duration>::new());
+}
+
+/// A removed instance never redials or refreshes: its key is revoked on the
+/// Hub, so either would only be refused.
+#[tokio::test]
+async fn a_socket_closed_4003_stops_removed_and_never_redials() {
+    let supervised = Supervised::new();
+    supervised.rotation();
+    supervised.closing_with(4003);
+
+    assert_eq!(supervised.run().await, StopReason::Removed);
+
+    assert_eq!(supervised.dialer.upgrades().len(), 1);
     assert_eq!(supervised.endpoint.calls().len(), 1);
     assert_eq!(supervised.waits(), Vec::<Duration>::new());
 }

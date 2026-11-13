@@ -6,7 +6,7 @@
 //! derives for its install id, so a secret written under any other name fails
 //! the test instead of landing quietly in the map.
 //!
-//! [`ScriptedRefreshEndpoint`], [`ScriptedDeviceEndpoint`] and
+//! [`ScriptedRefreshEndpoint`], [`ScriptedDeviceEndpoint`], [`ScriptedUnpairEndpoint`] and
 //! [`ScriptedSocketDialer`] answer only from
 //! their scripts, and a [`ScriptedConnection`] closes when its script runs out
 //! rather than waiting for a frame nobody will send, unless the test scripted
@@ -47,8 +47,9 @@ use tokio::sync::{mpsc, watch, Notify};
 
 use crate::domain::hub_pairing::device::{DeviceAuthorization, DeviceGrantEnd};
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
+use crate::domain::hub_pairing::unpair::UnpairFailure;
 use crate::domain::hub_pairing::{
-    HubPairingError, HubPins, HubSecret, KeyringStatus, PairingAnswer, RefreshAnswer,
+    HubPairingError, HubPins, HubSecret, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
 use crate::domain::hub_socket::{CatalogEntry, NoAnswer, ProbeTrigger, RefreshEnd};
 use crate::domain::models::{Availability, ConfigOptionValue, GateDecision, ModelSource};
@@ -56,8 +57,8 @@ use crate::error::AppError;
 use crate::ports::hub::{
     AttachmentFetchError, DialFailure, HarnessCatalogSource, HarnessModelProbe,
     HubAttachmentFetcher, HubDeviceEndpoint, HubPinRepository, HubRefreshEndpoint, HubRunKeys,
-    HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer, SocketGone,
-    SocketReceived, SocketUpgrade,
+    HubSecretStore, HubSnapshotSource, HubSocketConnection, HubSocketDialer, HubUnpairEndpoint,
+    SocketGone, SocketReceived, SocketUpgrade,
 };
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 use crate::ports::step_executor::GatePresenter;
@@ -183,7 +184,8 @@ pub struct RefreshCall {
 
 /// A `/token` refresh grant that answers each call with the next scripted
 /// outcome. A call with nothing left to answer it gets
-/// [`RefreshEnd::Unanswered`] ([`NoAnswer::ConnectionLost`]) — the outcome that stops a supervisor, so an
+/// [`RefreshEnd::Unanswered`] ([`NoAnswer::ConnectionLost`]) — the outcome
+/// that stops a supervisor once its one replay is answered the same, so an
 /// unscripted refresh cannot pass as a success — and is counted by
 /// [`Self::unscripted`], which a test asserts is `0`. It does not panic: the
 /// caller is usually a spawned task, whose panic the test would never see.
@@ -283,6 +285,59 @@ impl HubRefreshEndpoint for ScriptedRefreshEndpoint {
         next.unwrap_or_else(|| {
             self.unscripted.fetch_add(1, Ordering::SeqCst);
             Err(RefreshEnd::Unanswered(NoAnswer::ConnectionLost))
+        })
+    }
+}
+
+/// One `POST /unpair` a [`ScriptedUnpairEndpoint`] received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpairCall {
+    pub url: String,
+    pub access: String,
+    pub dpop: String,
+}
+
+/// Answers each `POST /unpair` from its script, in order. An unscripted call
+/// gets [`UnpairFailure::Unavailable`], so it cannot pass as the Hub having
+/// been told, and is counted by [`Self::unscripted`].
+#[derive(Default)]
+pub struct ScriptedUnpairEndpoint {
+    script: Mutex<VecDeque<Result<(), UnpairFailure>>>,
+    calls: Mutex<Vec<UnpairCall>>,
+    unscripted: AtomicUsize,
+}
+
+impl ScriptedUnpairEndpoint {
+    pub fn answer(&self, answer: Result<(), UnpairFailure>) {
+        locked(&self.script).push_back(answer);
+    }
+
+    pub fn calls(&self) -> Vec<UnpairCall> {
+        locked(&self.calls).clone()
+    }
+
+    pub fn unscripted(&self) -> usize {
+        self.unscripted.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl HubUnpairEndpoint for ScriptedUnpairEndpoint {
+    async fn unpair(
+        &self,
+        url: &str,
+        access: &SecretString,
+        dpop: String,
+    ) -> Result<(), UnpairFailure> {
+        locked(&self.calls).push(UnpairCall {
+            url: url.to_owned(),
+            access: access.expose().to_owned(),
+            dpop,
+        });
+        let next = locked(&self.script).pop_front();
+        next.unwrap_or_else(|| {
+            self.unscripted.fetch_add(1, Ordering::SeqCst);
+            Err(UnpairFailure::Unavailable("unscripted".into()))
         })
     }
 }

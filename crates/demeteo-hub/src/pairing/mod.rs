@@ -38,6 +38,10 @@
 //! that exists only in the instance's keyring; rotated with reuse detection,
 //! a copy taken together with that key cannot outlive the real one's next
 //! refresh, because the second presentation of either revokes the family.
+//! The one exception, a replay inside [`LOST_ANSWER_GRACE_SECS`] that
+//! replaces a pair nobody has used, keeps that: the pair it replaces is
+//! retired, so the next presentation of that pair's refresh token is a
+//! reuse.
 //!
 //! **Non-loopback redirects.** The authorization code leaves in the redirect,
 //! so the redirect decides who receives it. A custom scheme goes to whichever
@@ -66,6 +70,15 @@ pub mod testing;
 /// number here is a default no decision stands behind.
 pub const ACCESS_TOKEN_TTL_SECS: u64 = 900;
 pub const REFRESH_TOKEN_TTL_SECS: u64 = 2_592_000;
+/// How long after a refresh token is retired it may be presented again as a
+/// lost-answer replay (decision 76,
+/// [`refresh_change`](grant::refresh_change)). Long enough for a client to
+/// time out a refresh, back off and send it once more; short, because it is
+/// the time in which a copy of the token, presented with the device key,
+/// replaces a pair nobody has used yet instead of ending the family.
+/// `crates/demeteo-core/src/domain/hub_socket/verdict.rs` holds the client to
+/// the same number.
+pub const LOST_ANSWER_GRACE_SECS: u64 = 120;
 pub const AUTHORIZATION_CODE_TTL_SECS: u64 = 60;
 pub const CONSENT_TTL_SECS: u64 = 300;
 pub const DPOP_MAX_AGE_SECS: u64 = 60;

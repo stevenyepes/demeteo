@@ -1049,8 +1049,12 @@ mod tests {
 
         let rotating = proof(&key, "jti-2");
         let (rotated, _) = refresh(&state, &mut family, &token, Some(&rotating), NOW).await;
-        assert!(rotated.is_ok());
+        let issued = serde_json::to_value(rotated.unwrap()).unwrap();
         assert_eq!(live(&family), 3);
+        // The instance used the pair it was sent, so presenting the token it
+        // replaced is reuse and not a lost-answer replay.
+        let access = TokenSecret::parse(issued["access_token"].as_str().unwrap()).unwrap();
+        assert!(family.mark_used(&access.hash(), NOW));
 
         let again = proof(&key, "jti-3");
         let (reused, handed) = refresh(&state, &mut family, &token, Some(&again), NOW).await;
@@ -1060,5 +1064,42 @@ mod tests {
         assert_eq!(change.retire.len(), 3);
         assert!(change.insert.is_empty());
         assert_eq!(live(&family), 0);
+    }
+
+    /// The first answer never reached the instance, which presents the token
+    /// it still holds: the pair the lost answer carried is retired, and the
+    /// instance is answered a pair of the same family as any rotation is.
+    #[tokio::test]
+    async fn a_refresh_replayed_after_a_lost_answer_is_answered_a_new_pair() {
+        let state = sealed_state();
+        let key = SoftDeviceKey::new();
+        let first = FreshPair::generate().unwrap();
+        let mut family = MemoryFamily::paired(&first, &key.thumbprint(), NOW);
+        let token = first.refresh.text();
+
+        let rotating = key.proof("POST", TOKEN_URL, NOW, "jti-1");
+        let (lost, _) = refresh(&state, &mut family, &token, Some(&rotating), NOW).await;
+        let lost = serde_json::to_value(lost.unwrap()).unwrap();
+
+        let replaying = key.proof("POST", TOKEN_URL, NOW + 30, "jti-2");
+        let (replayed, handed) =
+            refresh(&state, &mut family, &token, Some(&replaying), NOW + 30).await;
+
+        let replayed = serde_json::to_value(replayed.unwrap()).unwrap();
+        let row = |answer: &serde_json::Value, member: &str| {
+            let secret = TokenSecret::parse(answer[member].as_str().unwrap()).unwrap();
+            family.find(&secret.hash()).unwrap().clone()
+        };
+        let change = handed.unwrap();
+        let (lost_access, lost_refresh) = (row(&lost, "access_token"), row(&lost, "refresh_token"));
+        assert_eq!(change.retire, [lost_access.id, lost_refresh.id]);
+        assert!(lost_access.retired_at.is_some() && lost_refresh.retired_at.is_some());
+        let presented = family.find(&first.refresh.hash()).unwrap().id;
+        for member in ["access_token", "refresh_token"] {
+            let issued = row(&replayed, member);
+            assert_eq!(issued.retired_at, None, "{member}");
+            assert_eq!(issued.issued_for, Some(presented), "{member}");
+        }
+        assert_eq!(live(&family), 3);
     }
 }

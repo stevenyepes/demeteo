@@ -1,8 +1,8 @@
 // Tests extracted from `crates/demeteo-runner/src/hub/cli.rs` (mirrored-tests convention). `super` = that module.
 
 use super::{
-    describe_log, describe_policy, describe_ticket, parse, HubCommand, PolicyPatch, Ticket,
-    DEFAULT_LOG_COUNT,
+    describe_disconnect, describe_log, describe_policy, describe_ticket, parse, HubCommand,
+    PolicyPatch, Ticket, DEFAULT_LOG_COUNT,
 };
 use demeteo_core::domain::hub_request::{
     HubLocalPolicy, HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome,
@@ -189,4 +189,39 @@ fn the_log_shows_each_row_in_the_order_given_with_its_age_and_reason() {
         assert!(lines[1].contains(part), "{part:?} in {:?}", lines[1]);
     }
     assert_eq!(describe_log(&[], now), "The Hub has asked nothing here.");
+}
+
+#[test]
+fn a_disconnect_says_whether_the_hub_was_told() {
+    let answer = |notice: serde_json::Value| {
+        let mut answer = serde_json::json!({
+            "state": "unpaired", "hub_url": null, "instance_id": null,
+            "fingerprint": null, "rp_id": null, "scopes": [], "paired_at": null,
+            "keyring_backend": "sealed", "keyring_available": true,
+        });
+        if !notice.is_null() {
+            answer["hub_notice"] = notice;
+        }
+        answer
+    };
+    let local = "Disconnected. This runner is unpaired with the Hub.";
+
+    assert_eq!(
+        describe_disconnect(&answer(serde_json::json!({"outcome": "removed"}))),
+        format!("{local}\nThe Hub removed this runner from its fleet.")
+    );
+    assert_eq!(
+        describe_disconnect(&answer(serde_json::json!({"outcome": "not_paired"}))),
+        local
+    );
+    let not_told = describe_disconnect(&answer(
+        serde_json::json!({"outcome": "not_told", "reason": "the Hub did not answer in time"}),
+    ));
+    assert!(
+        not_told.contains("(the Hub did not answer in time)"),
+        "{not_told}"
+    );
+    assert!(not_told.contains("Instance page"), "{not_told}");
+    let older = describe_disconnect(&answer(serde_json::Value::Null));
+    assert!(older.contains("The Hub was not told."), "{older}");
 }

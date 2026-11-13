@@ -17,6 +17,8 @@
 //! 4. The token's row, then [`access_verdict`](grant::access_verdict) over it,
 //!    then the instance of the key. The tenant and the instance are the row's
 //!    and the key's: nothing the request says chooses either.
+//! 5. The token's first use is recorded, last, so that only a request that
+//!    was admitted makes its pair one a lost-answer replay cannot replace.
 //!
 //! # One answer
 //!
@@ -37,14 +39,15 @@ use crate::pairing::dpop::{self, Expected, ProofError, VerifiedProof};
 use crate::pairing::grant::{self, AccessRefusal, TokenSecret};
 use crate::pairing::pending::RememberRefusal;
 use crate::routes::AppState;
-use crate::store::tokens::{TokenHash, TokenRecord};
-use crate::store::{InstanceId, StoreError, UserId};
+use crate::store::tokens::{self, TokenHash, TokenRecord};
+use crate::store::{device_keys, Db, InstanceId, StoreError, UserId};
 use aws_lc_rs::constant_time::verify_slices_are_equal;
 use axum::http::header::WWW_AUTHENTICATE;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 use std::future::Future;
+use uuid::Uuid;
 
 const TOKEN_SCHEME: &str = "DPoP";
 
@@ -145,33 +148,77 @@ fn spent_proof(
     Ok(proof)
 }
 
+/// What admission asks of a store, so the whole of it is reachable from a
+/// test that has no database; a route passes [`PostgresAccess`].
+pub trait AccessStore: Sync {
+    /// The row a presented token's hash finds, whatever its kind or state,
+    /// as [`find_token_by_hash`](tokens::find_token_by_hash) reads it.
+    fn find_token(
+        &self,
+        hash: TokenHash,
+    ) -> impl Future<Output = Result<Option<TokenRecord>, StoreError>> + Send;
+
+    /// The instance of the tenant's device key `jkt`, as
+    /// [`instance_of_key`](device_keys::instance_of_key) reads it.
+    fn instance_of_key(
+        &self,
+        user: UserId,
+        jkt: String,
+    ) -> impl Future<Output = Result<Option<InstanceId>, StoreError>> + Send;
+
+    /// Records the token `id` as used, and answers whether it was still
+    /// unretired, as [`mark_first_use`](tokens::mark_first_use) does.
+    fn mark_first_use(
+        &self,
+        user: UserId,
+        id: Uuid,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+}
+
+/// [`AccessStore`] over the Hub's database.
+pub struct PostgresAccess<'a>(pub &'a Db);
+
+impl AccessStore for PostgresAccess<'_> {
+    async fn find_token(&self, hash: TokenHash) -> Result<Option<TokenRecord>, StoreError> {
+        tokens::find_token_by_hash(self.0, &hash).await
+    }
+
+    async fn instance_of_key(
+        &self,
+        user: UserId,
+        jkt: String,
+    ) -> Result<Option<InstanceId>, StoreError> {
+        device_keys::instance_of_key(user, self.0, &jkt).await
+    }
+
+    async fn mark_first_use(&self, user: UserId, id: Uuid) -> Result<bool, StoreError> {
+        tokens::mark_first_use(user, self.0, id).await
+    }
+}
+
 /// Everything admission does. `authorization` is the request's
 /// `Authorization` header and `proof` its one `DPoP` header, `None` when it
 /// carried none or more than one. `expected` is the method and URL the proof
-/// has to be made for, its `htu` built by [`htu`]. `find_token` and
-/// `instance_of_key` are the two things this asks of a store, so the whole of
-/// it is reachable from a test that has no database; a route passes
-/// [`find_token_by_hash`](crate::store::tokens::find_token_by_hash) and
-/// [`instance_of_key`](crate::store::device_keys::instance_of_key).
+/// has to be made for, its `htu` built by [`htu`].
 ///
-/// `instance_of_key` is asked last and only for a token that passed: its
+/// The instance of the key is asked for only for a token that passed: its
 /// `None` is a key that was revoked, or whose instance was deleted, under a
 /// token that has not yet expired.
-pub async fn admitted<T, TF, I, IF>(
+///
+/// The token is recorded as used last, once everything else admitted it,
+/// and only the first time: a token the store already holds as used is not
+/// written again. That record is what keeps a lost-answer replay from
+/// replacing this token's pair ([`refresh_change`](grant::refresh_change)),
+/// and a replay that got there first has retired the token, which refuses
+/// the request here as any retired token is refused.
+pub async fn admitted(
     state: &AppState,
     authorization: Option<&str>,
     proof: Option<&str>,
     expected: &Expected<'_>,
     now: u64,
-    find_token: T,
-    instance_of_key: I,
-) -> Result<Admission, ApiError>
-where
-    T: FnOnce(TokenHash) -> TF,
-    TF: Future<Output = Result<Option<TokenRecord>, StoreError>>,
-    I: FnOnce(UserId, String) -> IF,
-    IF: Future<Output = Result<Option<InstanceId>, StoreError>>,
-{
+    store: &impl AccessStore,
+) -> Result<Admission, ApiError> {
     let presented = proof.ok_or(ApiError::INVALID_TOKEN)?;
     let token = authorization
         .and_then(presented_token)
@@ -180,17 +227,28 @@ where
     if !names_token(proof.ath.as_deref(), token.text) {
         return Err(ApiError::INVALID_TOKEN);
     }
-    let row = find_token(token.hash)
+    let row = store
+        .find_token(token.hash)
         .await
         .map_err(store_failed)?
         .ok_or(ApiError::INVALID_TOKEN)?;
     grant::access_verdict(&row, &proof.jkt, now).map_err(token_refused)?;
     let token_expires_at =
         u64::try_from(row.expires_at.unix_timestamp()).map_err(|_| ApiError::INVALID_TOKEN)?;
-    let instance = instance_of_key(row.user_id, proof.jkt)
+    let instance = store
+        .instance_of_key(row.user_id, proof.jkt)
         .await
         .map_err(store_failed)?
         .ok_or(ApiError::INVALID_TOKEN)?;
+    if row.used_at.is_none() {
+        let unretired = store
+            .mark_first_use(row.user_id, row.id)
+            .await
+            .map_err(store_failed)?;
+        if !unretired {
+            return Err(ApiError::INVALID_TOKEN);
+        }
+    }
     Ok(Admission {
         user: row.user_id,
         instance,
@@ -221,7 +279,7 @@ mod tests {
     use super::*;
     use crate::auth::testing::lazy_state;
     use crate::auth::RelyingParty;
-    use crate::pairing::grant::FreshPair;
+    use crate::pairing::grant::{FamilyChange, FreshPair};
     use crate::pairing::testing::{claims, MemoryFamily, SoftDeviceKey};
     use serde_json::json;
 
@@ -327,7 +385,7 @@ mod tests {
         }
     }
 
-    /// The store is never dialled: the two closures stand where it would be.
+    /// The store is never dialled: a [`MemoryAccess`] stands where it would be.
     fn state() -> AppState {
         let rp = RelyingParty {
             rp_id: "hub.example".to_owned(),
@@ -336,9 +394,56 @@ mod tests {
         lazy_state("postgres://hub@db.invalid/hub", rp).unwrap()
     }
 
+    /// The store admission asks, over a [`MemoryFamily`]. `failing` names
+    /// the one call that fails, if any.
+    struct MemoryAccess {
+        family: std::sync::Mutex<MemoryFamily>,
+        instance: InstanceId,
+        failing: Option<&'static str>,
+    }
+
+    impl MemoryAccess {
+        fn family(&self) -> std::sync::MutexGuard<'_, MemoryFamily> {
+            self.family.lock().unwrap()
+        }
+
+        fn fails(&self, call: &str) -> Result<(), StoreError> {
+            match self.failing {
+                Some(failing) if failing == call => Err(StoreError::TooLarge { bytes: 0 }),
+                _ => Ok(()),
+            }
+        }
+    }
+
+    impl AccessStore for MemoryAccess {
+        async fn find_token(&self, hash: TokenHash) -> Result<Option<TokenRecord>, StoreError> {
+            self.fails("find_token")?;
+            Ok(self.family().find(&hash).cloned())
+        }
+
+        async fn instance_of_key(
+            &self,
+            _: UserId,
+            _: String,
+        ) -> Result<Option<InstanceId>, StoreError> {
+            self.fails("instance_of_key")?;
+            Ok(Some(self.instance))
+        }
+
+        async fn mark_first_use(&self, _: UserId, id: Uuid) -> Result<bool, StoreError> {
+            self.fails("mark_first_use")?;
+            let mut family = self.family();
+            let Some(row) = family.rows().iter().find(|row| row.id == id) else {
+                return Ok(false);
+            };
+            let hash = row.hash.clone();
+            Ok(family.mark_used(&hash, NOW))
+        }
+    }
+
     struct Caller {
         key: SoftDeviceKey,
-        family: MemoryFamily,
+        store: MemoryAccess,
         authorization: String,
         token: String,
     }
@@ -352,9 +457,18 @@ mod tests {
             Self {
                 authorization: format!("DPoP {token}"),
                 key,
-                family,
+                store: MemoryAccess {
+                    family: std::sync::Mutex::new(family),
+                    instance: InstanceId::generate(),
+                    failing: None,
+                },
                 token,
             }
+        }
+
+        fn failing(mut self, call: &'static str) -> Self {
+            self.store.failing = Some(call);
+            self
         }
 
         fn proof(&self, htm: &str, htu: &str, jti: &str) -> String {
@@ -363,12 +477,20 @@ mod tests {
             self.key.proof_with(&self.key.header(), &claims)
         }
 
+        /// The presented token's row as the store now holds it.
+        fn presented(&self) -> TokenRecord {
+            let Some(secret) = TokenSecret::parse(&self.token) else {
+                panic!("the caller's own token does not parse");
+            };
+            let found = self.store.family().find(&secret.hash()).cloned();
+            found.unwrap()
+        }
+
         async fn admitted(
             &self,
             state: &AppState,
             proof: &str,
             expected: &Expected<'_>,
-            instance: InstanceId,
         ) -> Result<Admission, ApiError> {
             admitted(
                 state,
@@ -376,15 +498,16 @@ mod tests {
                 Some(proof),
                 expected,
                 NOW,
-                |hash: TokenHash| {
-                    let row = self.family.find(&hash).cloned();
-                    async { Ok(row) }
-                },
-                |_, _| async move { Ok(Some(instance)) },
+                &self.store,
             )
             .await
         }
     }
+
+    const SOCKET: Expected<'static> = Expected {
+        htm: "GET",
+        htu: URL,
+    };
 
     #[tokio::test]
     async fn the_htu_is_the_configured_origin_and_the_path() {
@@ -400,17 +523,12 @@ mod tests {
     async fn a_proof_is_admitted_only_for_the_method_and_url_it_was_expected_for() {
         let state = state();
         let caller = Caller::paired();
-        let instance = InstanceId::generate();
         let other_url = htu(&state, "/attachments/a1");
-        let socket = Expected {
-            htm: "GET",
-            htu: URL,
-        };
 
         for (jti, htm, url) in [("jti-1", "POST", URL), ("jti-2", "GET", other_url.as_str())] {
             let proof = caller.proof(htm, url, jti);
             assert_eq!(
-                caller.admitted(&state, &proof, &socket, instance).await,
+                caller.admitted(&state, &proof, &SOCKET).await,
                 Err(INVALID_TOKEN),
                 "{htm} {url}"
             );
@@ -421,51 +539,102 @@ mod tests {
             htu: &other_url,
         };
         let proof = caller.proof("GET", &other_url, "jti-3");
-        let admission = caller.admitted(&state, &proof, &elsewhere, instance).await;
-        assert_eq!(admission.map(|admission| admission.instance), Ok(instance));
+        let admission = caller.admitted(&state, &proof, &elsewhere).await;
+        assert_eq!(
+            admission.map(|admission| admission.instance),
+            Ok(caller.store.instance)
+        );
     }
 
     #[tokio::test]
-    async fn a_store_that_fails_either_read_is_500_and_the_same_reads_answered_admit() {
+    async fn a_store_that_fails_any_call_is_500_and_the_same_calls_answered_admit() {
         let state = state();
         let caller = Caller::paired();
-        let instance = InstanceId::generate();
-        let expected = Expected {
-            htm: "GET",
-            htu: URL,
-        };
-        let found = |hash: TokenHash| {
-            let row = caller.family.find(&hash).cloned();
-            async { Ok(row) }
-        };
-        let failed = || StoreError::TooLarge { bytes: 0 };
-
         let proof = caller.proof("GET", URL, "jti-1");
-        let admission = caller.admitted(&state, &proof, &expected, instance).await;
-        assert_eq!(admission.map(|admission| admission.instance), Ok(instance));
+        let admission = caller.admitted(&state, &proof, &SOCKET).await;
+        assert_eq!(
+            admission.map(|admission| admission.instance),
+            Ok(caller.store.instance)
+        );
 
-        let no_token = admitted(
+        for (n, call) in ["find_token", "instance_of_key", "mark_first_use"]
+            .into_iter()
+            .enumerate()
+        {
+            let caller = Caller::paired().failing(call);
+            let proof = caller.proof("GET", URL, &format!("jti-failing-{n}"));
+            let admission = caller.admitted(&state, &proof, &SOCKET).await;
+            assert_eq!(admission, Err(ApiError::INTERNAL), "{call}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_is_recorded_as_used_by_its_first_admission_and_never_written_again() {
+        let state = state();
+        let caller = Caller::paired();
+        assert_eq!(caller.presented().used_at, None);
+
+        let misdirected = caller.proof("GET", "https://hub.example/elsewhere", "jti-0");
+        let refused = caller.admitted(&state, &misdirected, &SOCKET).await;
+        assert_eq!(refused, Err(INVALID_TOKEN));
+        assert_eq!(caller.presented().used_at, None);
+
+        let first = caller.proof("GET", URL, "jti-1");
+        assert!(caller.admitted(&state, &first, &SOCKET).await.is_ok());
+        let used_at = caller.presented().used_at;
+        assert!(used_at.is_some());
+
+        // A store whose write fails admits only a token it is not asked to
+        // write: one already recorded as used.
+        let caller = caller.failing("mark_first_use");
+        let second = caller.proof("GET", URL, "jti-2");
+        assert!(caller.admitted(&state, &second, &SOCKET).await.is_ok());
+        assert_eq!(caller.presented().used_at, used_at);
+    }
+
+    /// The row admission read passed every check, and a lost-answer replay
+    /// retired the token before its use was recorded: the record finds it
+    /// retired, and the request is refused as any retired token is.
+    #[tokio::test]
+    async fn a_token_retired_before_its_first_use_is_recorded_is_refused() {
+        struct RetiredOnWrite(MemoryAccess);
+
+        impl AccessStore for RetiredOnWrite {
+            async fn find_token(&self, hash: TokenHash) -> Result<Option<TokenRecord>, StoreError> {
+                self.0.find_token(hash).await
+            }
+
+            async fn instance_of_key(
+                &self,
+                user: UserId,
+                jkt: String,
+            ) -> Result<Option<InstanceId>, StoreError> {
+                self.0.instance_of_key(user, jkt).await
+            }
+
+            async fn mark_first_use(&self, user: UserId, id: Uuid) -> Result<bool, StoreError> {
+                let replayed = FamilyChange {
+                    retire: vec![id],
+                    insert: Vec::new(),
+                };
+                self.0.family().apply(&replayed, NOW);
+                self.0.mark_first_use(user, id).await
+            }
+        }
+
+        let state = state();
+        let caller = Caller::paired();
+        let proof = caller.proof("GET", URL, "jti-1");
+        let store = RetiredOnWrite(caller.store);
+        let admission = admitted(
             &state,
             Some(&caller.authorization),
-            Some(&caller.proof("GET", URL, "jti-2")),
-            &expected,
+            Some(&proof),
+            &SOCKET,
             NOW,
-            |_| async { Err(failed()) },
-            |_, _| async { Ok(Some(instance)) },
+            &store,
         )
         .await;
-        assert_eq!(no_token, Err(ApiError::INTERNAL));
-
-        let no_instance = admitted(
-            &state,
-            Some(&caller.authorization),
-            Some(&caller.proof("GET", URL, "jti-3")),
-            &expected,
-            NOW,
-            found,
-            |_, _| async { Err(failed()) },
-        )
-        .await;
-        assert_eq!(no_instance, Err(ApiError::INTERNAL));
+        assert_eq!(admission, Err(INVALID_TOKEN));
     }
 }

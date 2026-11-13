@@ -20,7 +20,7 @@ use crate::adapters::hub::socket::wake::WakingRunEvents;
 use crate::adapters::hub::socket::{supervise, Sleeper, SocketConfig, SupervisorDeps};
 use crate::adapters::hub::testing::{
     MemorySecretStore, RefreshCall, ScriptedConnection, ScriptedRefreshEndpoint,
-    ScriptedSnapshotSource, ScriptedSocketDialer,
+    ScriptedSnapshotSource, ScriptedSocketDialer, ScriptedUnpairEndpoint, UnpairCall,
 };
 use crate::adapters::hub::token_client::ReqwestTokenEndpoint;
 use crate::adapters::hub::HubPairing;
@@ -36,6 +36,7 @@ use crate::domain::hub_pairing::keyring_names::{
     hub_keyring_account, keyring_backend_name, KEYRING_SERVICE,
 };
 use crate::domain::hub_pairing::pkce::s256_challenge;
+use crate::domain::hub_pairing::unpair::{HubUnpairNotice, UnpairFailure};
 use crate::domain::hub_pairing::{
     access_token_hash, authorize_url, check_pairing_origin, consent_label, consent_machine,
     hub_origin, hub_status, pairing_state, redirect_uri, socket_dial_url, socket_url, token_error,
@@ -54,9 +55,10 @@ use crate::domain::hub_socket::connection::{
 };
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, announced_scopes as narrowed_scopes, backoff, hello,
-    hub_event, refresh_refusal, resets_backoff, sends_events, snapshot, NoAnswer, Reconnect,
-    RefreshEnd, SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES,
-    PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
+    hub_event, refresh_refusal, replay_wait, resets_backoff, sends_events, snapshot, NoAnswer,
+    Reconnect, RefreshEnd, SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS,
+    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, REFRESH_REPLAY_GRACE_SECS,
+    SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, Project, Workflow, WorkflowVersion};
@@ -1807,7 +1809,8 @@ async fn disconnect_forgets_the_hub_twice_over_and_leaves_runs_alone() {
     assert_eq!(rig.secrets.entries().len(), 2);
     assert_eq!(row_count(&rig.db, "hub_pinned_passkeys"), 2);
 
-    let status = rig.hub.disconnect().await.expect("a disconnect");
+    let disconnected = rig.hub.disconnect().await.expect("a disconnect");
+    let status = disconnected.status;
 
     assert!(
         rig.secrets.entries().is_empty(),
@@ -1825,7 +1828,8 @@ async fn disconnect_forgets_the_hub_twice_over_and_leaves_runs_alone() {
     );
 
     let again = rig.hub.disconnect().await.expect("a second disconnect");
-    assert_eq!(again.state, HubPairingState::Unpaired);
+    assert_eq!(again.status.state, HubPairingState::Unpaired);
+    assert_eq!(again.hub_notice, Some(HubUnpairNotice::NotPaired));
 
     let kept = FeatureRepository::get(&*rig.db, &feature.id)
         .unwrap()
@@ -2473,8 +2477,8 @@ async fn the_command_cores_answer_what_the_service_answers() {
     assert_eq!(status_core(&rig.hub), Ok(paired));
 
     let disconnected = disconnect_core(&rig.hub).await.expect("a disconnect");
-    assert_eq!(disconnected.state, HubPairingState::Unpaired);
-    assert_eq!(Ok(disconnected), rig.hub.status());
+    assert_eq!(disconnected.status.state, HubPairingState::Unpaired);
+    assert_eq!(Ok(disconnected.status), rig.hub.status());
 }
 
 #[tokio::test]
@@ -2999,6 +3003,7 @@ fn a_socket_end_decides_the_reconnect_by_the_ac4_table() {
         (SocketEnd::Silent, AfterBackoff),
         (SocketEnd::Closed(Some(4001)), RefreshNow),
         (SocketEnd::Closed(Some(4002)), Stop(StopReason::Displaced)),
+        (SocketEnd::Closed(Some(4003)), Stop(StopReason::Removed)),
         (
             SocketEnd::Closed(Some(1008)),
             Stop(StopReason::ProtocolViolation),
@@ -3006,7 +3011,7 @@ fn a_socket_end_decides_the_reconnect_by_the_ac4_table() {
         (SocketEnd::Closed(Some(1000)), AfterBackoff),
         (SocketEnd::Closed(Some(1006)), AfterBackoff),
         (SocketEnd::Closed(Some(4000)), AfterBackoff),
-        (SocketEnd::Closed(Some(4003)), AfterBackoff),
+        (SocketEnd::Closed(Some(4004)), AfterBackoff),
         (refused(401, false), RefreshNow),
         (refused(401, true), Stop(StopReason::Unauthorized)),
         (refused(503, false), AfterBackoff),
@@ -3089,23 +3094,23 @@ fn a_failed_refresh_backs_off_only_when_nothing_can_have_rotated() {
         (RefreshEnd::Unavailable, AfterBackoff),
         (
             RefreshEnd::Unanswered(NoAnswer::Timeout),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::BodyUnreadable),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::Gateway(502)),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (hub("invalid_grant"), Stop(StopReason::NeedsRepair)),
         (hub("invalid_dpop_proof"), Stop(StopReason::Refused)),
@@ -3152,9 +3157,9 @@ fn a_refused_refresh_is_judged_by_its_hub_code_then_by_its_status() {
         (503, Vec::new(), AfterBackoff),
         (503, coded("too_many_requests"), AfterBackoff),
         (503, coded("internal"), Stop(StopReason::Refused)),
-        (500, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
-        (502, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
-        (504, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
+        (500, HTML_BODY.to_vec(), Reconnect::ReplayRefresh),
+        (502, HTML_BODY.to_vec(), Reconnect::ReplayRefresh),
+        (504, HTML_BODY.to_vec(), Reconnect::ReplayRefresh),
         (500, coded("internal"), Stop(StopReason::Refused)),
         (400, coded("invalid_grant"), Stop(StopReason::NeedsRepair)),
         (
@@ -3921,16 +3926,11 @@ fn refresh_refused(error: &str) -> RefreshEnd {
     ))
 }
 
-/// AC5.4: a refresh the Hub may have rotated, or refused for good, is never
-/// sent again — the supervisor stops on it, before any dial.
+/// AC5.4: a refresh the Hub refused for good is never sent again — the
+/// supervisor stops on it, before any dial.
 #[tokio::test]
-async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_token_call() {
+async fn a_refresh_that_was_refused_stops_with_no_further_token_call() {
     for (tag, end, reason) in [
-        (
-            "unanswered",
-            RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
-            StopReason::RefreshUncertain,
-        ),
         (
             "invalid_grant",
             refresh_refused("invalid_grant"),
@@ -3948,11 +3948,6 @@ async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_to
             }),
             StopReason::Refused,
         ),
-        (
-            "bare_502",
-            refresh_refusal(502, HTML_BODY),
-            StopReason::RefreshUncertain,
-        ),
     ] {
         let rig = RefreshRig::new(&format!("hub_supervise_stops_{tag}"), "dhr_r0");
         rig.endpoint.fail(end);
@@ -3965,6 +3960,112 @@ async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_to
         assert!(dialer.upgrades().is_empty(), "{tag}");
         assert!(waits.is_empty(), "{tag}: {waits:?}");
         assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r0"), "{tag}");
+    }
+}
+
+/// Decision 76: a refresh the Hub may have rotated, its answer lost, is
+/// sent once more with the token still stored, after the backoff; the Hub
+/// takes that back while the lost pair is unused.
+#[tokio::test]
+async fn an_unanswered_refresh_is_replayed_once_with_the_same_token() {
+    for (tag, end) in [
+        ("unanswered", RefreshEnd::Unanswered(NoAnswer::Timeout)),
+        ("bare_502", refresh_refusal(502, HTML_BODY)),
+    ] {
+        let rig = RefreshRig::new(&format!("hub_supervise_replays_{tag}"), "dhr_r0");
+        rig.endpoint.fail(end);
+        rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+        dialer.connect(closing_with(4002));
+
+        let (stopped, waits) = rig.supervise(&dialer).await;
+
+        assert_eq!(stopped, StopReason::Displaced, "{tag}");
+        assert_eq!(
+            waits,
+            [(backoff(0, 1.0), 1)],
+            "{tag}: one wait, between the calls"
+        );
+        let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+        assert_eq!(presented, ["dhr_r0", "dhr_r0"], "{tag}");
+        assert_eq!(dialed_tokens(&dialer), ["dha_a1"], "{tag}");
+        assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r1"), "{tag}");
+    }
+}
+
+/// A replay that goes unanswered too is not sent a third time, even after a
+/// refresh that never left in between: the supervisor stops before any dial,
+/// with the token it presented still stored.
+#[tokio::test]
+async fn a_replayed_refresh_that_goes_unanswered_again_stops_uncertain() {
+    for (tag, ends) in [
+        (
+            "twice",
+            vec![
+                RefreshEnd::Unanswered(NoAnswer::Gateway(502)),
+                RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
+            ],
+        ),
+        (
+            "unsent_between",
+            vec![
+                RefreshEnd::Unanswered(NoAnswer::BodyUnreadable),
+                RefreshEnd::Unsent,
+                RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess),
+            ],
+        ),
+    ] {
+        let rig = RefreshRig::new(&format!("hub_supervise_replay_stops_{tag}"), "dhr_r0");
+        let calls = ends.len();
+        for end in ends {
+            rig.endpoint.fail(end);
+        }
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+
+        let (stopped, waits) = rig.supervise(&dialer).await;
+
+        assert_eq!(stopped, StopReason::RefreshUncertain, "{tag}");
+        assert_eq!(rig.endpoint.calls().len(), calls, "{tag}");
+        assert_eq!(waits.len(), calls - 1, "{tag}: {waits:?}");
+        assert!(dialer.upgrades().is_empty(), "{tag}");
+        assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r0"), "{tag}");
+    }
+}
+
+#[test]
+fn an_unanswered_refresh_is_replayed_once_and_only_inside_the_grace() {
+    let secs = Duration::from_secs;
+    assert_eq!(REFRESH_REPLAY_GRACE_SECS, 120);
+    for (since, backoff, wait) in [
+        (secs(0), secs(1), secs(1)),
+        (secs(30), secs(64), secs(64)),
+        (secs(100), secs(64), secs(20)),
+        (secs(0), secs(300), secs(120)),
+        (
+            Duration::from_millis(119_999),
+            secs(2),
+            Duration::from_millis(1),
+        ),
+    ] {
+        assert_eq!(
+            replay_wait(false, since, backoff),
+            Ok(wait),
+            "{since:?} {backoff:?}"
+        );
+    }
+    for since in [secs(120), secs(121), secs(3600)] {
+        assert_eq!(
+            replay_wait(false, since, secs(1)),
+            Err(StopReason::RefreshUncertain),
+            "{since:?}"
+        );
+    }
+    for since in [secs(0), secs(30)] {
+        assert_eq!(
+            replay_wait(true, since, secs(1)),
+            Err(StopReason::RefreshUncertain),
+            "{since:?}"
+        );
     }
 }
 
@@ -4379,7 +4480,7 @@ async fn disconnect_abandons_the_sockets_parked_refresh_and_leaves_no_secret() {
         rig.secrets.entries()
     );
     assert!(!rig.secrets.written().iter().any(|v| v == "dhr_r1"));
-    assert_eq!(status.state, HubPairingState::Unpaired);
+    assert_eq!(status.status.state, HubPairingState::Unpaired);
     assert!(dialer.upgrades().is_empty());
 }
 
@@ -4431,7 +4532,7 @@ async fn disconnect_deletes_only_after_a_refresh_in_the_endpoint_has_stored_its_
     );
     assert!(hub.access_token().is_none());
     assert_eq!(
-        status.expect("a disconnect").state,
+        status.expect("a disconnect").status.state,
         HubPairingState::Unpaired
     );
     assert_eq!(rig.endpoint.calls().len(), 1, "the socket never refreshed");
@@ -5090,4 +5191,146 @@ async fn a_restart_that_redials_never_reads_stopped_once_it_returns() {
     assert_eq!(dialer.upgrades().len(), 2);
     assert_eq!(dialer.unscripted(), 0);
     assert_eq!(rig.endpoint.unscripted(), 0);
+}
+
+impl RefreshRig {
+    /// This rig's pairing, telling the Hub of a disconnect through `unpair`.
+    fn unpairing(&self, unpair: &Arc<ScriptedUnpairEndpoint>) -> HubPairing {
+        let token = Arc::new(ScriptedToken {
+            authorize: Recorded::default(),
+            reply: Reply::Answer,
+            verifiers: Mutex::default(),
+        });
+        HubPairing::new(
+            self.db.clone(),
+            self.secrets.clone(),
+            token,
+            self.db.clone(),
+        )
+        .with_refresh_endpoint(self.endpoint.clone())
+        .with_unpair_endpoint(unpair.clone())
+    }
+}
+
+/// The proof `POST /unpair` carries is over that URL, and bound to the access
+/// token presented beside it.
+fn assert_unpair_proof(call: &UnpairCall) {
+    assert_eq!(call.url, format!("{ORIGIN}/unpair"));
+    let [_, claims, _] = call.dpop.split('.').collect::<Vec<_>>()[..] else {
+        panic!("proof shape");
+    };
+    let claims = segment(claims);
+    assert_eq!(claims["htm"], json!("POST"));
+    assert_eq!(claims["htu"], json!(call.url));
+    assert_eq!(claims["ath"], json!(access_token_hash(&call.access)));
+}
+
+/// With no access token held, the disconnect refreshes one, tells the Hub
+/// with it, and only then deletes.
+#[tokio::test]
+async fn disconnect_tells_the_hub_before_it_forgets_the_pairing() {
+    let rig = RefreshRig::new("hub_disconnect_unpairs", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    let unpair = Arc::new(ScriptedUnpairEndpoint::default());
+    unpair.answer(Ok(()));
+    let hub = rig.unpairing(&unpair);
+
+    let disconnected = hub.disconnect().await.expect("a disconnect");
+
+    assert_eq!(disconnected.hub_notice, Some(HubUnpairNotice::Removed));
+    assert_eq!(disconnected.status.state, HubPairingState::Unpaired);
+    let calls = unpair.calls();
+    let [call] = &calls[..] else {
+        panic!("one unpair, got {calls:?}");
+    };
+    assert_eq!(call.access, "dha_a1");
+    assert_unpair_proof(call);
+    let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+    assert_eq!(presented, ["dhr_r0"]);
+    assert!(
+        rig.secrets.entries().is_empty(),
+        "{:?}",
+        rig.secrets.entries()
+    );
+    assert_eq!(unpair.unscripted(), 0);
+}
+
+/// A Hub that cannot be reached, or refuses, does not keep the pairing here:
+/// the local delete goes ahead and the answer says the Hub was not told.
+#[tokio::test]
+async fn disconnect_forgets_locally_when_the_hub_is_not_told() {
+    for (tag, answer, said) in [
+        (
+            "hub_unpair_unreachable",
+            Err(UnpairFailure::Unavailable(
+                "could not connect to /unpair".into(),
+            )),
+            "could not connect to /unpair",
+        ),
+        (
+            "hub_unpair_refused",
+            Err(UnpairFailure::Refused { status: 503 }),
+            "the Hub answered HTTP 503",
+        ),
+    ] {
+        let rig = RefreshRig::new(tag, "dhr_r0");
+        rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+        let unpair = Arc::new(ScriptedUnpairEndpoint::default());
+        unpair.answer(answer);
+        let hub = rig.unpairing(&unpair);
+
+        let disconnected = hub.disconnect().await.expect("a disconnect");
+
+        assert_eq!(
+            disconnected.hub_notice,
+            Some(HubUnpairNotice::NotTold {
+                reason: said.to_owned()
+            }),
+            "{tag}"
+        );
+        assert_eq!(
+            disconnected.status.state,
+            HubPairingState::Unpaired,
+            "{tag}"
+        );
+        assert!(rig.secrets.entries().is_empty(), "{tag}");
+        assert_eq!(unpair.calls().len(), 1, "{tag}: never retried");
+    }
+
+    let rig = RefreshRig::new("hub_unpair_no_refresh", "dhr_r0");
+    rig.endpoint.fail(RefreshEnd::Unsent);
+    let unpair = Arc::new(ScriptedUnpairEndpoint::default());
+    let hub = rig.unpairing(&unpair);
+    let disconnected = hub.disconnect().await.expect("a disconnect");
+    assert!(matches!(
+        disconnected.hub_notice,
+        Some(HubUnpairNotice::NotTold { .. })
+    ));
+    assert!(
+        unpair.calls().is_empty(),
+        "nothing to prove the unpair with"
+    );
+    assert!(rig.secrets.entries().is_empty());
+}
+
+/// A `401` to a token held from before earns one refresh and one retry; the
+/// Hub may have expired it early.
+#[tokio::test]
+async fn an_unpair_refused_401_on_a_held_token_is_retried_once_after_a_refresh() {
+    let rig = RefreshRig::new("hub_unpair_retry", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.answer("dha_a2", "dhr_r2", 900);
+    let unpair = Arc::new(ScriptedUnpairEndpoint::default());
+    unpair.answer(Err(UnpairFailure::Refused { status: 401 }));
+    unpair.answer(Ok(()));
+    let hub = rig.unpairing(&unpair);
+    hub.refresh_access().await.expect("a held access token");
+
+    let disconnected = hub.disconnect().await.expect("a disconnect");
+
+    assert_eq!(disconnected.hub_notice, Some(HubUnpairNotice::Removed));
+    let presented: Vec<String> = unpair.calls().iter().map(|c| c.access.clone()).collect();
+    assert_eq!(presented, ["dha_a1", "dha_a2"]);
+    unpair.calls().iter().for_each(assert_unpair_proof);
+    assert!(rig.secrets.entries().is_empty());
 }

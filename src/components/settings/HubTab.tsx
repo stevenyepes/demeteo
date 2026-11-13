@@ -16,12 +16,14 @@ import {
   type HubRequestLogEntry,
   type HubStatus,
   type HubTrustedPasskey,
+  type HubUnpairNotice,
 } from '../../lib/hub';
 import { reportError } from '../../lib/errorBus';
 import { HubActivityLog } from './HubActivityLog';
 import { HubCeilingsCard, type CeilingField } from './HubCeilingsCard';
 import { HubConnectionCard } from './HubConnectionCard';
 import { HubDisconnectCard } from './HubDisconnectCard';
+import { HubNotToldNote } from './HubNotToldNote';
 import { HubPasskeysCard } from './HubPasskeysCard';
 import { HubScopesCard, type ScopeField } from './HubScopesCard';
 
@@ -46,6 +48,7 @@ export function HubTab() {
   const [machine, setMachine] = useState<HubMachine | null>(null);
   const [pairing, setPairing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [unpairNotice, setUnpairNotice] = useState<HubUnpairNotice | null>(null);
   const [policy, setPolicy] = useState<HubLocalPolicy | null>(null);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const savingRef = useRef(false);
@@ -130,6 +133,7 @@ export function HubTab() {
 
   const handlePair = async (hubUrl: string) => {
     setPairing(true);
+    setUnpairNotice(null);
     try {
       const status = await hubPair(hubUrl);
       setView({ kind: 'ready', status });
@@ -145,7 +149,8 @@ export function HubTab() {
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      const status = await hubDisconnect();
+      const { hub_notice, ...status } = await hubDisconnect();
+      setUnpairNotice(hub_notice ?? null);
       setView({ kind: 'ready', status });
       await refreshConnection();
       setPasskeys(await hubTrustedPasskeys());
@@ -220,6 +225,7 @@ export function HubTab() {
 
   return (
     <div className="space-y-4">
+      {unpairNotice && <HubNotToldNote notice={unpairNotice} />}
       <HubConnectionCard
         status={view.status}
         connection={connection}

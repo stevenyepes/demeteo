@@ -133,6 +133,7 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
     project_id: null,
     project_name: null,
     git_token_problem: null,
+    instance_removed: false,
     ...overrides,
   };
 }
@@ -875,6 +876,35 @@ describe('Run, end to end on the real wrappers', () => {
 
     await screen.findByText(/this instance has not reported the run's graph/i);
     expect(screen.queryByRole('region', { name: 'Git token' })).toBeNull();
+  });
+
+  it('offers no request on a removed instance’s run, says why, and links nowhere for the instance', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    stubHub(json({ error: 'not_found' }, 404), json(detail({ workflow: null, instance_removed: true })));
+    render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+    const steps = await vi.waitFor(() => screen.getByRole('list', { name: 'Reported steps' }));
+
+    const banner = screen.getByRole('banner');
+    expect(within(banner).getByText('Instance removed')).toBeInTheDocument();
+    expect(within(banner).queryByText(runStatusMeta('awaiting_gate').label)).toBeNull();
+    expect(within(banner).queryByText(runStatusMeta('running').label)).toBeNull();
+    expect(screen.queryByRole('link', { name: INSTANCE })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel run' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Gates waiting' })).toBeNull();
+    expect(
+      screen.getByText("This run's instance was removed from the Hub, so it can no longer be changed from here."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(steps).getByRole('button', { name: /^approve/ }));
+    const inspector = screen.getByRole('region', { name: 'Step' });
+    expect(within(inspector).queryByRole('region', { name: 'Gate' })).toBeNull();
+    expect(within(inspector).queryByRole('region', { name: 'Assignment' })).toBeNull();
+    expect(within(inspector).queryByRole('region', { name: 'Retry' })).toBeNull();
+    expect(within(inspector).getByText(/can no longer be changed from here/)).toBeInTheDocument();
+
+    // Nothing will report on it again, so it is read once.
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(asked.filter((request) => request === `GET ${PATH}`)).toHaveLength(1);
   });
 });
 

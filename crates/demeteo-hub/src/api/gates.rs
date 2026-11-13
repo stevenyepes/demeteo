@@ -12,7 +12,7 @@
 
 use super::dispatch::{queue_as, strings_verdict, EnqueuedView};
 use super::fleet::granted;
-use super::runs::owned;
+use super::runs::owned_live;
 use super::{ApiContext, PostgresApi};
 use crate::attachments::postgres::PostgresAttachments;
 use crate::auth::assertion::shaped;
@@ -95,7 +95,7 @@ pub async fn gate_challenge(
     body: GateChallengeBody,
     now: u64,
 ) -> Result<GateChallengeView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     gates_verdict(&row)?;
     let feedback = held_feedback(body.feedback)?;
     strings_verdict(
@@ -170,7 +170,7 @@ pub async fn gate_decision(
     body: GateDecisionBody,
     now: u64,
 ) -> Result<EnqueuedView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     gates_verdict(&row)?;
     let taken = api.ceremonies.take(now, &body.ceremony_id);
     let held = held_gate(taken, user, &holder, row.id)?;
