@@ -50,7 +50,7 @@ use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, HubSecret, KeyringStatus, PairingAnswer, RefreshAnswer,
 };
-use crate::domain::hub_socket::{CatalogEntry, ProbeTrigger, RefreshEnd};
+use crate::domain::hub_socket::{CatalogEntry, NoAnswer, ProbeTrigger, RefreshEnd};
 use crate::domain::models::{Availability, ConfigOptionValue, GateDecision, ModelSource};
 use crate::error::AppError;
 use crate::ports::hub::{
@@ -183,7 +183,7 @@ pub struct RefreshCall {
 
 /// A `/token` refresh grant that answers each call with the next scripted
 /// outcome. A call with nothing left to answer it gets
-/// [`RefreshEnd::Unanswered`] — the outcome that stops a supervisor, so an
+/// [`RefreshEnd::Unanswered`] ([`NoAnswer::ConnectionLost`]) — the outcome that stops a supervisor, so an
 /// unscripted refresh cannot pass as a success — and is counted by
 /// [`Self::unscripted`], which a test asserts is `0`. It does not panic: the
 /// caller is usually a spawned task, whose panic the test would never see.
@@ -282,7 +282,7 @@ impl HubRefreshEndpoint for ScriptedRefreshEndpoint {
         let next = locked(&self.script).pop_front();
         next.unwrap_or_else(|| {
             self.unscripted.fetch_add(1, Ordering::SeqCst);
-            Err(RefreshEnd::Unanswered)
+            Err(RefreshEnd::Unanswered(NoAnswer::ConnectionLost))
         })
     }
 }

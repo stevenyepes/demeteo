@@ -167,7 +167,7 @@ pub enum RefreshEnd {
     /// The request was sent and no readable answer came back. A `5xx` other
     /// than `503` with no Hub error code is one: a gateway may have
     /// forwarded the request and lost the Hub's answer.
-    Unanswered,
+    Unanswered(NoAnswer),
     /// A `503` with no Hub error code, taken to be a proxy or a Hub that is
     /// down or redeploying turning the request away before anything read its
     /// token. That is an assumption about the deployment — that a proxy in
@@ -183,6 +183,25 @@ pub enum RefreshEnd {
     Refused(HubPairingError),
 }
 
+/// Which way a sent refresh went unanswered. It changes no verdict — every
+/// one is [`StopReason::RefreshUncertain`] — and exists so a stopped socket
+/// says in its log whether the Hub, a gateway or the network lost the
+/// answer. A category only, never a URL, body or transport message: those
+/// can carry the refresh token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoAnswer {
+    /// The request timed out before a whole answer was read.
+    Timeout,
+    /// The connection failed after the request may have been written.
+    ConnectionLost,
+    /// A status line arrived and its body could not be read.
+    BodyUnreadable,
+    /// A `2xx` whose body is not a rotated pair.
+    UnparseableSuccess,
+    /// A `5xx` other than `503` with no Hub error code.
+    Gateway(u16),
+}
+
 /// The [`RefreshEnd`] of a non-2xx answer to a refresh. A body carrying a
 /// Hub error code is read as [`token_refusal`] reads it, whatever the
 /// status; only a body without one is judged by its status.
@@ -190,7 +209,7 @@ pub fn refresh_refusal(status: u16, body: &[u8]) -> RefreshEnd {
     match (hub_error_code(body), status) {
         (Some(code), _) => RefreshEnd::Refused(token_error(&code)),
         (None, 503) => RefreshEnd::Unavailable,
-        (None, 500..=599) => RefreshEnd::Unanswered,
+        (None, 500..=599) => RefreshEnd::Unanswered(NoAnswer::Gateway(status)),
         (None, _) => RefreshEnd::Refused(token_refusal(body)),
     }
 }
@@ -207,7 +226,7 @@ pub fn refresh_refusal(status: u16, body: &[u8]) -> RefreshEnd {
 pub fn after_refresh(end: RefreshEnd) -> Reconnect {
     match end {
         RefreshEnd::Unsent | RefreshEnd::Unavailable => Reconnect::AfterBackoff,
-        RefreshEnd::Unanswered => Reconnect::Stop(StopReason::RefreshUncertain),
+        RefreshEnd::Unanswered(_) => Reconnect::Stop(StopReason::RefreshUncertain),
         RefreshEnd::Refused(HubPairingError::ClockSkew) => Reconnect::Stop(StopReason::ClockSkew),
         RefreshEnd::Refused(HubPairingError::HubRefused { error }) => match error.as_str() {
             "invalid_grant" => Reconnect::Stop(StopReason::NeedsRepair),
