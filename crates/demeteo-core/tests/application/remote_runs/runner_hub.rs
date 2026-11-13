@@ -470,7 +470,11 @@ async fn a_disconnect_stores_the_runner_as_no_longer_paired() {
 
     let answer = rpc.disconnect(MACHINE).await.expect("disconnected");
 
-    assert_eq!(answer.state, HubPairingState::Unpaired);
+    assert_eq!(answer.status.state, HubPairingState::Unpaired);
+    assert_eq!(
+        answer.hub_notice, None,
+        "a bare status reads as a runner that told no Hub"
+    );
     assert_eq!(methods(&exec), ["hub_disconnect", "hub_status"]);
     let stored = MachineHubStateRepository::get(&db, MACHINE)
         .unwrap()

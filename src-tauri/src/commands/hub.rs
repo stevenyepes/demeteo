@@ -10,6 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::adapters::hub::HubPairing;
 use crate::application::hub_settings::save_hub_policy;
+use crate::domain::hub_pairing::unpair::HubDisconnected;
 use crate::domain::hub_pairing::{HubMachine, HubStatus, PAIR_TIMEOUT};
 use crate::domain::hub_request::log::MAX_LOG_PAGE;
 use crate::domain::hub_request::passkeys::HubTrustedPasskey;
@@ -68,7 +69,7 @@ pub fn machine_core(hub: &HubPairing) -> Result<HubMachine, String> {
     Ok(hub.machine())
 }
 
-pub async fn disconnect_core(hub: &HubPairing) -> Result<HubStatus, String> {
+pub async fn disconnect_core(hub: &HubPairing) -> Result<HubDisconnected, String> {
     hub.disconnect().await.map_err(|e| e.to_string())
 }
 
@@ -129,7 +130,7 @@ pub fn hub_machine(ctx: State<'_, AppContext>) -> Result<HubMachine, String> {
 }
 
 #[tauri::command]
-pub async fn hub_disconnect(ctx: State<'_, AppContext>) -> Result<HubStatus, String> {
+pub async fn hub_disconnect(ctx: State<'_, AppContext>) -> Result<HubDisconnected, String> {
     disconnect_core(pairing(&ctx)?).await
 }
 

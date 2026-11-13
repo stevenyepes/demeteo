@@ -12,6 +12,8 @@ interface RunGatesWaitingProps {
   /** Unix seconds, injected so the waiting time is testable. */
   now: number;
   onSelect: (stepId: string) => void;
+  /** No step can be changed or decided, so choosing one only shows its state. */
+  readOnly?: boolean;
 }
 
 /**
@@ -19,7 +21,7 @@ interface RunGatesWaitingProps {
  * node to open, so it is listed without a Review action: the decision needs
  * the step's inspector.
  */
-export function RunGatesWaiting({ detail, titles, now, onSelect }: RunGatesWaitingProps) {
+export function RunGatesWaiting({ detail, titles, now, onSelect, readOnly = false }: RunGatesWaitingProps) {
   const headingId = useId();
   const gates = detail.pendingGates;
   return (
@@ -28,7 +30,11 @@ export function RunGatesWaiting({ detail, titles, now, onSelect }: RunGatesWaiti
         {gates.length === 0 ? 'Inspector' : 'Waiting on you'}
       </h2>
       {gates.length === 0 ? (
-        <p>Choose a step to see its state, change who runs it, or decide its gate.</p>
+        <p>
+          {readOnly
+            ? 'Choose a step to see its state.'
+            : 'Choose a step to see its state, change who runs it, or decide its gate.'}
+        </p>
       ) : (
         <ul aria-label="Gates waiting" className="flex flex-col gap-2">
           {gates.map((gate) => {

@@ -2,6 +2,7 @@ use super::{InstanceId, StoreError, UserId};
 use crate::auth::challenge::base64url_encode;
 use sha2::{Digest, Sha256};
 use sqlx::PgExecutor;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// The key a pairing binds its instance and its tokens to.
@@ -27,16 +28,27 @@ impl NewDeviceKey {
     }
 }
 
+/// The instance a locked device key belongs to, and whether the key was
+/// revoked: by [`remove_instance`](super::instances::remove_instance), the
+/// only writer of `revoked_at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LockedKey {
+    pub instance: InstanceId,
+    pub revoked: bool,
+}
+
 /// The instance the tenant's device key `jkt` belongs to, with that key's row
 /// locked until the transaction ends.
 ///
 /// This row is the turnstile for everything that writes the key's tokens:
-/// [`pair_instance`](super::instances::pair_instance) and
-/// [`rotate_family`](super::tokens::rotate_family) both take it before they
-/// read a token row, and take no token row before it. Whichever of two such
-/// transactions waits here then reads what the other committed, so a pairing
-/// retires the tokens an earlier pairing or a rotation inserted, and a
-/// rotation is shown the successors of the token it was handed. Run together
+/// [`pair_instance`](super::instances::pair_instance),
+/// [`rotate_family`](super::tokens::rotate_family) and
+/// [`remove_instance`](super::instances::remove_instance) all take it before
+/// they read a token row, and take no token row before it. Whichever of two
+/// such transactions waits here then reads what the other committed, so a
+/// pairing retires the tokens an earlier pairing or a rotation inserted, a
+/// rotation is shown the successors of the token it was handed, and a
+/// removal retires the pair a rotation it waited on inserted. Run together
 /// instead, two of them could each leave a live family behind.
 ///
 /// It holds only once the row exists. Two first pairings of one key both
@@ -49,14 +61,79 @@ pub(super) async fn lock_instance_of_key(
     user: UserId,
     db: impl PgExecutor<'_>,
     jkt: &str,
-) -> Result<Option<InstanceId>, StoreError> {
-    Ok(sqlx::query_scalar::<_, InstanceId>(
-        "SELECT instance_id FROM device_keys WHERE user_id = $1 AND jkt = $2 FOR UPDATE",
+) -> Result<Option<LockedKey>, StoreError> {
+    let row = sqlx::query_as::<_, (InstanceId, bool)>(
+        "SELECT instance_id, revoked_at IS NOT NULL FROM device_keys \
+         WHERE user_id = $1 AND jkt = $2 FOR UPDATE",
     )
     .bind(user)
     .bind(jkt)
     .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(instance, revoked)| LockedKey { instance, revoked }))
+}
+
+/// The tenant's device keys of `instance`, each row locked as
+/// [`lock_instance_of_key`] locks one, in thumbprint order so that two
+/// removals of one instance take them in one order.
+pub(super) async fn lock_keys_of_instance(
+    user: UserId,
+    db: impl PgExecutor<'_>,
+    instance: InstanceId,
+) -> Result<Vec<String>, StoreError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT jkt FROM device_keys WHERE user_id = $1 AND instance_id = $2 \
+         ORDER BY jkt FOR UPDATE",
+    )
+    .bind(user)
+    .bind(instance)
+    .fetch_all(db)
     .await?)
+}
+
+/// Marks every device key of `instance` revoked at `at`. The caller holds
+/// their rows ([`lock_keys_of_instance`]).
+pub(super) async fn revoke_keys_of_instance(
+    user: UserId,
+    db: impl PgExecutor<'_>,
+    instance: InstanceId,
+    at: OffsetDateTime,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "UPDATE device_keys SET revoked_at = $3 \
+         WHERE user_id = $1 AND instance_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(at)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Moves a revoked device key to `instance`, a new one, and makes it live
+/// again: what pairing a key whose instance was removed does. A key has one
+/// row (`UNIQUE (user_id, jkt)`), so it cannot gain a second beside the
+/// removed instance's; that instance keeps its `removed_at` and its history,
+/// and no key. The caller holds the row.
+pub(super) async fn rebind_revoked_key(
+    user: UserId,
+    db: impl PgExecutor<'_>,
+    instance: InstanceId,
+    new: &NewDeviceKey,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "UPDATE device_keys \
+         SET instance_id = $3, public_jwk = $4::jsonb, revoked_at = NULL, created_at = now() \
+         WHERE user_id = $1 AND jkt = $2 AND revoked_at IS NOT NULL",
+    )
+    .bind(user)
+    .bind(&new.jkt)
+    .bind(instance)
+    .bind(&new.public_jwk)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// The instance the tenant's unrevoked device key `jkt` belongs to, read

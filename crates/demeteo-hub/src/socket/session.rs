@@ -15,8 +15,9 @@
 //!
 //! A session also ends for reasons no frame carries: its peer went quiet,
 //! the token it was admitted with expired, a later connection of the same
-//! instance took its place, or the Hub is stopping. Each is an [`Ended`], and
-//! [`close_code`] is the one place a cause is given the code its peer reads.
+//! instance took its place, the instance was removed, or the Hub is stopping.
+//! Each is an [`Ended`], and [`close_code`] is the one place a cause is given
+//! the code its peer reads.
 
 use super::connections::{Close, Closing, ConnectionId, Registered};
 use super::cursor;
@@ -49,6 +50,10 @@ const TOKEN_EXPIRED: u16 = 4001;
 /// do the same thing about it: an instance that reconnects on being displaced
 /// displaces its successor, which reconnects in its turn.
 const DISPLACED: u16 = 4002;
+/// The instance was removed from the Hub. Told apart from both above because
+/// neither remedy works: its token is retired, so a refresh fails, and a
+/// redial is refused. Only pairing again brings it back.
+const REMOVED: u16 = 4003;
 
 /// How often a session pings its peer, and how long it goes on hearing
 /// nothing before it takes the peer for gone.
@@ -169,6 +174,7 @@ fn close_code(ended: Ended) -> Option<u16> {
         Ended::PeerGone | Ended::Silent => None,
         Ended::TokenExpired => Some(TOKEN_EXPIRED),
         Ended::Asked(Closing::Displaced) => Some(DISPLACED),
+        Ended::Asked(Closing::Removed) => Some(REMOVED),
         Ended::Asked(Closing::ShuttingDown) => Some(GOING_AWAY),
         Ended::Refused(_) => Some(POLICY_VIOLATION),
         Ended::StoreFailed | Ended::Unencodable => Some(INTERNAL_ERROR),
@@ -767,7 +773,7 @@ mod tests {
     fn a_write_given_up_on_ends_the_session_for_what_it_was_waiting_beside() {
         assert_eq!(handed_over(Handover::Done), Ok(()));
         assert_eq!(handed_over(Handover::Failed), Err(Ended::PeerGone));
-        for closing in [Closing::Displaced, Closing::ShuttingDown] {
+        for closing in [Closing::Displaced, Closing::Removed, Closing::ShuttingDown] {
             assert_eq!(
                 handed_over(Handover::Asked(closing)),
                 Err(Ended::Asked(closing))
@@ -799,6 +805,7 @@ mod tests {
         assert_eq!(close_code(Ended::Asked(Closing::ShuttingDown)), Some(1001));
         assert_eq!(close_code(Ended::TokenExpired), Some(4001));
         assert_eq!(close_code(Ended::Asked(Closing::Displaced)), Some(4002));
+        assert_eq!(close_code(Ended::Asked(Closing::Removed)), Some(4003));
     }
 
     #[test]

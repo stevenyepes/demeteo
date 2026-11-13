@@ -392,6 +392,7 @@ describe('getInstance', () => {
           stepId: 's-implement',
           stepTitle: 'Implement',
           tickets: { completed: 1, failed: 0, running: 2 },
+          instanceRemoved: false,
         },
       ],
       harnesses: ['claude-code'],

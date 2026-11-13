@@ -43,11 +43,11 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment`, `retry_step` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep; and git tokens (§6.5): `POST /git-token`, admitted like the socket, minting a GitHub App installation token through a JWT signed in Transit; and Hub Projects and Workflows (§6.4): the tenant's own Projects under `/v1/projects`, the embedded starters at `GET /v1/workflows`, and a dispatch to a runner built from the two. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On an instance*, §8). **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10), and unpairing and revoking an instance |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; a runner's device-code pairing: `POST /device_authorization`, the four approval routes under `/v1/pairing/device` with the Hub verifying the passkey assertion, the device-code grant of `POST /token`, and each instance's `kind`; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment`, `retry_step` and, after a gate challenge, `gate_decision`; and attachments (§6.3): the upload under `/v1`, a dispatch that names them, the fetch-once at `GET /attachments/{attachment_id}` admitted like the socket, and the TTL sweep; and git tokens (§6.5): `POST /git-token`, admitted like the socket, minting a GitHub App installation token through a JWT signed in Transit; and Hub Projects and Workflows (§6.4): the tenant's own Projects under `/v1/projects`, the embedded starters at `GET /v1/workflows`, and a dispatch to a runner built from the two. It depends on `crates/demeteo-hub-protocol`. A paired desktop dials the socket, and the requests queued for it are delivered, verified and answered there, gate decisions included (§6.1 *On an instance*, §8). And removing an instance (§4 *Revocation*): `DELETE /v1/instances/{instance_id}` after a passkey challenge, and an instance's own `POST /unpair`, admitted like the socket; either revokes its device key, retires its tokens, expires its queued requests and closes its socket `4003`. **Not built:** a route that queues `passkey_endorsement` or `passkey_revocation` for an instance (§10) |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its seven kinds, a `start_feature`'s optional `runner` start (§6.1), snapshots (Features, harness kinds and each Project's `provider_kind` included, decision 70, and the harness catalog, decision 72), and the canonical encoder of §6.1 and §8. The Hub and `demeteo-core` both compile against it |
-| `hub-web/` (second Vite entry) | **built** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}`, both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`. Runs reads `GET /v1/runs` into Needs-you, Active and Finished bands with one run's preview beside the list; Run reads `GET /v1/instances/{instance_id}/runs/{feature_id}`, polling every 5 s while the run is running, and draws the pinned Workflow on the `src/components/canvas` strip with its steps, ticket progress, events and a git-token problem the runner reported (§6.5), decides a pending gate (approve, redirect or cancel, with feedback the passkey signs, after a passkey challenge, §8), re-points a step (`set_step_assignment`), retries the failed step of a failed run (`retry_step`, after a `set_step_assignment` the instance has accepted when the user changes the agent, model or effort), and cancels a running run (`cancel_feature`, behind an inline confirm and no passkey, as the route asks only `spend`); Dispatch picks a desktop or a runner. For a desktop it offers a Project and Workflow from that desktop's snapshot; for a runner, one of this Hub's own Projects and one of its embedded starters (§6.4), and a state that links to Projects when there are none. A GitLab Project is greyed out for a runner, with the reason in words. The default agent is one of the target's harnesses, a project default the target reports it lacks is refused until another agent is picked, and the model a select over what the target's catalog lists for the agent in effect, free text only where the target reports no list (§5 *Harness catalog*). It takes caps and attachments, uploads the attachments to the target and queues the `start_feature`, following the request to its outcome. Projects at `#/projects` lists, creates, edits and removes the Hub's own Projects: a repository picked from a connected Git host, the run-shape defaults a runner dispatch fills in, the settings a runner lays over what it detects, and per-step harness defaults. Git hosts connects and removes GitHub Apps (§6.5). `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` (second Vite entry) | **built** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), ApproveDevice at `#/device` and `#/device/<user_code>` looks a runner's code up and approves it with a passkey, and every route but sign-up and sign-in is behind the session. Fleet reads `GET /v1/fleet` (§6.4) and leads with a Needs-you lane of pending gates, Instance reads `GET /v1/instances/{instance_id}` and removes the instance after an inline confirm and a passkey challenge (§4 *Revocation*), both show whether an instance is a desktop or a runner, and AddInstance explains pairing from the desktop and `demeteo-runner hub pair`. Runs reads `GET /v1/runs` into Needs-you, Active and Finished bands with one run's preview beside the list; Run reads `GET /v1/instances/{instance_id}/runs/{feature_id}`, polling every 5 s while the run is running, and draws the pinned Workflow on the `src/components/canvas` strip with its steps, ticket progress, events and a git-token problem the runner reported (§6.5), decides a pending gate (approve, redirect or cancel, with feedback the passkey signs, after a passkey challenge, §8), re-points a step (`set_step_assignment`), retries the failed step of a failed run (`retry_step`, after a `set_step_assignment` the instance has accepted when the user changes the agent, model or effort), and cancels a running run (`cancel_feature`, behind an inline confirm and no passkey, as the route asks only `spend`); Dispatch picks a desktop or a runner. For a desktop it offers a Project and Workflow from that desktop's snapshot; for a runner, one of this Hub's own Projects and one of its embedded starters (§6.4), and a state that links to Projects when there are none. A GitLab Project is greyed out for a runner, with the reason in words. The default agent is one of the target's harnesses, a project default the target reports it lacks is refused until another agent is picked, and the model a select over what the target's catalog lists for the agent in effect, free text only where the target reports no list (§5 *Harness catalog*). It takes caps and attachments, uploads the attachments to the target and queues the `start_feature`, following the request to its outcome. Projects at `#/projects` lists, creates, edits and removes the Hub's own Projects: a repository picked from a connected Git host, the run-shape defaults a runner dispatch fills in, the settings a runner lays over what it detects, and per-step harness defaults. Git hosts connects and removes GitHub Apps (§6.5). `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
-| Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. Unpairing is local-only (§4 *Revocation*), and stops the socket first. **For a runner** (§4 *Pairing a runner by device code*), `demeteo-core` also has the device-code client (`HubPairing::begin_device_pairing`) and the sealed store (`SealedSecretStore`, migration `V68__hub_sealed_secrets.sql`), and composes both in `ExecutionMode::LocalOnly` when the caller hands it a store (`build_core_context_with_hub_store`). `demeteo-runner serve` holds that pairing and starts its socket; `demeteo-runner hub pair`, `status`, `policy`, `log` and `disconnect` call the `hub_*` methods of its control socket (`crates/demeteo-runner/src/rpc/hub.rs`), which a desktop's Settings › Machines calls over SSH too (the runner's Hub panel, below); and `demeteo-runner hub seal`, which both installers run, seals the store key and writes the unit drop-in that loads it |
+| Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The refresh token is in the keyring and the access token in process memory only; `HubPairing::refresh_access` rotates them, one `refresh_token` grant at a time. `hub_disconnect` stops the socket, asks the Hub to remove this instance through `POST /unpair` under the refresh lock, and forgets the pairing locally whatever the Hub answered, reporting whether it was told (§4 *Revocation*). **For a runner** (§4 *Pairing a runner by device code*), `demeteo-core` also has the device-code client (`HubPairing::begin_device_pairing`) and the sealed store (`SealedSecretStore`, migration `V68__hub_sealed_secrets.sql`), and composes both in `ExecutionMode::LocalOnly` when the caller hands it a store (`build_core_context_with_hub_store`). `demeteo-runner serve` holds that pairing and starts its socket; `demeteo-runner hub pair`, `status`, `policy`, `log` and `disconnect` call the `hub_*` methods of its control socket (`crates/demeteo-runner/src/rpc/hub.rs`), which a desktop's Settings › Machines calls over SSH too (the runner's Hub panel, below); and `demeteo-runner hub seal`, which both installers run, seals the store key and writes the unit drop-in that loads it |
 | Desktop side: socket client | **built**, under `ExecutionMode::Router` only (§9 *Code layout*) — it starts when the app starts paired, or when `hub_pair` succeeds, and stops on `hub_disconnect`. It sends `Hello`, then the allowlisted events of the desktop's own `run_events` above the Hub's cursor, refreshes the access token when it holds no live one, on a `4001` close and on an upgrade `401`, and reconnects with backoff unless a verdict stops it. Each request it receives goes to the request handler on a task of its own, and the handler takes one start at a time, across reconnects and re-pairs alike, while cancels and assignments do not wait behind one, and the handler's `RequestResult`, when there is one, is sent on the open connection — the next one, if the connection that carried the request has closed, but not after an app restart or a `hub_pair`, which drop it (§6.1 *On an instance*). Each row goes out under the Feature id its instance's `HubRunKeys` reports it under: a desktop reports its shadows of detached runs too, unless the runner the run went to last said it is paired to the same Hub origin, and a runner re-keys its run-id rows to the Feature id its snapshot lists (§5 *Events and the cursor*); a snapshot after the first `CursorAck`, after each Project or Workflow write, and after each harness probe it finishes (§5 *Snapshots*). The `hub-socket` feature no longer implies `keyring`, so a runner build can carry the socket; a runner binds its own request handler before its socket starts (§6.1 *On an instance*) |
 | Desktop side: Settings › Hub tab | **built** — `src/components/settings/HubTab.tsx`. Outside `ExecutionMode::Router` it shows only the local toggles, ceilings, passkeys and activity log. It pairs and disconnects; shows the fingerprint, this machine as the Hub sees it (`hub_machine`), and the socket's state, sync, Hello → first-ack latency and why it stopped (`hub_connection`); sets the toggles and ceilings of §7 through `hub_policy_set`; lists the trusted passkeys as pinned or endorsed (`hub_trusted_passkeys`); and shows the activity log (`hub_request_log`). It polls the connection and the log every 5 s while open. `spend` and `gates` still default to off, so every request that needs one is refused until the user turns it on |
 | Desktop side: a runner's Hub panel in Settings › Machines | **built** — `src/components/RunnerHubPanel.tsx`, mounted on each machine whose runner reports a version. Its `remote_hub_*` commands (`src-tauri/src/commands/remote_runner_hub.rs`, wrappers in `src/lib/runnerHub.ts`) each call one of the runner's `hub_*` methods over SSH through `application/remote_runs/runner_hub.rs`. It pairs by device code (the code, the Hub's verification URL and the runner's fingerprint, polling `hub_pair_state` every 2 s until it settles), shows the runner's status, connection and machine, sets its toggles and ceilings through `hub_policy_set`, disconnects it, and shows its activity log; a runner refusal, such as one with no sealed store, is shown in the runner's own words, and a runner predating `hub_status` or `hub_request_log` is named as too old rather than failing. A pairing change made here refreshes `machine_hub_state` at once (§5 *Events and the cursor*) |
@@ -416,20 +416,52 @@ recovery** from that: with a refusal that desktop would have no way back.
 
 ### Revocation
 
-Two things retire a pairing's tokens today: reuse detection, and pairing the same
-device key again. Both retire the access tokens with the refresh tokens.
+Three things retire a pairing's tokens: reuse detection, pairing the same device
+key again, and removing the instance. Each retires the access tokens with the
+refresh tokens. Only removal also takes the instance out of the fleet
+([decision 77](DECISIONS.md#1-the-locked-decisions)).
 
-**Unpairing from the desktop is built and local-only.** `hub_disconnect` deletes
-the device key and the refresh token from the keyring and the pins from SQLite,
-and tells the Hub nothing, because the Hub has no route to tell. The Hub keeps
-listing the instance, and the refresh token stays valid there, held by nobody,
-until it expires 30 days after it was issued. The next pairing proves a fresh
-device key, so it is a first pairing, not a replacement.
+**Removing an instance** is one transaction, whichever side asks for it
+(`remove_instance` in `crates/demeteo-hub/src/store/instances.rs`): it stamps
+`instances.removed_at` (migration `0015_instance_removal.sql`), revokes every
+device key of the instance, retires their live tokens, and expires the requests
+still queued for it. The socket the replica holds for it is then closed `4003`
+(§5 *Close codes*), and the instance stops on that close rather than redialling.
+A socket held by another replica is not told; it ends at its access token's
+expiry, since the refresh that would follow is refused. Two routes ask for it:
 
-A revocation that reaches the Hub — from the desktop's unpair or from the Hub
-itself — is designed and **not built** (§10): it retires the refresh token family,
-and takes effect by the next refresh at the latest, so at most one access-token
-lifetime (15 minutes) after the Hub-side revoke.
+- **From the Hub:** `DELETE /v1/instances/{instance_id}` (§6.4), after a passkey
+  challenge from `POST /v1/instances/{instance_id}/remove/challenge`. The Hub
+  verifies the assertion itself, against the tenant's own passkeys, as it does a
+  runner's device approval: removal is the Hub's own state, so no instance has to
+  check it. The challenge binds the instance id
+  (`instance_removal_challenge`, §8), so an assertion made to remove one instance
+  removes no other.
+- **From the instance:** `POST /unpair`, admitted by the instance's DPoP-bound
+  access token exactly as `POST /git-token` is (§6.5). It needs no passkey: the
+  device key that proves the request is the pairing being given up, and a holder
+  of it could do no more harm by unpairing than by never connecting again.
+  `hub_disconnect` on a desktop, and `demeteo-runner hub disconnect` on a runner,
+  call it before they delete anything, under the refresh lock so that a refresh
+  it needs is the stored token's only writer, and within 10 seconds. The local
+  delete happens whatever the Hub answers, and the answer says whether the Hub
+  was told (`HubUnpairNotice` in `domain/hub_pairing/unpair.rs`): a Hub that was
+  not told still lists the instance, and the user removes it there.
+
+**A removed instance's runs stay.** The run mirror is kept: `GET /v1/runs` lists
+the runs with `instance_removed: true`, and the run read still answers, so a
+removed machine's history reads as finished work rather than a dead link. The
+fleet, the instance read, and every route that would queue a request to it answer
+`404`, as for an instance that never existed.
+
+**A revoked key is never admitted again**, and pairing it again makes a new
+instance. Admission and `Hello` skip a revoked key and a removed instance, and a
+refresh of a retired token is refused. A pairing grant that proves a revoked key
+moves that key to a fresh instance id, unrevoked, and leaves the removed instance
+removed. Refusing it instead would strand an instance removed while it was
+offline: it still holds the key, and its user's only way back would be to find
+and delete it by hand. The removal was the tenant's decision about that instance,
+and a new pairing is a new consent, approved with a passkey like any other.
 
 ### Pairing a runner by device code
 
@@ -673,6 +705,7 @@ about it:
 | `1011` | the Hub could not do what a frame it accepted asked — a store call failed. An event it was storing was not acked. A frame the store can never take is not this: `frame::parse` refuses it, and it closes `1008` | reconnects and resumes from its last ack; sending the same thing may succeed |
 | `4001` | the access token the socket was admitted with has expired | **refreshes and reconnects** |
 | `4002` | displaced by a newer connection of the same instance | **does not reconnect in a loop**: it would displace its successor, which would reconnect in its turn |
+| `4003` | the instance was removed (§4 *Revocation*): its device key is revoked and its tokens retired | **stops**, and stays stopped until it pairs again: every redial and refresh would be refused |
 
 The session ends at the expiry of the token it was *admitted* with — one
 reconnect per access-token lifetime — and the instance is marked absent before
@@ -1476,7 +1509,7 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 |---|---|---|
 | `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs`, `needs_you`, `harnesses` and `project_count` |
 | `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url, provider_kind}`, its `workflows` (graph-only, below), its `run_shape`, its `harnesses`, its `harness_catalog` and its live runs |
-| `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
+| `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`, a removed instance's runs included with `instance_removed: true`; `status` is `running`, `completed`, `failed` or `cancelled` |
 | `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, title, project, the pinned `workflow` graph, steps (a failed one with its latest `failure`), ticket progress, pending gates and events in offset order, each with its `failure` or `null` (§5 *Failure reasons*) |
 | `POST /v1/instances/{instance_id}/attachments` | `spend` | `201 {attachment_id, size, sha256, expires_at}`, an attachment staged (§6.3); the body is the file's raw bytes |
 | `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued, binding the attachments its `attachment_ids` name; to a runner, carrying the start its Hub Project and starter resolve to (below) |
@@ -1486,6 +1519,8 @@ the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
 | `POST /v1/instances/{instance_id}/gates/challenge` | `gates` | `200`, a held challenge and the `navigator.credentials.get` options over it |
 | `POST /v1/instances/{instance_id}/gates/decision` | `gates` | `202 {request_id, expires_at}`, a `gate_decision` queued |
 | `GET /v1/instances/{instance_id}/requests/{request_id}` | none beyond owning the instance | `200`, the request's kind, derived status, `deliveries`, `expires_at` and `answered_at` |
+| `POST /v1/instances/{instance_id}/remove/challenge` | none beyond owning the instance | `200 {ceremony_id, public_key}`, a held challenge binding the instance and the `navigator.credentials.get` options over it |
+| `DELETE /v1/instances/{instance_id}` | none beyond owning the instance | `204`, the instance removed after the Hub verifies the passkey assertion (§4 *Revocation*); the body is `{ceremony_id, assertion}` |
 | `GET /v1/projects` | none | `200 {projects}`, the tenant's Hub Projects ordered by name, each with a derived `remote_url` and `runner_ready` (below) |
 | `POST /v1/projects` | none | `201`, the Hub Project created |
 | `POST /v1/projects/{id}` | none | `200`, the Hub Project replaced whole by the body |
@@ -1633,7 +1668,7 @@ body is judged, so it queues nothing and holds no challenge.
 
 | Status | `error` | When |
 |---|---|---|
-| 404 | `not_found` | the instance, run, request, attachment or Hub Project is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too |
+| 404 | `not_found` | the instance, run, request, attachment or Hub Project is not the tenant's, or its id does not parse; an attachment of another of the tenant's instances is not found too; a removed instance, except to the run and request reads |
 | 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it |
 | 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter, an `attachment_ids` that repeats an id or names more than `MAX_ATTACHMENTS_PER_DISPATCH`, a dispatch body carrying `source_instance_id` (a field the Hub no longer takes), and a Hub Project the rules above refuse |
 | 409 | `unknown_project` | a runner dispatch whose `project_id` names no Hub Project of the tenant, a `project_id` that is not a UUID included; nothing is signed, queued or bound |
@@ -1644,7 +1679,8 @@ body is judged, so it queues nothing and holds no challenge.
 | 409 | `attachment_unavailable` | a dispatch naming an attachment of the tenant's instance that is already bound to a request or has expired; nothing is queued and no attachment is bound |
 | 409 | `challenge_mismatch` | a decision whose `request_id` is not the one its challenge minted |
 | 400 | `assertion_malformed` | an assertion that fails the structural check below |
-| 400 | `ceremony_expired` | a decision naming a challenge that is not held — never issued, already spent, evicted, held for another session or user, or whose request has expired |
+| 400 | `ceremony_expired` | a decision naming a challenge that is not held — never issued, already spent, evicted, held for another session or user, or whose request has expired; a removal naming one so held, or one held for another instance |
+| 403 | `assertion_invalid` | a removal whose assertion is not by one of the tenant's passkeys or does not verify over the held challenge; the challenge is spent |
 | 503 | `key_service_unavailable`, `too_many_ceremonies` | the envelope could not be signed, or an attachment's data key could not be minted or unwrapped; the Hub holds as many challenges as it will |
 | 500 | `internal` | a store failure |
 
@@ -2441,14 +2477,10 @@ the pinned set (§8), and the Settings › Hub tab (§2). Three things are not:
     (§11 item 20). No Hub route queues either for an instance, and the Hub's
     own records bind `"*"` (§11 item 9). Until one does, only tests reach the
     revocation path.
-- **Unpairing and revoking an instance on the Hub.** No route does either, and
-  nothing writes `device_keys.revoked_at`. The desktop's disconnect is local
-  (§4 *Revocation*). Until a route exists a pairing ends by reuse detection, by
-  its refresh token expiring, or by being replaced (§4).
 The session API (§6.4) queues requests, and a paired desktop or runner
 answers them, a desktop fetching a `start_feature`'s attachments (§6.3) before
-it answers. Three routes take an access
-token, the socket (§5), the attachment fetch (§6.3) and the git-token fetch (§6.5), and all three are admitted
+it answers. Four routes take an access
+token, the socket (§5), the attachment fetch (§6.3), the git-token fetch (§6.5) and `POST /unpair` (§4 *Revocation*), and all four are admitted
 by [`pairing/access.rs`](../crates/demeteo-hub/src/pairing/access.rs) through
 `access_verdict` in [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs).
 
@@ -2877,6 +2909,7 @@ is decided; each is what the desktop does today.
 | Stop reason | What ends there |
 |---|---|
 | `Displaced` | a `4002` close: redialling would displace the connection that displaced this one |
+| `Removed` | a `4003` close: the instance was removed on the Hub, and only pairing again rejoins |
 | `NeedsRepair` | a refresh refused with `invalid_grant` |
 | `RefreshUncertain` | a refresh sent with no answer read, and its one replay ([decision 76](DECISIONS.md#76--lost-answer-grace-on-hub-refresh-detail)) unanswered too, or out of time: the Hub may have rotated the token, and presenting it past the grace would revoke the family. Each lost answer is logged with its cause (`NoAnswer` in `verdict.rs`) |
 | `ClockSkew` | a refresh whose proof the Hub refused for its time |

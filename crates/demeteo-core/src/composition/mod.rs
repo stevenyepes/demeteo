@@ -636,6 +636,7 @@ fn hub_pairing(
     };
     let pairing = adapters::hub::HubPairing::new(pins, store.secrets, token.clone(), policy)
         .with_refresh_endpoint(token.clone())
+        .with_unpair_endpoint(token.clone())
         .with_device_endpoint(token)
         .with_app_version(app_version)
         .with_instance_fallback(store.instance_fallback);

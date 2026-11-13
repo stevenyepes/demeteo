@@ -78,9 +78,21 @@ export function getJson<T>(path: string, guard: Guard<T>): Promise<T> {
 }
 
 export function postJson<T>(path: string, body: unknown, guard: Guard<T>): Promise<T> {
+  return request(path, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) }, guard);
+}
+
+/** A `DELETE` that carries a JSON body, as the Hub's passkey-signed removals do. */
+export function deleteJson<T>(path: string, body: unknown, guard: Guard<T>): Promise<T> {
+  return request(path, { method: 'DELETE', headers: jsonHeaders(), body: JSON.stringify(body) }, guard);
+}
+
+/** A `204` answer, which `request` reads as `null`. */
+export const isNoContent: Guard<null> = (value): value is null => value === null;
+
+function jsonHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (csrfToken !== null) headers['X-CSRF-Token'] = csrfToken;
-  return request(path, { method: 'POST', headers, body: JSON.stringify(body) }, guard);
+  return headers;
 }
 
 /**

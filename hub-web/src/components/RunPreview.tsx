@@ -12,6 +12,7 @@ import { stepTitles, ticketRows } from '../lib/runView';
 import { useGateDecisions } from '../lib/useGateDecisions';
 import { isNotFound, isScopeNotGranted, type StatusMap, useRunDetail } from '../lib/useRunDetail';
 import { CeremonyError } from './CeremonyError';
+import { InstanceRemovedChip, InstanceRemovedNote } from './InstanceRemoved';
 import { GatePanel } from './GatePanel';
 import { RequestStatus } from './RequestStatus';
 import { RunEvents } from './RunEvents';
@@ -44,12 +45,16 @@ export function RunPreview({ listed, scopes, now }: RunPreviewProps) {
             {title ?? <span className="font-mono">{run.featureId}</span>}
           </h2>
           <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs">
-            <a
-              href={routeHref({ name: 'instance', instanceId: run.instanceId })}
-              className="text-accent-ink transition-colors hover:text-white break-all"
-            >
-              {listed.instanceLabel}
-            </a>
+            {run.instanceRemoved ? (
+              <span className="break-all">{listed.instanceLabel}</span>
+            ) : (
+              <a
+                href={routeHref({ name: 'instance', instanceId: run.instanceId })}
+                className="text-accent-ink transition-colors hover:text-white break-all"
+              >
+                {listed.instanceLabel}
+              </a>
+            )}
             {run.projectName !== null && <span className="break-all">{run.projectName}</span>}
             {load.state === 'loaded' && load.detail.workflow !== null && (
               <span className="break-all">{load.detail.workflow.name}</span>
@@ -74,9 +79,11 @@ function PreviewChips({ listed, now }: { listed: ListedRun; now: number }) {
   const { run, gate } = listed;
   const status = gate !== null ? 'awaiting_gate' : run.status;
   const stepTitle = gate !== null ? (gate.stepTitle ?? run.stepTitle) : run.stepTitle;
+  const removed = run.instanceRemoved;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Chip status={status}>{runStatusMeta(status).label}</Chip>
+      {!(removed && status === 'running') && <Chip status={status}>{runStatusMeta(status).label}</Chip>}
+      {removed && <InstanceRemovedChip />}
       {stepTitle !== null && <Chip status="pending">{stepTitle}</Chip>}
       {gate !== null && <span className="font-mono text-xs">waiting {elapsedText(gate.since, now)}</span>}
     </div>
@@ -109,7 +116,8 @@ function PreviewBody({ listed, detail, statusByNode, scopes, now }: PreviewBodyP
   const { gateDecisions, onGateDecided, onGateSettled } = useGateDecisions();
   const titles = stepTitles(detail);
   const tickets = ticketRows(detail.events);
-  const gate = detail.pendingGates.find((pending) => pending.stepId !== null);
+  const removed = run.instanceRemoved || detail.instanceRemoved;
+  const gate = removed ? undefined : detail.pendingGates.find((pending) => pending.stepId !== null);
   const gateStepId = gate?.stepId ?? '';
   // Once the instance acts on a decision the mirror drops its gate, so the
   // latest decision stays shown with no gate left to show it under.
@@ -168,6 +176,7 @@ function PreviewBody({ listed, detail, statusByNode, scopes, now }: PreviewBodyP
           The diff and agent transcript stay on {listed.instanceLabel}. The Hub sees step and ticket events only.
         </span>
       </p>
+      {removed && <InstanceRemovedNote />}
       {gate !== undefined && gate.stepId !== null && (
         <div>
           <p className="text-slate-200">

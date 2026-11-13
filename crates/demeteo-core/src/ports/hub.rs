@@ -1,7 +1,8 @@
 //! What pairing with the Demeteo Hub, and the requests it relays, need from
 //! the outside world: the OS keyring (or a runner's sealed store), SQLite,
-//! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`
-//! and `/git-token`, a browser, and the harnesses installed on this machine.
+//! the Hub's `/token`, `/device_authorization`, `/socket`, `/attachments`,
+//! `/git-token` and `/unpair`, a browser, and the harnesses installed on this
+//! machine.
 //!
 //! The split between the first two is the point. [`HubPinRepository`] holds
 //! only the public [`HubPins`]; the device private key and the refresh token
@@ -11,6 +12,7 @@ use async_trait::async_trait;
 use demeteo_hub_protocol::{AttachmentRef, RequestResult, Snapshot};
 
 use crate::domain::hub_pairing::device::{DeviceAuthorization, DeviceGrantEnd};
+use crate::domain::hub_pairing::unpair::UnpairFailure;
 use crate::domain::hub_pairing::{
     HubPairingError, HubPins, KeyringStatus, PairingAnswer, RefreshAnswer, SecretString,
 };
@@ -197,6 +199,22 @@ pub trait HubRefreshEndpoint: Send + Sync {
         form_body: String,
         dpop: String,
     ) -> Result<RefreshAnswer, RefreshEnd>;
+}
+
+/// The Hub's `POST /unpair`: this instance asking the Hub to remove it
+/// (docs/HUB.md §4 *Revocation*). A trait of its own, so a double of the
+/// other endpoints is not obliged to answer it.
+#[async_trait]
+pub trait HubUnpairEndpoint: Send + Sync {
+    /// POST with `Authorization: DPoP <access>`, exactly one `DPoP` header
+    /// and no body, under a short timeout: a disconnect waits on it. Never
+    /// retried here.
+    async fn unpair(
+        &self,
+        url: &str,
+        access: &SecretString,
+        dpop: String,
+    ) -> Result<(), UnpairFailure>;
 }
 
 /// The device authorization grant: `POST /device_authorization` and the

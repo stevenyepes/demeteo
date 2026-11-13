@@ -2587,6 +2587,21 @@ async fn a_socket_closed_4002_stops_displaced_and_never_redials() {
     assert_eq!(supervised.waits(), Vec::<Duration>::new());
 }
 
+/// A removed instance never redials or refreshes: its key is revoked on the
+/// Hub, so either would only be refused.
+#[tokio::test]
+async fn a_socket_closed_4003_stops_removed_and_never_redials() {
+    let supervised = Supervised::new();
+    supervised.rotation();
+    supervised.closing_with(4003);
+
+    assert_eq!(supervised.run().await, StopReason::Removed);
+
+    assert_eq!(supervised.dialer.upgrades().len(), 1);
+    assert_eq!(supervised.endpoint.calls().len(), 1);
+    assert_eq!(supervised.waits(), Vec::<Duration>::new());
+}
+
 /// AC4: an expired access token is refreshed once and the redial, with no
 /// backoff, presents the token that refresh issued. The first token's local
 /// expiry is within the margin when the `4001` comes, as at a real expiry.

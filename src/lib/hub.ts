@@ -46,6 +46,7 @@ export type HubSyncState = "in_sync" | "catching_up" | "not_reporting" | "offlin
 /** Mirrors the Rust `StopReason` (`domain/hub_socket/verdict.rs`). */
 export type HubStopReason =
   | "displaced"
+  | "removed"
   | "protocol_violation"
   | "unauthorized"
   | "refused"
@@ -101,9 +102,23 @@ export async function hubTrustedPasskeys(): Promise<HubTrustedPasskey[]> {
   return invoke<HubTrustedPasskey[]>("hub_trusted_passkeys");
 }
 
-/** Forgets the pairing locally and is idempotent; the Hub is not contacted. */
-export async function hubDisconnect(): Promise<HubStatus> {
-  return invoke<HubStatus>("hub_disconnect");
+/** Mirrors the Rust `HubUnpairNotice` (`domain/hub_pairing/unpair.rs`). */
+export type HubUnpairNotice =
+  | { outcome: "removed" }
+  | { outcome: "not_paired" }
+  | { outcome: "not_told"; reason: string };
+
+/** Mirrors the Rust `HubDisconnected`: the status, flattened, beside what the
+ *  Hub was told. A runner older than `POST /unpair` sends no `hub_notice`,
+ *  and told the Hub nothing. */
+export interface HubDisconnected extends HubStatus {
+  hub_notice?: HubUnpairNotice | null;
+}
+
+/** Asks the Hub to remove this instance, then forgets the pairing locally
+ *  whatever the Hub answered; idempotent. */
+export async function hubDisconnect(): Promise<HubDisconnected> {
+  return invoke<HubDisconnected>("hub_disconnect");
 }
 
 /** Mirrors the Rust `HubLocalPolicy` (`domain/hub_request/mod.rs`). Set only

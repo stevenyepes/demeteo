@@ -8,6 +8,7 @@ mod consent;
 mod device;
 mod device_consent;
 mod token;
+mod unpair;
 
 pub use authorize::authorize;
 pub use consent::{
@@ -27,3 +28,4 @@ pub use token::{
     redeemed, refreshed, token, CodeRedemption, DevicePoll, Grant, Rotated, Rotation, TokenRefresh,
     TOKEN_PATH,
 };
+pub use unpair::{unpair, UNPAIR_PATH};

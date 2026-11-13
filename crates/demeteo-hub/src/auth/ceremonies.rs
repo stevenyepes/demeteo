@@ -96,6 +96,16 @@ pub enum Ceremony {
         scopes: Vec<Scope>,
         challenge: [u8; 32],
     },
+    /// A removal of one instance from the Hub, between the challenge and the
+    /// assertion over it. `instance` is what `challenge` was computed over,
+    /// so the instance removed is the one the passkey signed for whatever
+    /// the finish's path says.
+    RemoveInstance {
+        user: UserId,
+        holder: Vec<u8>,
+        instance: InstanceId,
+        challenge: [u8; 32],
+    },
     /// A GitHub App being created from the Hub's manifest, between the page
     /// that sent the browser to GitHub and GitHub's redirect back. The id is
     /// the manifest's `state`, and that redirect carries no session cookie
@@ -132,6 +142,7 @@ impl Ceremony {
             | Ceremony::Revoke { holder, .. }
             | Ceremony::Gate { holder, .. }
             | Ceremony::Device { holder, .. }
+            | Ceremony::RemoveInstance { holder, .. }
             | Ceremony::GithubManifest { holder, .. } => Budget::Holder(holder),
         }
     }
@@ -146,7 +157,8 @@ impl Ceremony {
             | Ceremony::Endorse { .. }
             | Ceremony::Revoke { .. }
             | Ceremony::Gate { .. }
-            | Ceremony::Device { .. } => CHALLENGE_TTL_SECS,
+            | Ceremony::Device { .. }
+            | Ceremony::RemoveInstance { .. } => CHALLENGE_TTL_SECS,
         }
     }
 }
@@ -407,6 +419,7 @@ mod tests {
             | Ceremony::SignIn { .. }
             | Ceremony::Add { .. }
             | Ceremony::Device { .. }
+            | Ceremony::RemoveInstance { .. }
             | Ceremony::GithubManifest { .. } => None,
         }
     }
@@ -427,6 +440,7 @@ mod tests {
             | Ceremony::Add { .. }
             | Ceremony::Gate { .. }
             | Ceremony::Device { .. }
+            | Ceremony::RemoveInstance { .. }
             | Ceremony::GithubManifest { .. } => None,
         }
     }

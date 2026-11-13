@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::domain::hub_pairing::device::DeviceTicket;
 use crate::domain::hub_pairing::runner_view::{HubStatusView, PairStateView};
-use crate::domain::hub_pairing::HubStatus;
+use crate::domain::hub_pairing::unpair::HubDisconnected;
 use crate::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use crate::state::AppContext;
 use demeteo_core::application::remote_runs::RunnerHubRpc;
@@ -52,7 +52,7 @@ pub async fn remote_hub_status(
 pub async fn remote_hub_disconnect(
     ctx: State<'_, AppContext>,
     machine_id: String,
-) -> Result<HubStatus, String> {
+) -> Result<HubDisconnected, String> {
     RunnerHubRpc::of(&ctx).disconnect(&machine_id).await
 }
 

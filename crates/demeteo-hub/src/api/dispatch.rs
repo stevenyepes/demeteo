@@ -28,7 +28,7 @@
 use super::attachments::lowercase_hex;
 use super::fleet::granted;
 use super::runner_start::{run_shape_defaults, runner_start};
-use super::runs::owned;
+use super::runs::owned_live;
 use super::{ApiContext, PostgresApi};
 use crate::attachments::envelope::{self, dispatch_verdict, requested_ids, EnvelopeError};
 use crate::attachments::postgres::PostgresAttachments;
@@ -115,7 +115,7 @@ pub async fn dispatch(
     body: DispatchBody,
     now: u64,
 ) -> Result<EnqueuedView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     let malformed = body_verdict(&body);
     let mut start = start_feature(body);
     let unsigned = RequestPayload::StartFeature(start.clone());
@@ -208,7 +208,7 @@ pub async fn cancel(
     feature_id: &str,
     now: u64,
 ) -> Result<EnqueuedView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     let payload = RequestPayload::CancelFeature(CancelFeature {
         feature_id: feature_id.to_owned(),
     });
@@ -228,7 +228,7 @@ pub async fn set_step_assignment(
     body: AssignmentBody,
     now: u64,
 ) -> Result<EnqueuedView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     let malformed = strings_verdict(
         [feature_id, step_id].into_iter(),
         body.agent_kind
@@ -260,7 +260,7 @@ pub async fn retry_step(
     step_id: &str,
     now: u64,
 ) -> Result<EnqueuedView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     let payload = RequestPayload::RetryStep(RetryStep {
         feature_id: feature_id.to_owned(),
         step_id: step_id.to_owned(),

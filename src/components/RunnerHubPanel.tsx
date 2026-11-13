@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, ChevronRight, Cloud, RefreshCw, RotateCw } from 'lucide-react';
-import type { HubLocalPolicy, HubRequestLogEntry } from '../lib/hub';
+import type { HubLocalPolicy, HubRequestLogEntry, HubUnpairNotice } from '../lib/hub';
 import {
   remoteHubDisconnect,
   remoteHubPairBegin,
@@ -18,6 +18,7 @@ import { reportError } from '../lib/errorBus';
 import { HubActivityLog } from './settings/HubActivityLog';
 import { HubCeilingsCard, type CeilingField } from './settings/HubCeilingsCard';
 import { HubDisconnectCard } from './settings/HubDisconnectCard';
+import { HubNotToldNote } from './settings/HubNotToldNote';
 import { HubScopesCard, type ScopeField } from './settings/HubScopesCard';
 import { RunnerHubPairingCard } from './RunnerHubPairingCard';
 import { Button } from './ui/Button';
@@ -79,6 +80,8 @@ function RunnerHubBody({ machineId }: RunnerHubPanelProps) {
   const [pairError, setPairError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  /** Wrapped, because a runner older than `POST /unpair` sends no notice at all. */
+  const [disconnected, setDisconnected] = useState<{ notice?: HubUnpairNotice | null } | null>(null);
   const [policy, setPolicy] = useState<HubLocalPolicy | null>(null);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const savingRef = useRef(false);
@@ -134,6 +137,7 @@ function RunnerHubBody({ machineId }: RunnerHubPanelProps) {
   const handlePair = async (hubUrl: string) => {
     setBusy(true);
     setPairError(null);
+    setDisconnected(null);
     try {
       const ticket = await remoteHubPairBegin(machineId, hubUrl);
       setPairState({ state: 'pending', ticket });
@@ -158,7 +162,8 @@ function RunnerHubBody({ machineId }: RunnerHubPanelProps) {
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      await remoteHubDisconnect(machineId);
+      const { hub_notice } = await remoteHubDisconnect(machineId);
+      setDisconnected({ notice: hub_notice });
       await load();
     } catch (e) {
       reportError(e);
@@ -224,6 +229,7 @@ function RunnerHubBody({ machineId }: RunnerHubPanelProps) {
 
   return (
     <div className="space-y-3">
+      {disconnected && <HubNotToldNote notice={disconnected.notice} />}
       <RunnerHubPairingCard
         hub={view.hub}
         pairState={pairState}

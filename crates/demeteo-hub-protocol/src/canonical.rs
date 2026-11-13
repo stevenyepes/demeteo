@@ -256,6 +256,25 @@ pub fn device_approval_challenge(
     Ok(enc.finish())
 }
 
+/// The pre-image of the challenge a passkey signs to remove an instance from
+/// the Hub. Only the Hub builds and checks it, since the instance it names is
+/// the party being removed and is not asked; it is here so that its label is
+/// one of the set no two purposes share.
+///
+/// Layout: `str("demeteo-hub/v1/remove-instance")`, `u32(PROTOCOL_VERSION)`,
+/// `str instance_id`, `str request_id`, `u64 expires_at`.
+pub fn instance_removal_challenge(
+    instance_id: &str,
+    request_id: &str,
+    expires_at: u64,
+) -> Result<Vec<u8>, EncodeError> {
+    let mut enc = Encoder::begin("demeteo-hub/v1/remove-instance", PROTOCOL_VERSION)?;
+    enc.put_str(instance_id)?;
+    enc.put_str(request_id)?;
+    enc.put_u64(expires_at);
+    Ok(enc.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,7 +550,8 @@ mod tests {
         let endorse = endorsement_challenge("s", "s", 7, "s", "s").unwrap();
         let revoke = revocation_challenge("s", "s", 7, "s").unwrap();
         let device = device_approval_challenge("s", &[Scope::Read], "s", 7).unwrap();
-        let labels = [&gate, &endorse, &revoke, &device].map(|b| label_of(b));
+        let remove = instance_removal_challenge("s", "s", 7).unwrap();
+        let labels = [&gate, &endorse, &revoke, &device, &remove].map(|b| label_of(b));
         assert_eq!(
             labels,
             [
@@ -539,6 +559,7 @@ mod tests {
                 Some(&b"demeteo-hub/v1/endorse"[..]),
                 Some(&b"demeteo-hub/v1/revoke"[..]),
                 Some(&b"demeteo-hub/v1/device"[..]),
+                Some(&b"demeteo-hub/v1/remove-instance"[..]),
             ]
         );
     }

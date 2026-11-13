@@ -58,6 +58,8 @@ pub struct RunDetailView {
     /// token on its newest try: the code `POST /git-token` answered
     /// (`github_app_not_installed`, …). `None` for every other run.
     pub git_token_problem: Option<String>,
+    /// As [`RunSummary::instance_removed`].
+    pub instance_removed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -131,13 +133,18 @@ pub async fn runs(
             .await
             .map_err(store_failed)?;
         let labels = RunLabels::of(snapshot_of(api, user, row.id).await?.as_ref());
+        let instance_removed = row.is_removed();
         runs.extend(
             by_feature(&mirror)
                 .iter()
                 .filter_map(|(feature_id, events)| {
                     RunSummary::of(row.id, feature_id, events, &labels)
                 })
-                .filter(|run| status.is_none_or(|status| run.status == status)),
+                .filter(|run| status.is_none_or(|status| run.status == status))
+                .map(|run| RunSummary {
+                    instance_removed,
+                    ..run
+                }),
         );
     }
     Ok(RunsView { runs })
@@ -217,6 +224,23 @@ pub(super) async fn owned(
         .ok_or(ApiError::NOT_FOUND)
 }
 
+/// [`owned`], and `404 not_found` as well once the instance was removed:
+/// what every read of the instance itself, and every route that holds a
+/// challenge for it or queues a request to it, asks. Only the runs reads and
+/// a request's status take [`owned`] alone, since a removed instance's
+/// history is still the tenant's to read.
+pub(super) async fn owned_live(
+    api: &ApiContext<'_>,
+    user: UserId,
+    instance_id: &str,
+) -> Result<Instance, ApiError> {
+    let row = owned(api, user, instance_id).await?;
+    if row.is_removed() {
+        return Err(ApiError::NOT_FOUND);
+    }
+    Ok(row)
+}
+
 /// Spelled as the status is answered, so a filter is the value a client read.
 fn status_named(name: &str) -> Option<FeatureStatus> {
     let text: StrDeserializer<'_, ValueError> = name.into_deserializer();
@@ -274,6 +298,7 @@ fn detail(
             })
             .collect(),
         git_token_problem: None,
+        instance_removed: row.is_removed(),
     }
 }
 

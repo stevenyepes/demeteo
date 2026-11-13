@@ -53,6 +53,7 @@ struct Held {
     labels: NewInstanceLabels,
     /// Postgres's clock at the insert, which is the wall clock here too.
     created_at: OffsetDateTime,
+    removed_at: Option<OffsetDateTime>,
 }
 
 #[derive(Default)]
@@ -96,6 +97,7 @@ impl MemoryFleet {
             kind,
             labels: paired_labels(),
             created_at: OffsetDateTime::now_utc(),
+            removed_at: None,
         });
         instance
     }
@@ -381,6 +383,30 @@ impl ApiStore for MemoryFleet {
             .cloned())
     }
 
+    /// Marks the row removed and nothing else: the keys, tokens and queue a
+    /// removal also writes are Postgres's, and `tests/tenancy.rs` holds that
+    /// transaction to them.
+    async fn remove_instance(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        let mut fleet = self.fleet();
+        let held = fleet.held.iter_mut().find(|held| {
+            held.hub.user_id() == user
+                && held.hub.instance_id() == instance
+                && held.removed_at.is_none()
+        });
+        Ok(match held {
+            Some(held) => {
+                held.removed_at = Some(at(now));
+                true
+            }
+            None => false,
+        })
+    }
+
     async fn requests_of(
         &self,
         user: UserId,
@@ -493,6 +519,7 @@ fn instance_row(held: &Held) -> Instance {
             Ok(cursor) => cursor,
             Err(_) => panic!("memory fleet: a cursor no column holds"),
         },
+        removed_at: held.removed_at,
     }
 }
 

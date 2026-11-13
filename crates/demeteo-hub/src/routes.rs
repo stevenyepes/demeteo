@@ -220,6 +220,12 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
             git_token::fetch::GIT_TOKEN_PATH,
             post(git_token::fetch::post_git_token),
         )
+        // Beside the git-token route, for its reasons: an instance removing
+        // itself asks with its access token and a proof for this URL.
+        .route(
+            pairing::handlers::UNPAIR_PATH,
+            post(pairing::handlers::unpair),
+        )
         // Outside `v1`: GitHub's redirect back is a cross-site top-level
         // `GET`, so it carries no `SameSite=Strict` session cookie, and the
         // guard would let it through anyway. It is admitted by the
@@ -313,7 +319,14 @@ fn v1(state: AppState) -> Router {
         )
         .route("/v1/workflows", get(workflows::handlers::get_workflows))
         .route("/v1/fleet", get(api::fleet::get_fleet))
-        .route("/v1/instances/{instance_id}", get(api::fleet::get_instance))
+        .route(
+            "/v1/instances/{instance_id}",
+            get(api::fleet::get_instance).delete(api::removal::delete_instance),
+        )
+        .route(
+            "/v1/instances/{instance_id}/remove/challenge",
+            post(api::removal::post_removal_challenge),
+        )
         .route("/v1/runs", get(api::runs::get_runs))
         .route(
             "/v1/instances/{instance_id}/runs/{feature_id}",

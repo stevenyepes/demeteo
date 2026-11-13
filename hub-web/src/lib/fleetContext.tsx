@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { type FleetInstance, getFleet } from './fleet';
 
@@ -9,7 +9,9 @@ export type FleetRead = {
 
 const NOT_READ: FleetRead = { fleet: null, failure: null };
 
-const FleetContext = createContext<FleetRead | null>(null);
+type FleetHeld = FleetRead & { forgetInstance: (instanceId: string) => void };
+
+const FleetContext = createContext<FleetHeld | null>(null);
 
 interface FleetProviderProps {
   /** Changing it re-reads the fleet; the shell passes the shown view's key. */
@@ -46,10 +48,31 @@ export function FleetProvider({ readKey, children }: FleetProviderProps) {
     };
   }, [readKey]);
 
-  return <FleetContext.Provider value={read}>{children}</FleetContext.Provider>;
+  /**
+   * Drops an instance the Hub no longer has from the held answer at once. The
+   * re-read that the next view's key starts keeps this answer on screen until
+   * it lands, and until then the removed instance would still be listed.
+   */
+  const forgetInstance = useCallback((instanceId: string) => {
+    setRead((last) => ({
+      ...last,
+      fleet: last.fleet === null ? null : last.fleet.filter((instance) => instance.id !== instanceId),
+    }));
+  }, []);
+
+  const held = useMemo(() => ({ ...read, forgetInstance }), [read, forgetInstance]);
+
+  return <FleetContext.Provider value={held}>{children}</FleetContext.Provider>;
 }
 
 /** Outside a `FleetProvider` nothing has been read, which is what it returns. */
 export function useFleet(): FleetRead {
   return useContext(FleetContext) ?? NOT_READ;
 }
+
+/** Outside a `FleetProvider` there is nothing held to forget, so it does nothing. */
+export function useForgetInstance(): (instanceId: string) => void {
+  return useContext(FleetContext)?.forgetInstance ?? forgetNothing;
+}
+
+function forgetNothing(): void {}

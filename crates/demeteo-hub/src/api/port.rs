@@ -65,6 +65,16 @@ pub trait ApiStore: Send + Sync {
         id: HubProjectId,
     ) -> Result<Option<HubProjectRow>, StoreError>;
 
+    /// Removes the tenant's instance, as
+    /// [`remove_instance`](crate::store::instances::remove_instance) does:
+    /// `false` when it is not the tenant's or was already removed.
+    async fn remove_instance(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        now: u64,
+    ) -> Result<bool, StoreError>;
+
     /// The store a request for `instance` is queued through. Like
     /// [`PostgresStore::new`](crate::socket::postgres::PostgresStore::new) it
     /// checks nothing: a caller asks [`instance`](Self::instance) first, and
