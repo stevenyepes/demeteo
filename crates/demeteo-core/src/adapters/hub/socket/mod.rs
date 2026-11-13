@@ -283,7 +283,12 @@ impl Supervisor {
                     self.record(ConnectionState::Reconnecting, None);
                     match unless_stopped(stop, self.deps.tokens.refresh_access()).await? {
                         Ok(token) => return Ok(Some(token)),
-                        Err(end) => verdict = after_refresh(end),
+                        Err(end) => {
+                            // `RefreshEnd` carries categories and Hub error
+                            // codes only, never a token: see `HubPairingError`.
+                            tracing::warn!(?end, "a Hub token refresh failed");
+                            verdict = after_refresh(end);
+                        }
                     }
                 }
             }

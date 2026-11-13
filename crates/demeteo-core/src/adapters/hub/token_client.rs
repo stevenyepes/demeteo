@@ -22,7 +22,7 @@ use crate::domain::hub_pairing::device::{
     device_grant_refusal, DeviceAuthorization, DeviceGrantEnd,
 };
 use crate::domain::hub_pairing::{token_refusal, HubPairingError, PairingAnswer, RefreshAnswer};
-use crate::domain::hub_socket::{refresh_refusal, RefreshEnd};
+use crate::domain::hub_socket::{refresh_refusal, NoAnswer, RefreshEnd};
 use crate::ports::hub::{HubDeviceEndpoint, HubRefreshEndpoint, HubTokenEndpoint};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -101,8 +101,16 @@ fn refresh_failure(e: &reqwest::Error) -> RefreshEnd {
     if e.is_builder() || e.is_connect() {
         RefreshEnd::Unsent
     } else {
-        RefreshEnd::Unanswered
+        unanswered(e, NoAnswer::ConnectionLost)
     }
+}
+
+fn unanswered(e: &reqwest::Error, otherwise: NoAnswer) -> RefreshEnd {
+    RefreshEnd::Unanswered(if e.is_timeout() {
+        NoAnswer::Timeout
+    } else {
+        otherwise
+    })
 }
 
 #[async_trait]
@@ -119,13 +127,17 @@ impl HubRefreshEndpoint for ReqwestTokenEndpoint {
             .await
             .map_err(|e| refresh_failure(&e))?;
         let status = response.status();
-        let body = response.bytes().await.map_err(|_| RefreshEnd::Unanswered)?;
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| unanswered(&e, NoAnswer::BodyUnreadable))?;
         if !status.is_success() {
             return Err(refresh_refusal(status.as_u16(), &body));
         }
         // A `200` whose tokens cannot be read is as lost as no answer: the
         // Hub has rotated, and the old refresh token is spent.
-        serde_json::from_slice(&body).map_err(|_| RefreshEnd::Unanswered)
+        serde_json::from_slice(&body)
+            .map_err(|_| RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess))
     }
 }
 

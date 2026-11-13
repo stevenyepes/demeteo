@@ -50,8 +50,8 @@ pub use snapshot::{
     SNAPSHOT_DEBOUNCE_SECS,
 };
 pub use verdict::{
-    after, after_close, after_refresh, backoff, refresh_refusal, resets_backoff, Reconnect,
-    RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS, LIVENESS_DEADLINE_SECS,
+    after, after_close, after_refresh, backoff, refresh_refusal, resets_backoff, NoAnswer,
+    Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS, LIVENESS_DEADLINE_SECS,
     MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 

@@ -2854,8 +2854,10 @@ is decided; each is what the desktop does today.
   Feature its snapshot lists; nothing re-keys or deletes those mirror rows,
   and the Hub cannot act on them.
 - **A stop is shown, and does not unpair.** A verdict that stops the socket logs its
-  reason with `tracing::warn!`, and Settings › Hub shows it from
-  `hub_connection`'s `stop_reason`. `HubStatus` is unchanged, so a desktop
+  reason with `tracing::warn!`, as does every failed refresh before it, naming
+  its `RefreshEnd`. Both reach the desktop's log file and, on a runner, stderr
+  and so the unit's journal (`RUST_LOG` widens it past `warn`). Settings › Hub
+  shows the reason from `hub_connection`'s `stop_reason`. `HubStatus` is unchanged, so a desktop
   whose refresh family was revoked still reads as paired until the user pairs
   again. After `invalid_grant` the refresh token stays in the keyring. A stop
   holds until `hub_pair` or the next app start.
@@ -2864,7 +2866,7 @@ is decided; each is what the desktop does today.
 |---|---|
 | `Displaced` | a `4002` close: redialling would displace the connection that displaced this one |
 | `NeedsRepair` | a refresh refused with `invalid_grant` |
-| `RefreshUncertain` | a refresh sent with no answer read: the Hub may have rotated the token, and presenting the old one again would revoke the family |
+| `RefreshUncertain` | a refresh sent with no answer read: the Hub may have rotated the token, and presenting the old one again would revoke the family. The log names which way it went unanswered (`NoAnswer` in `verdict.rs`) |
 | `ClockSkew` | a refresh whose proof the Hub refused for its time |
 | `ProtocolViolation` | a `1008` close |
 | `Unauthorized` | an upgrade `401` to an access token refreshed for that very attempt |

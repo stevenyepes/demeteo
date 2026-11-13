@@ -185,7 +185,23 @@ fn enrich_path_from_login_shell() {
     }
 }
 
+/// `demeteo-core` reports through `tracing` alone — a Hub socket that stops
+/// says so only there — so a runner without a subscriber drops every one of
+/// those lines. stderr is what journald keeps for the systemd unit. `warn`
+/// unless `RUST_LOG` says otherwise.
+fn install_log_subscriber() {
+    use std::io::IsTerminal;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .try_init();
+}
+
 fn main() {
+    install_log_subscriber();
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         // M7.1: the laptop's "Enable remote runs" flow probes this to

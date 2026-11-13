@@ -54,8 +54,8 @@ use crate::domain::hub_socket::connection::{
 };
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, announced_scopes as narrowed_scopes, backoff, hello,
-    hub_event, refresh_refusal, resets_backoff, sends_events, snapshot, Reconnect, RefreshEnd,
-    SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES,
+    hub_event, refresh_refusal, resets_backoff, sends_events, snapshot, NoAnswer, Reconnect,
+    RefreshEnd, SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES,
     PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
@@ -3087,7 +3087,26 @@ fn a_failed_refresh_backs_off_only_when_nothing_can_have_rotated() {
     for (end, verdict) in [
         (RefreshEnd::Unsent, AfterBackoff),
         (RefreshEnd::Unavailable, AfterBackoff),
-        (RefreshEnd::Unanswered, Stop(StopReason::RefreshUncertain)),
+        (
+            RefreshEnd::Unanswered(NoAnswer::Timeout),
+            Stop(StopReason::RefreshUncertain),
+        ),
+        (
+            RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
+            Stop(StopReason::RefreshUncertain),
+        ),
+        (
+            RefreshEnd::Unanswered(NoAnswer::BodyUnreadable),
+            Stop(StopReason::RefreshUncertain),
+        ),
+        (
+            RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess),
+            Stop(StopReason::RefreshUncertain),
+        ),
+        (
+            RefreshEnd::Unanswered(NoAnswer::Gateway(502)),
+            Stop(StopReason::RefreshUncertain),
+        ),
         (hub("invalid_grant"), Stop(StopReason::NeedsRepair)),
         (hub("invalid_dpop_proof"), Stop(StopReason::Refused)),
         (hub("too_many_requests"), AfterBackoff),
@@ -3364,7 +3383,74 @@ async fn a_refresh_read_and_closed_without_an_answer_is_unanswered() {
     read.await
         .unwrap()
         .expect("the request reached the listener");
-    assert_eq!(end, Some(RefreshEnd::Unanswered));
+    assert_eq!(end, Some(RefreshEnd::Unanswered(NoAnswer::ConnectionLost)));
+}
+
+#[tokio::test]
+async fn a_refresh_whose_answer_breaks_off_in_its_body_is_unanswered_unreadable() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a loopback bind");
+    let url = format!("http://{}/token", listener.local_addr().unwrap());
+    let served = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 4096];
+        // The whole request is read first: closing on unread bytes resets
+        // the connection, which would lose the head as well as the body.
+        let whole = loop {
+            if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&request[..at]).to_ascii_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                break at + 4 + length;
+            }
+            let n = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err("the request ended inside its head".to_owned());
+            }
+            request.extend_from_slice(&chunk[..n]);
+        };
+        while request.len() < whole {
+            let n = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err("the request ended inside its body".to_owned());
+            }
+            request.extend_from_slice(&chunk[..n]);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                  content-length: 100\r\n\r\n{\"access_token\":",
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(())
+    });
+
+    let end = refresh_with(&url, REFRESH_TOKEN).await.err();
+
+    served
+        .await
+        .unwrap()
+        .expect("the truncated answer was sent");
+    assert_eq!(end, Some(RefreshEnd::Unanswered(NoAnswer::BodyUnreadable)));
+}
+
+#[test]
+fn a_bare_gateway_refusal_names_its_status() {
+    for status in [500, 502, 504, 599] {
+        assert_eq!(
+            refresh_refusal(status, HTML_BODY),
+            RefreshEnd::Unanswered(NoAnswer::Gateway(status)),
+            "{status}"
+        );
+    }
 }
 
 /// A refresh of `REFRESH_TOKEN` answered by [`token_stub_expecting`].
@@ -3414,7 +3500,7 @@ async fn a_refresh_refused_by_the_hub_is_refused_as_token_refusal_reads_it() {
     let html = std::str::from_utf8(HTML_BODY).expect("an ASCII body");
     for (status, end) in [
         (503, RefreshEnd::Unavailable),
-        (502, RefreshEnd::Unanswered),
+        (502, RefreshEnd::Unanswered(NoAnswer::Gateway(502))),
     ] {
         assert_eq!(refresh_answered(status, html).await.err(), Some(end));
     }
@@ -3425,7 +3511,10 @@ async fn a_refresh_answered_200_without_a_readable_pair_is_unanswered() {
     let end = refresh_answered(200, r#"{"access_token":"dha_only"}"#)
         .await
         .err();
-    assert_eq!(end, Some(RefreshEnd::Unanswered));
+    assert_eq!(
+        end,
+        Some(RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess))
+    );
 }
 
 #[tokio::test]
@@ -3443,7 +3532,10 @@ async fn the_scripted_refresh_endpoint_answers_only_its_script_and_records_every
 
     assert_eq!(first.into_tokens().refresh.expose(), "dhr_1");
     assert_eq!(second, Some(RefreshEnd::Unsent));
-    assert_eq!(third, Some(RefreshEnd::Unanswered));
+    assert_eq!(
+        third,
+        Some(RefreshEnd::Unanswered(NoAnswer::ConnectionLost))
+    );
     assert_eq!(endpoint.unscripted(), 1);
     let call = |n: u8| RefreshCall {
         token_url: format!("u{n}"),
@@ -3836,7 +3928,7 @@ async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_to
     for (tag, end, reason) in [
         (
             "unanswered",
-            RefreshEnd::Unanswered,
+            RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
             StopReason::RefreshUncertain,
         ),
         (
