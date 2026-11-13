@@ -39,8 +39,8 @@ use demeteo_hub::store::sessions::{
 };
 use demeteo_hub::store::snapshots::{read_snapshot, replace_snapshot};
 use demeteo_hub::store::tokens::{
-    find_token_by_hash, insert_token, rotate_family, FamilyWritten, NewToken, TokenHash, TokenKind,
-    TokenRecord,
+    find_token_by_hash, insert_token, mark_first_use, rotate_family, FamilyWritten, NewToken,
+    TokenHash, TokenKind, TokenRecord,
 };
 use demeteo_hub::store::{Db, InstanceId, StoreError, UserId};
 use demeteo_hub_protocol::{
@@ -205,6 +205,7 @@ async fn aged_rows(
             family_id,
             jkt: jkt.to_owned(),
             expires_at: OffsetDateTime::now_utc() + expires_in,
+            issued_for: None,
         };
         ids.push(insert_token(user, db, &new).await.unwrap().id);
         secrets.push(secret);
@@ -307,6 +308,13 @@ async fn token_rows_of(db: &Db, user: UserId) -> i64 {
 
 async fn is_live(db: &Db, token: &TokenSecret) -> bool {
     stored(db, token).await.retired_at.is_none()
+}
+
+/// Admits `token` as a route does: what makes the pair it belongs to one a
+/// lost-answer replay cannot replace.
+async fn use_token(db: &Db, user: UserId, token: &TokenSecret) {
+    let id = stored(db, token).await.id;
+    assert!(mark_first_use(user, db, id).await.unwrap());
 }
 
 #[tokio::test]
@@ -770,6 +778,7 @@ async fn a_token_found_by_hash_names_its_owner_and_its_kind() {
                 family_id,
                 jkt: "thumbprint".to_owned(),
                 expires_at: OffsetDateTime::now_utc() + Duration::hours(1),
+                issued_for: None,
             };
             let inserted = insert_token(owner, &db, &new).await.unwrap();
 
@@ -838,6 +847,8 @@ async fn a_rotation_retires_the_presented_row_and_inserts_the_pair_in_its_family
             assert_eq!(row.family_id, family_id);
             assert_eq!(row.jkt, JKT);
             assert_eq!(row.retired_at, None);
+            assert_eq!(row.used_at, None);
+            assert_eq!(row.issued_for, Some(presented.id));
         }
 
         assert_eq!(stored(&db, &first.refresh).await, *retired);
@@ -859,6 +870,7 @@ async fn a_reuse_verdicts_change_is_committed_and_retires_every_live_row() {
             present(&db, &first.refresh, JKT, &second).await.answer,
             Ok(())
         );
+        use_token(&db, user, &second.access).await;
         let used = stored(&db, &first.refresh).await;
         let live = [&first.access, &second.access, &second.refresh];
         let never_issued = FreshPair::generate().unwrap();
@@ -952,6 +964,7 @@ async fn a_rotation_neither_sees_nor_changes_another_users_rows_of_the_same_fami
         }
         assert_eq!(rows_of_b().await, b_before);
 
+        use_token(&db, a, &fresh.access).await;
         let never_issued = FreshPair::generate().unwrap();
         let reused = present(&db, &of_a.refresh, JKT, &never_issued).await;
         assert_eq!(reused.answer, Err(RefreshRefusal::Reused));
@@ -977,12 +990,12 @@ async fn a_rotation_neither_sees_nor_changes_another_users_rows_of_the_same_fami
 }
 
 /// The presentation that waited for the other has to be shown the pair the
-/// other inserted, which nothing it read before it waited includes. Decided
-/// without them, its reuse verdict retires the old access token and leaves
-/// the winner's pair alive.
+/// other inserted, which nothing it read before it waited includes. Shown
+/// it, it finds that pair unused and replaces it as a lost-answer replay;
+/// decided without it, it would leave two pairs of one token alive.
 #[tokio::test]
 #[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
-async fn two_concurrent_presentations_of_one_refresh_token_leave_no_live_row() {
+async fn two_concurrent_presentations_of_one_refresh_token_leave_one_live_pair() {
     in_fresh_schema(|db| async move {
         for round in 0..8 {
             let user = create_user(&db).await.unwrap();
@@ -996,12 +1009,23 @@ async fn two_concurrent_presentations_of_one_refresh_token_leave_no_live_row() {
                 present(&db, &first.refresh, JKT, &other),
             );
 
-            let reused = Err(RefreshRefusal::Reused);
-            let answers = [by_one.answer, by_other.answer];
-            assert!(
-                answers == [Ok(()), reused] || answers == [reused, Ok(())],
-                "round {round}: {answers:?}"
+            assert_eq!(
+                [by_one.answer, by_other.answer],
+                [Ok(()), Ok(())],
+                "round {round}"
             );
+            let (one_live, other_live) = (
+                is_live(&db, &one.refresh).await,
+                is_live(&db, &other.refresh).await,
+            );
+            assert!(one_live != other_live, "round {round}");
+            let (replaced, kept) = if one_live {
+                (&other, &one)
+            } else {
+                (&one, &other)
+            };
+            assert!(!is_live(&db, &replaced.access).await, "round {round}");
+            assert!(is_live(&db, &kept.access).await, "round {round}");
             let (rows, live): (i64, i64) = sqlx::query_as(
                 "SELECT count(*), count(*) FILTER (WHERE retired_at IS NULL) \
                  FROM tokens WHERE user_id = $1 AND family_id = $2",
@@ -1011,7 +1035,68 @@ async fn two_concurrent_presentations_of_one_refresh_token_leave_no_live_row() {
             .fetch_one(&db)
             .await
             .unwrap();
-            assert_eq!((rows, live), (4, 0), "round {round}");
+            assert_eq!((rows, live), (6, 3), "round {round}");
+        }
+    })
+    .await;
+}
+
+/// A replay and the first use of the pair it would replace, racing. The
+/// replay holds the pair `FOR UPDATE` while it decides, and the use is one
+/// conditional `UPDATE` of the access row, so one of them sees the other:
+/// the use lands first and the replay is reuse, or the replay lands first
+/// and the use finds its token retired. Never a token admitted and then
+/// replaced.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_replay_racing_the_first_use_of_its_pair_never_replaces_a_used_token() {
+    in_fresh_schema(|db| async move {
+        for round in 0..16 {
+            let user = create_user(&db).await.unwrap();
+            let family_id = Uuid::new_v4();
+            let first = pair_family(&db, user, family_id).await;
+            let lost = FreshPair::generate().unwrap();
+            assert_eq!(
+                present(&db, &first.refresh, JKT, &lost).await.answer,
+                Ok(())
+            );
+            let lost_access = stored(&db, &lost.access).await.id;
+            let replayed = FreshPair::generate().unwrap();
+
+            // Round 0 sends them one after the other, replay first, so the
+            // order a join of two futures seldom produces is always run.
+            let (used, replay) = match round {
+                0 => {
+                    let replay = present(&db, &first.refresh, JKT, &replayed).await;
+                    (mark_first_use(user, &db, lost_access).await, replay)
+                }
+                n if n % 2 == 1 => tokio::join!(
+                    mark_first_use(user, &db, lost_access),
+                    present(&db, &first.refresh, JKT, &replayed),
+                ),
+                _ => {
+                    let (replay, used) = tokio::join!(
+                        present(&db, &first.refresh, JKT, &replayed),
+                        mark_first_use(user, &db, lost_access),
+                    );
+                    (used, replay)
+                }
+            };
+
+            let used = used.unwrap();
+            match (used, replay.answer) {
+                (true, Err(RefreshRefusal::Reused)) => {
+                    assert!(!is_live(&db, &lost.access).await, "round {round}");
+                    assert!(!is_stored(&db, &replayed.access).await, "round {round}");
+                }
+                (false, Ok(())) => {
+                    let row = stored(&db, &lost.access).await;
+                    assert!(row.retired_at.is_some(), "round {round}");
+                    assert_eq!(row.used_at, None, "round {round}");
+                    assert!(is_live(&db, &replayed.access).await, "round {round}");
+                }
+                other => panic!("round {round}: {other:?}"),
+            }
         }
     })
     .await;

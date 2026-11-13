@@ -52,6 +52,9 @@ pub struct NewToken {
     pub family_id: Uuid,
     pub jkt: String,
     pub expires_at: OffsetDateTime,
+    /// The refresh token whose presentation issues this row; `None` for a
+    /// pairing's first pair. See [`TokenRecord::issued_for`].
+    pub issued_for: Option<Uuid>,
 }
 
 /// A whole `tokens` row, owner included. The fields are public so a test
@@ -66,6 +69,14 @@ pub struct TokenRecord {
     pub jkt: String,
     pub expires_at: OffsetDateTime,
     pub retired_at: Option<OffsetDateTime>,
+    /// When an access token was first admitted on a route
+    /// ([`mark_first_use`]). Never set on a refresh token, whose use is its
+    /// retirement.
+    pub used_at: Option<OffsetDateTime>,
+    /// The id of the refresh token whose presentation issued this row, `None`
+    /// for a pairing's first pair: what names the pair a lost-answer replay
+    /// may replace ([`refresh_change`](crate::pairing::grant::refresh_change)).
+    pub issued_for: Option<Uuid>,
 }
 
 #[derive(FromRow)]
@@ -78,6 +89,8 @@ struct TokenRow {
     jkt: String,
     expires_at: OffsetDateTime,
     retired_at: Option<OffsetDateTime>,
+    used_at: Option<OffsetDateTime>,
+    issued_for: Option<Uuid>,
 }
 
 impl TryFrom<TokenRow> for TokenRecord {
@@ -96,6 +109,8 @@ impl TryFrom<TokenRow> for TokenRecord {
             jkt: row.jkt,
             expires_at: row.expires_at,
             retired_at: row.retired_at,
+            used_at: row.used_at,
+            issued_for: row.issued_for,
         })
     }
 }
@@ -109,9 +124,10 @@ pub async fn insert_token(
     new: &NewToken,
 ) -> Result<TokenRecord, StoreError> {
     sqlx::query_as::<_, TokenRow>(
-        "INSERT INTO tokens (id, user_id, kind, token_hash, family_id, jkt, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         RETURNING id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at",
+        "INSERT INTO tokens \
+         (id, user_id, kind, token_hash, family_id, jkt, expires_at, issued_for) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         RETURNING id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at, used_at, issued_for",
     )
     .bind(Uuid::new_v4())
     .bind(user)
@@ -120,6 +136,7 @@ pub async fn insert_token(
     .bind(new.family_id)
     .bind(&new.jkt)
     .bind(new.expires_at)
+    .bind(new.issued_for)
     .fetch_one(db)
     .await?
     .try_into()
@@ -137,7 +154,7 @@ pub async fn find_token_by_hash(
     hash: &TokenHash,
 ) -> Result<Option<TokenRecord>, StoreError> {
     sqlx::query_as::<_, TokenRow>(
-        "SELECT id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at \
+        "SELECT id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at, used_at, issued_for \
          FROM tokens WHERE token_hash = $1",
     )
     .bind(hash.0.as_slice())
@@ -145,6 +162,34 @@ pub async fn find_token_by_hash(
     .await?
     .map(TokenRecord::try_from)
     .transpose()
+}
+
+/// Records that the access token `id` of tenant `owner` was admitted, unless
+/// an earlier admission already did, and answers whether the token was still
+/// unretired when it was recorded. Admission calls it only for a row it read
+/// with no `used_at`, so a token pays for the write once.
+///
+/// The `retired_at` test is in the same statement because a lost-answer
+/// replay ([`refresh_change`](crate::pairing::grant::refresh_change)) retires
+/// the pair it replaces only while that pair is unused, and decides so on
+/// rows [`rotate_family`] holds `FOR UPDATE`. This `UPDATE` waits on that lock
+/// and then re-reads the row: either the replay committed first and this
+/// finds the token retired, or this committed first and the replay finds it
+/// used. A token can never be both admitted and replaced.
+pub async fn mark_first_use(
+    owner: UserId,
+    db: impl PgExecutor<'_>,
+    id: Uuid,
+) -> Result<bool, StoreError> {
+    let marked = sqlx::query(
+        "UPDATE tokens SET used_at = coalesce(used_at, now()) \
+         WHERE user_id = $1 AND id = $2 AND retired_at IS NULL",
+    )
+    .bind(owner)
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(marked.rows_affected() == 1)
 }
 
 /// What [`rotate_family`] committed, as its own statements returned it and not
@@ -181,7 +226,7 @@ async fn lock_presented(
         return Ok(None);
     }
     sqlx::query_as::<_, TokenRow>(
-        "SELECT id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at \
+        "SELECT id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at, used_at, issued_for \
          FROM tokens WHERE user_id = $1 AND id = $2 FOR UPDATE",
     )
     .bind(found.user_id)
@@ -203,7 +248,7 @@ async fn lock_live_of_family(
     presented: &TokenRecord,
 ) -> Result<Vec<TokenRecord>, StoreError> {
     sqlx::query_as::<_, TokenRow>(
-        "SELECT id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at \
+        "SELECT id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at, used_at, issued_for \
          FROM tokens \
          WHERE user_id = $1 AND family_id = $2 AND id <> $3 \
            AND retired_at IS NULL AND expires_at > now() \
@@ -255,7 +300,7 @@ async fn retire_rows(
 ) -> Result<Vec<TokenRecord>, StoreError> {
     sqlx::query_as::<_, TokenRow>(
         "UPDATE tokens SET retired_at = now() WHERE user_id = $1 AND id = ANY($2) \
-         RETURNING id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at",
+         RETURNING id, user_id, kind, token_hash, family_id, jkt, expires_at, retired_at, used_at, issued_for",
     )
     .bind(owner)
     .bind(ids)
@@ -418,6 +463,8 @@ mod tests {
             jkt: "thumbprint".to_owned(),
             expires_at: OffsetDateTime::UNIX_EPOCH,
             retired_at: None,
+            used_at: None,
+            issued_for: None,
         }
     }
 
@@ -464,6 +511,7 @@ mod tests {
             family_id,
             jkt: "thumbprint".to_owned(),
             expires_at: OffsetDateTime::UNIX_EPOCH,
+            issued_for: None,
         };
         let change = |retire: &[u128], insert: Vec<NewToken>| FamilyChange {
             retire: retire.iter().map(|id| Uuid::from_u128(*id)).collect(),

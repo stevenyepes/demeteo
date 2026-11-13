@@ -83,6 +83,7 @@
 | 72 | Instance-probed harness catalog | **Every instance, desktop or runner, probes its registered harnesses for their models on its own machine, caches the answer, and reports it as the snapshot's `harness_catalog`, behind `read`.** It probes when its socket is acked, at most once per 15 minutes, and every 6 hours after; a snapshot build reads the cache and never waits on a probe, and a finished probe wakes a rebuild. An entry is a harness kind, each model's value and name (scrubbed, cut to 200 characters, at most 500 per harness), its effort levels, where the list came from and when. A model's description never crosses. The Hub offers the target instance's models in a select, and free text only where that instance reports no list for the harness. Amends [decision 70](#1-the-locked-decisions). **Rejected:** probing a runner from the Hub or from a desktop — either reads the wrong machine and needs that machine's credentials; free text only — the user guesses a slug, and the run fails on it after it has started. **Accepted:** the model slug configured in codex's `config.toml` crosses, and a custom provider's slug usually names that provider; the file and the description that names it do not. Detail: [HUB.md §5](HUB.md#snapshots). | 2026-11-09 |
 | 74 | Retrying a step from the Hub | **A signed `retry_step` (payload tag 7) names a Feature and a workflow node, and the instance that owns the run retries the node's latest execution exactly as its own retry would: a desktop's retry button, a runner's control-socket retry, which re-opens the run.** It needs `spend`, as run control that spends money, and no passkey: it approves nothing. It counts against neither ceiling: the ceilings bound the caps Hub starts commit, and a retry commits no new cap, re-running under the Feature's own `max_budget_usd`, which its start was judged on. It carries no assignment; hub-web sends a `set_step_assignment` first and queues the retry only once that is accepted, since requests are answered in no promised order. A desktop refuses a run a runner owns `runner_owned`, as a gate decision; a step the local retry would refuse is `step_not_retryable`, a new reason that only a Hub able to queue `retry_step` can receive. **Rejected:** an assignment inside the retry — a second path to decision 54's refusals, and a retry refused for an assignment reason reads as the step's; counting a retry at the run's cap again — a retry spends under the cap already counted, and charging it again would refuse retries the day's total had room for in fact. **Accepted:** repeated Hub retries of one run are bounded by nothing but the human who sends them ([HUB.md §11 item 4](HUB.md#11-what-is-not-decided)); a retried Hub-started run's tokens still end at the Hub's window from its first acceptance (§6.5). Detail: [HUB.md §6.1](HUB.md#61-the-envelope). | 2026-11-11 |
 | 75 | Feedback on a Hub gate decision is signed | **The gate challenge binds the feedback byte for byte, so the Hub offers `redirect` and approval notes.** The feedback is a seventh field, last in the pre-image: absent, it adds no bytes, so approve and cancel without it sign what they signed before and still verify on an older instance; present, it is `u8 1` and the text exactly as typed, and an older instance refuses it. Both ends cap it at 8 KiB of UTF-8. The instance hands the verified text to the same `gate_decide` a local decision reaches, and logs the decision as signed by the credential id, never with the text. Closes [HUB.md §11 item 1](HUB.md#11-what-is-not-decided); amends [decision 66](#66--hub-gate-decisions-detail). **Rejected:** approve and cancel only — a fleet you cannot send back with instructions is supervised from one desktop anyway; a separate hash of the feedback in the challenge — the pre-image is already hashed, so the text itself is bound with nothing to keep in step; a protocol version bump — appending only when present keeps every decision that does not use it compatible. **Accepted:** the Hub serves the page that runs the ceremony, so a hostile Hub can have the passkey sign feedback the user did not type, as it already can a decision ([HUB.md §3](HUB.md#what-a-compromised-hub-can-and-cannot-do)); feedback is held to the decision's bar, not above it. | 2026-11-11 |
+| 76 | Lost-answer grace on Hub refresh | **A retired refresh token presented again is a lost-answer replay, not reuse, when all hold: the proof is by the key it is bound to, it was retired at most 120 seconds ago, and the pair issued for it is still the family's live pair and has never been used — its access token admitted on no route, its refresh token never presented.** The Hub then retires that unused pair and answers a new one in the same family. Anything else that presents a retired token is reuse, and ends the family as before. A client whose refresh went unanswered sends it once more with the same token, after its backoff and only inside that grace; a second loss stops it, as every loss did before. Replaces the "no grace window" stance of [HUB.md §4](HUB.md#4-pairing). **Rejected:** no grace — any lost answer, a proxy's `502` on a reboot included, cost an honest instance its pairing; a grace measured only in time — a copy presented inside it would replace a pair the instance was already using. **Accepted:** a thief holding the refresh token *and* the device private key who replays it before the instance first uses its new pair takes the family until the instance's next refresh, which is then reuse and ends it. Detail: [76](#76--lost-answer-grace-on-hub-refresh-detail). | 2026-11-13 |
 
 ### 44 — Harness baseline (detail)
 
@@ -718,6 +719,47 @@ whatever they went on to cost. A start with no cap is refused, and so is any sta
 while either ceiling is unset. The per-run ceiling bounds
 the cap a start declares, which is a per-turn budget, so a run's actual spend stays
 unbounded; that remainder is open. Detail: [HUB.md §7](HUB.md#local-ceilings).
+
+### 76 — Lost-answer grace on Hub refresh (detail)
+
+**Why a grace at all.** The Hub rotates the refresh token on every use, so a
+refresh whose answer is lost on the way — a gateway `502` while the cluster
+comes back, a reset, a timeout — leaves the Hub holding a new pair and the
+instance holding the token it sent, now retired. Before this decision the
+only honest move left was to stop, and the user paired again; a runner that
+rebooted behind a still-starting ingress did exactly that.
+
+**Why it is safe.** Tokens are DPoP-bound, so a copied refresh token is
+worth nothing without the device private key, which never leaves the
+instance's keyring or sealed store. A holder of both who presents the retired
+token *after* the instance used the pair it was sent meets a used pair, and
+that is reuse: the family ends, as it always did. One who presents it
+*before* replaces that pair instead; the instance's next refresh then presents
+a retired token with no live successor, which is reuse. Either way two holders
+of one line of descent do not both outlive the instance's next refresh, which
+is what rotating the token was there to keep.
+
+**How "never used" is known.** Migration `0014_token_first_use.sql` adds two
+columns to `tokens`: `used_at`, set by a conditional `UPDATE` the first time
+an access token is admitted on `/socket`, `/attachments` or `/git-token`, and
+`issued_for`, the refresh token whose presentation issued a row. A refresh
+token's use is its retirement, so it needs no mark. The replay decides on the
+rows it holds `FOR UPDATE` under the device key's lock, and the first-use
+`UPDATE` refuses a row that is retired by then, so a token is never both
+admitted and replaced. A replay's new pair names the replayed token, so its
+120 seconds run from that token's own retirement however often it is
+replayed.
+
+**The client's half.** The supervisor replays once, after the backoff cut to
+what is left of the 120 seconds counted from before its first request left,
+which starts earlier than the Hub's count from the rotation. A replay that
+arrives late anyway is answered `invalid_grant`, which costs what stopping
+would have.
+
+**Accepted:** a thief holding the device key who wins that race leaves the
+instance a `401` on its fresh access token, which stops its socket as
+`Unauthorized` rather than refreshing; the family ends at the instance's next
+refresh, which that stop postpones to a re-pair or a restart.
 
 ## 2. Superseded decisions
 

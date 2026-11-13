@@ -54,9 +54,10 @@ use crate::domain::hub_socket::connection::{
 };
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, announced_scopes as narrowed_scopes, backoff, hello,
-    hub_event, refresh_refusal, resets_backoff, sends_events, snapshot, NoAnswer, Reconnect,
-    RefreshEnd, SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES,
-    PREMATURE_EXPIRY_MARGIN_SECS, SNAPSHOT_DEBOUNCE_SECS,
+    hub_event, refresh_refusal, replay_wait, resets_backoff, sends_events, snapshot, NoAnswer,
+    Reconnect, RefreshEnd, SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS,
+    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, REFRESH_REPLAY_GRACE_SECS,
+    SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, Project, Workflow, WorkflowVersion};
@@ -3089,23 +3090,23 @@ fn a_failed_refresh_backs_off_only_when_nothing_can_have_rotated() {
         (RefreshEnd::Unavailable, AfterBackoff),
         (
             RefreshEnd::Unanswered(NoAnswer::Timeout),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::BodyUnreadable),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (
             RefreshEnd::Unanswered(NoAnswer::Gateway(502)),
-            Stop(StopReason::RefreshUncertain),
+            Reconnect::ReplayRefresh,
         ),
         (hub("invalid_grant"), Stop(StopReason::NeedsRepair)),
         (hub("invalid_dpop_proof"), Stop(StopReason::Refused)),
@@ -3152,9 +3153,9 @@ fn a_refused_refresh_is_judged_by_its_hub_code_then_by_its_status() {
         (503, Vec::new(), AfterBackoff),
         (503, coded("too_many_requests"), AfterBackoff),
         (503, coded("internal"), Stop(StopReason::Refused)),
-        (500, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
-        (502, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
-        (504, HTML_BODY.to_vec(), Stop(StopReason::RefreshUncertain)),
+        (500, HTML_BODY.to_vec(), Reconnect::ReplayRefresh),
+        (502, HTML_BODY.to_vec(), Reconnect::ReplayRefresh),
+        (504, HTML_BODY.to_vec(), Reconnect::ReplayRefresh),
         (500, coded("internal"), Stop(StopReason::Refused)),
         (400, coded("invalid_grant"), Stop(StopReason::NeedsRepair)),
         (
@@ -3921,16 +3922,11 @@ fn refresh_refused(error: &str) -> RefreshEnd {
     ))
 }
 
-/// AC5.4: a refresh the Hub may have rotated, or refused for good, is never
-/// sent again — the supervisor stops on it, before any dial.
+/// AC5.4: a refresh the Hub refused for good is never sent again — the
+/// supervisor stops on it, before any dial.
 #[tokio::test]
-async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_token_call() {
+async fn a_refresh_that_was_refused_stops_with_no_further_token_call() {
     for (tag, end, reason) in [
-        (
-            "unanswered",
-            RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
-            StopReason::RefreshUncertain,
-        ),
         (
             "invalid_grant",
             refresh_refused("invalid_grant"),
@@ -3948,11 +3944,6 @@ async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_to
             }),
             StopReason::Refused,
         ),
-        (
-            "bare_502",
-            refresh_refusal(502, HTML_BODY),
-            StopReason::RefreshUncertain,
-        ),
     ] {
         let rig = RefreshRig::new(&format!("hub_supervise_stops_{tag}"), "dhr_r0");
         rig.endpoint.fail(end);
@@ -3965,6 +3956,112 @@ async fn a_refresh_that_may_have_rotated_or_was_refused_stops_with_no_further_to
         assert!(dialer.upgrades().is_empty(), "{tag}");
         assert!(waits.is_empty(), "{tag}: {waits:?}");
         assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r0"), "{tag}");
+    }
+}
+
+/// Decision 76: a refresh the Hub may have rotated, its answer lost, is
+/// sent once more with the token still stored, after the backoff; the Hub
+/// takes that back while the lost pair is unused.
+#[tokio::test]
+async fn an_unanswered_refresh_is_replayed_once_with_the_same_token() {
+    for (tag, end) in [
+        ("unanswered", RefreshEnd::Unanswered(NoAnswer::Timeout)),
+        ("bare_502", refresh_refusal(502, HTML_BODY)),
+    ] {
+        let rig = RefreshRig::new(&format!("hub_supervise_replays_{tag}"), "dhr_r0");
+        rig.endpoint.fail(end);
+        rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+        dialer.connect(closing_with(4002));
+
+        let (stopped, waits) = rig.supervise(&dialer).await;
+
+        assert_eq!(stopped, StopReason::Displaced, "{tag}");
+        assert_eq!(
+            waits,
+            [(backoff(0, 1.0), 1)],
+            "{tag}: one wait, between the calls"
+        );
+        let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+        assert_eq!(presented, ["dhr_r0", "dhr_r0"], "{tag}");
+        assert_eq!(dialed_tokens(&dialer), ["dha_a1"], "{tag}");
+        assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r1"), "{tag}");
+    }
+}
+
+/// A replay that goes unanswered too is not sent a third time, even after a
+/// refresh that never left in between: the supervisor stops before any dial,
+/// with the token it presented still stored.
+#[tokio::test]
+async fn a_replayed_refresh_that_goes_unanswered_again_stops_uncertain() {
+    for (tag, ends) in [
+        (
+            "twice",
+            vec![
+                RefreshEnd::Unanswered(NoAnswer::Gateway(502)),
+                RefreshEnd::Unanswered(NoAnswer::ConnectionLost),
+            ],
+        ),
+        (
+            "unsent_between",
+            vec![
+                RefreshEnd::Unanswered(NoAnswer::BodyUnreadable),
+                RefreshEnd::Unsent,
+                RefreshEnd::Unanswered(NoAnswer::UnparseableSuccess),
+            ],
+        ),
+    ] {
+        let rig = RefreshRig::new(&format!("hub_supervise_replay_stops_{tag}"), "dhr_r0");
+        let calls = ends.len();
+        for end in ends {
+            rig.endpoint.fail(end);
+        }
+        let dialer = Arc::new(ScriptedSocketDialer::new());
+
+        let (stopped, waits) = rig.supervise(&dialer).await;
+
+        assert_eq!(stopped, StopReason::RefreshUncertain, "{tag}");
+        assert_eq!(rig.endpoint.calls().len(), calls, "{tag}");
+        assert_eq!(waits.len(), calls - 1, "{tag}: {waits:?}");
+        assert!(dialer.upgrades().is_empty(), "{tag}");
+        assert_eq!(rig.stored_refresh().as_deref(), Some("dhr_r0"), "{tag}");
+    }
+}
+
+#[test]
+fn an_unanswered_refresh_is_replayed_once_and_only_inside_the_grace() {
+    let secs = Duration::from_secs;
+    assert_eq!(REFRESH_REPLAY_GRACE_SECS, 120);
+    for (since, backoff, wait) in [
+        (secs(0), secs(1), secs(1)),
+        (secs(30), secs(64), secs(64)),
+        (secs(100), secs(64), secs(20)),
+        (secs(0), secs(300), secs(120)),
+        (
+            Duration::from_millis(119_999),
+            secs(2),
+            Duration::from_millis(1),
+        ),
+    ] {
+        assert_eq!(
+            replay_wait(false, since, backoff),
+            Ok(wait),
+            "{since:?} {backoff:?}"
+        );
+    }
+    for since in [secs(120), secs(121), secs(3600)] {
+        assert_eq!(
+            replay_wait(false, since, secs(1)),
+            Err(StopReason::RefreshUncertain),
+            "{since:?}"
+        );
+    }
+    for since in [secs(0), secs(30)] {
+        assert_eq!(
+            replay_wait(true, since, secs(1)),
+            Err(StopReason::RefreshUncertain),
+            "{since:?}"
+        );
     }
 }
 

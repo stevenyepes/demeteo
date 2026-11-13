@@ -419,6 +419,9 @@ fn a_refresh_token_used_twice_revokes_its_family_and_the_newest_token_then_fails
     assert_eq!(access_verdict(a2, &jkt, NOW + 60), Ok(()));
     assert_eq!(family.rows().len(), 4);
     assert_eq!(live_rows(&family), 3);
+    // The instance uses the pair it was sent, so the old token coming back
+    // is reuse and not a replay of a lost answer (decision 76).
+    assert!(family.mark_used(&second.access.hash(), NOW + 60));
 
     let third = fresh_pair();
     let reused = present(&mut family, &first.refresh, &jkt, NOW + 120, &third);
@@ -1472,6 +1475,8 @@ async fn a_reused_refresh_token_is_invalid_grant_and_its_family_is_retired_under
         })
     );
     assert_eq!(live_rows(&family), 3);
+    let issued = TokenSecret::parse(sent_secret(&rotated, "access_token")).unwrap();
+    assert!(family.mark_used(&issued.hash(), NOW + 60));
 
     let (reused, asked) =
         refresh_token(&state, &key, &mut family, &first_refresh, NOW + 120, "two").await;

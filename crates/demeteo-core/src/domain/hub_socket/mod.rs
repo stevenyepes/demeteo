@@ -12,8 +12,8 @@
 //! [`status_backfill`] and [`removal_logs_cancel`].
 //! What follows a connection's end is decided here
 //! too: [`after`], [`after_close`], [`resets_backoff`], [`refresh_refusal`],
-//! [`after_refresh`] and [`backoff`]. What the Settings tab is told of the
-//! socket is [`connection::view`]. Which Feature id a run is reported
+//! [`after_refresh`], [`replay_wait`] and [`backoff`]. What the Settings tab
+//! is told of the socket is [`connection::view`]. Which Feature id a run is reported
 //! under, and whether this instance reports it at all, is
 //! [`reported_feature_id`].
 
@@ -50,9 +50,10 @@ pub use snapshot::{
     SNAPSHOT_DEBOUNCE_SECS,
 };
 pub use verdict::{
-    after, after_close, after_refresh, backoff, refresh_refusal, resets_backoff, NoAnswer,
-    Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS, LIVENESS_DEADLINE_SECS,
-    MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS, STOP_CLOSE_DEADLINE_SECS,
+    after, after_close, after_refresh, backoff, refresh_refusal, replay_wait, resets_backoff,
+    NoAnswer, Reconnect, RefreshEnd, SocketEnd, StopReason, BACKOFF_CAP_SECS,
+    LIVENESS_DEADLINE_SECS, MAX_UNACKED_EVENTS, PAGE_SIZE, PREMATURE_EXPIRY_MARGIN_SECS,
+    REFRESH_REPLAY_GRACE_SECS, STOP_CLOSE_DEADLINE_SECS,
 };
 
 /// The `Hello` that opens every connection. A pinned scope that does not
