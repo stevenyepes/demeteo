@@ -33,6 +33,9 @@ impl ConnectionId {
 pub enum Closing {
     /// A later connection of the same instance registered.
     Displaced,
+    /// The instance was removed from the Hub
+    /// ([`remove_instance`](crate::store::instances::remove_instance)).
+    Removed,
     ShuttingDown,
 }
 
@@ -239,6 +242,18 @@ impl Connections {
             if held.get().connection == connection {
                 held.remove();
             }
+        }
+    }
+
+    /// Asks the session of `instance`, if one is registered, to end as
+    /// [`Closing::Removed`]. Call it after the removal has committed: a
+    /// session told first could be replaced by a reconnect the store still
+    /// admits. The entry stays until the session leaves, as on a
+    /// displacement. A session held by another replica is not told; its
+    /// token's expiry ends it, and its reconnect is refused.
+    pub fn remove(&self, instance: InstanceId) {
+        if let Some(live) = self.lock().live.get(&instance) {
+            live.close.send_replace(Some(Closing::Removed));
         }
     }
 

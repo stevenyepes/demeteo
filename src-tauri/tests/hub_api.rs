@@ -711,12 +711,12 @@ async fn an_instance_shows_its_projects_and_live_runs_and_nothing_unreported() {
     assert_eq!(
         detail["live_runs"],
         json!([
-            {"instance_id": id, "feature_id": "F1", "status": "running",
+            {"instance_id": id, "instance_removed": false, "feature_id": "F1", "status": "running",
              "started_at": NOW + 1, "updated_at": NOW + 10, "cost_cents": null,
              "title": null, "project_id": null, "project_name": null,
              "step_id": "s1", "step_title": null,
              "tickets": {"completed": 1, "failed": 0, "running": 1}},
-            {"instance_id": id, "feature_id": "F3", "status": "running",
+            {"instance_id": id, "instance_removed": false, "feature_id": "F3", "status": "running",
              "started_at": NOW + 5, "updated_at": NOW + 11, "cost_cents": null,
              "title": null, "project_id": null, "project_name": null,
              "step_id": null, "step_title": null,
@@ -1180,7 +1180,7 @@ async fn runs_are_filtered_by_status_and_by_instance() {
         .unwrap();
     assert_eq!(
         serde_json::to_value(summary).unwrap(),
-        json!({"runs": [{"instance_id": x, "feature_id": "F2", "status": "completed",
+        json!({"runs": [{"instance_id": x, "instance_removed": false, "feature_id": "F2", "status": "completed",
             "started_at": NOW + 2, "updated_at": NOW + 7, "cost_cents": null,
             "title": null, "project_id": null, "project_name": null,
             "step_id": null, "step_title": null,
@@ -1223,6 +1223,7 @@ async fn a_run_shows_its_steps_tickets_pending_gates_and_events_in_offset_order(
         detail,
         json!({
             "instance_id": x,
+            "instance_removed": false,
             "feature_id": "F1",
             "status": "running",
             "workflow": null,
@@ -1330,7 +1331,7 @@ async fn another_tenants_run_reads_as_one_that_does_not_exist() {
     let everything = serde_json::to_value(everything).unwrap();
     assert_eq!(
         everything,
-        json!({"runs": [{"instance_id": a_instance, "feature_id": "f-a", "status": "running",
+        json!({"runs": [{"instance_id": a_instance, "instance_removed": false, "feature_id": "f-a", "status": "running",
             "started_at": NOW, "updated_at": NOW, "cost_cents": null,
             "title": null, "project_id": null, "project_name": null,
             "step_id": null, "step_title": null,

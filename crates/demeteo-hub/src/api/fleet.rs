@@ -6,6 +6,7 @@
 
 use super::run_labels::RunLabels;
 use super::run_state::{by_feature, fold, FeatureStatus, PendingGate, TicketProgress};
+use super::runs::owned_live;
 use super::scope::read_verdict;
 use super::snapshot_view::{harness_catalog, run_shape, workflows};
 use super::{ApiContext, PostgresApi, SnapshotRead};
@@ -138,6 +139,9 @@ pub struct RunSummary {
     pub step_id: Option<String>,
     pub step_title: Option<String>,
     pub tickets: TicketProgress,
+    /// Whether the run's instance was removed from the Hub. Its run is
+    /// still listed, as history, and nothing can be queued for it.
+    pub instance_removed: bool,
 }
 
 impl RunSummary {
@@ -167,6 +171,7 @@ impl RunSummary {
             step_title: labels.step_title(feature_id, state.current_step.as_deref()),
             step_id: state.current_step,
             tickets: state.tickets,
+            instance_removed: false,
         })
     }
 }
@@ -191,7 +196,7 @@ impl NeedsYou {
 pub async fn fleet(api: &ApiContext<'_>, user: UserId, _now: u64) -> Result<FleetView, ApiError> {
     let rows = api.store.instances(user).await.map_err(store_failed)?;
     let mut instances = Vec::with_capacity(rows.len());
-    for row in rows {
+    for row in rows.into_iter().filter(|row| !row.is_removed()) {
         let scopes = granted(&row);
         let read_granted = read_verdict(&scopes).is_ok();
         let (live_runs, needs_you, harnesses, project_count) = if read_granted {
@@ -228,20 +233,16 @@ pub async fn fleet(api: &ApiContext<'_>, user: UserId, _now: u64) -> Result<Flee
 }
 
 /// An `instance_id` that is no UUID answers as one that is not the tenant's:
-/// both are `404 not_found`, by the [tenant rule](super).
+/// both are `404 not_found`, by the [tenant rule](super), and so does a removed
+/// instance: only its runs are still shown.
 pub async fn instance_detail(
     api: &ApiContext<'_>,
     user: UserId,
     instance_id: &str,
     _now: u64,
 ) -> Result<InstanceDetailView, ApiError> {
-    let id = parsed_instance(instance_id).ok_or(ApiError::NOT_FOUND)?;
-    let row = api
-        .store
-        .instance(user, id)
-        .await
-        .map_err(store_failed)?
-        .ok_or(ApiError::NOT_FOUND)?;
+    let row = owned_live(api, user, instance_id).await?;
+    let id = row.id;
     let scopes = granted(&row);
     let read_granted = read_verdict(&scopes).is_ok();
     let (reported, live_runs) = if read_granted {

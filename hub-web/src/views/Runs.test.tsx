@@ -56,6 +56,7 @@ function runDetail(instance_id: string, feature_id: string, overrides: Record<st
     pending_gates: [],
     events: [],
     git_token_problem: null,
+    instance_removed: false,
     ...overrides,
   };
 }
@@ -81,6 +82,7 @@ function run(instance_id: string, feature_id: string, overrides: Record<string, 
     step_id: null,
     step_title: null,
     tickets: { completed: 0, failed: 0, running: 0 },
+    instance_removed: false,
     ...overrides,
   };
 }
@@ -192,6 +194,46 @@ describe('Runs', () => {
     expect(row).toHaveTextContent('Gate needs you');
     expect(row).toHaveTextContent('laptop · Review gate · waiting 14m');
     expect(screen.queryByRole('list', { name: 'Active' })).toBeNull();
+  });
+
+  it('lists a removed instance’s run as finished, and previews it with nothing to decide or link to', async () => {
+    const gate = {
+      instance_id: LAPTOP,
+      feature_id: 'f-gone',
+      step_id: 'review',
+      step_execution_id: 'se-review',
+      since: NOW - 840,
+      title: null,
+      project_name: null,
+      step_title: 'Review gate',
+    };
+    stubHub(
+      json({ runs: [run(LAPTOP, 'f-gone', { instance_removed: true })] }),
+      json({ instances: [{ ...fleetInstance(LAPTOP, 'laptop', [gate]), scopes: ['read', 'gates'] }] }),
+      {
+        'f-gone': runDetail(LAPTOP, 'f-gone', {
+          instance_removed: true,
+          pending_gates: [
+            { feature_id: 'f-gone', step_execution_id: 'se-review', step_id: 'review', since: NOW - 840, step_title: 'Review gate' },
+          ],
+        }),
+      },
+    );
+    render(
+      <FleetProvider readKey="runs">
+        <Runs />
+      </FleetProvider>,
+    );
+
+    const [row] = within(await screen.findByRole('list', { name: 'Finished' })).getAllByRole('link');
+    expect(row).toHaveTextContent('Instance removed');
+    expect(row).not.toHaveTextContent('Gate needs you');
+    expect(screen.queryByRole('list', { name: 'Needs you' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Active' })).toBeNull();
+
+    expect(await screen.findByText(/can no longer be changed from here/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'laptop' })).toBeNull();
   });
 
   it('says runs of instances without read are left out', async () => {

@@ -8,7 +8,7 @@
 //! which carries a byte of them.
 
 use super::fleet::granted;
-use super::runs::owned;
+use super::runs::owned_live;
 use super::{ApiContext, PostgresApi};
 use crate::attachments::envelope::{self, EnvelopeError};
 use crate::attachments::postgres::PostgresAttachments;
@@ -60,7 +60,7 @@ pub async fn upload(
     bytes: &[u8],
     now: u64,
 ) -> Result<UploadedView, ApiError> {
-    let row = owned(api, user, instance_id).await?;
+    let row = owned_live(api, user, instance_id).await?;
     if !granted(&row).contains(&Scope::Spend) {
         return Err(ApiError::scope_not_granted(Scope::Spend));
     }

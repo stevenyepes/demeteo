@@ -111,6 +111,11 @@ impl ApiError {
             ..Self::SCOPE_NOT_GRANTED
         }
     }
+
+    /// The `error` member of the body this answers with.
+    pub const fn code(&self) -> &'static str {
+        self.code
+    }
 }
 
 impl From<session::Rejection> for ApiError {

@@ -93,6 +93,7 @@ const SSO_RUN: RunSummary = {
   stepId: 's-implement',
   stepTitle: 'Implement',
   tickets: { completed: 3, failed: 0, running: 1 },
+  instanceRemoved: false,
 };
 
 function renderFleet() {

@@ -8,7 +8,7 @@ use crate::auth::policy::Status;
 use crate::socket::port::SocketStore;
 use crate::socket::postgres::PostgresStore;
 use crate::store::hub_projects::{find_hub_project, HubProjectId, HubProjectRow};
-use crate::store::instances::{find_instance, list_instances, Instance};
+use crate::store::instances::{find_instance, list_instances, remove_instance, Instance};
 use crate::store::passkeys::list_passkeys;
 use crate::store::requests::{find_request, git_token_problem_of, RequestId, RequestRecord};
 use crate::store::run_mirror::mirror_of;
@@ -88,6 +88,15 @@ impl ApiStore for PostgresApi {
         id: HubProjectId,
     ) -> Result<Option<HubProjectRow>, StoreError> {
         find_hub_project(user, &self.db, id).await
+    }
+
+    async fn remove_instance(
+        &self,
+        user: UserId,
+        instance: InstanceId,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        remove_instance(user, &self.db, instance, now).await
     }
 
     async fn requests_of(

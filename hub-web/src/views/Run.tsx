@@ -4,6 +4,7 @@ import { WorkflowCanvas } from '../../../src/components/canvas/WorkflowCanvas';
 import { Chip } from '../../../src/components/ui/Chip';
 import { runStatusMeta } from '../../../src/lib/runStatus';
 import { CeremonyError } from '../components/CeremonyError';
+import { InstanceRemovedChip, InstanceRemovedNote } from '../components/InstanceRemoved';
 import { PageHeader } from '../components/PageHeader';
 import { RunCancel } from '../components/RunCancel';
 import { RunEvents } from '../components/RunEvents';
@@ -60,7 +61,7 @@ export function Run({ instanceId, featureId }: RunProps) {
         eyebrow={loaded === null ? undefined : <RunBreadcrumb instanceId={instanceId} detail={loaded} />}
         summary={loaded === null ? undefined : <RunSummaryLine featureId={featureId} detail={loaded} />}
         actions={
-          loaded === null ? undefined : (
+          loaded === null || loaded.instanceRemoved ? undefined : (
             <RunCancel instanceId={instanceId} featureId={featureId} status={loaded.status} scopes={scopes} />
           )
         }
@@ -120,13 +121,17 @@ function Loaded({ instanceId, featureId, detail, statusByNode, readAt, stale, sc
   const { gateDecisions, onGateDecided, onGateSettled } = useGateDecisions();
   const now = Math.floor(Date.now() / 1000);
   const titles = stepTitles(detail);
+  const removed = detail.instanceRemoved;
+  // A removed instance's gates can no longer be decided, so none is offered as waiting.
+  const decidable = removed ? { ...detail, pendingGates: [] } : detail;
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]">
       <div className="flex min-w-0 flex-col gap-4">
+        {removed && <InstanceRemovedNote className="panel px-5 py-3" />}
         {stale && <StaleNotice readAt={readAt} />}
         {detail.gitTokenProblem !== null && <RunGitTokenProblem problem={detail.gitTokenProblem} />}
         {detail.workflow === null ? (
-          <NotReported detail={detail} statusByNode={statusByNode} titles={titles} onSelect={setSelectedStepId} />
+          <NotReported detail={decidable} statusByNode={statusByNode} titles={titles} onSelect={setSelectedStepId} />
         ) : (
           <>
             <section aria-label="Pipeline graph" className="panel panel-field h-[36rem] w-full overflow-hidden">
@@ -137,14 +142,20 @@ function Loaded({ instanceId, featureId, detail, statusByNode, readAt, stale, sc
                 selectedNodeId={selectedStepId}
               />
             </section>
-            <OffGraphGates detail={detail} titles={titles} onSelect={setSelectedStepId} />
+            <OffGraphGates detail={decidable} titles={titles} onSelect={setSelectedStepId} />
           </>
         )}
         <TicketProgress detail={detail} now={now} />
       </div>
       <aside aria-label="Run inspector" className="flex min-w-0 flex-col gap-4">
         {selectedStepId === null ? (
-          <RunGatesWaiting detail={detail} titles={titles} now={now} onSelect={setSelectedStepId} />
+          <RunGatesWaiting
+            detail={decidable}
+            titles={titles}
+            now={now}
+            onSelect={setSelectedStepId}
+            readOnly={removed}
+          />
         ) : (
           <StepInspector
             instanceId={instanceId}
@@ -152,6 +163,7 @@ function Loaded({ instanceId, featureId, detail, statusByNode, readAt, stale, sc
             stepId={selectedStepId}
             detail={detail}
             scopes={scopes}
+            instanceRemoved={removed}
             gateDecisions={gateDecisions}
             onGateDecided={onGateDecided}
             onGateSettled={onGateSettled}
@@ -176,12 +188,16 @@ function RunBreadcrumb({ instanceId, detail }: { instanceId: string; detail: Run
         Runs
       </a>
       <span aria-hidden="true">/</span>
-      <a
-        href={routeHref({ name: 'instance', instanceId })}
-        className="text-accent-ink transition-colors hover:text-white break-all"
-      >
-        {label}
-      </a>
+      {detail.instanceRemoved ? (
+        <span className="break-all">{label}</span>
+      ) : (
+        <a
+          href={routeHref({ name: 'instance', instanceId })}
+          className="text-accent-ink transition-colors hover:text-white break-all"
+        >
+          {label}
+        </a>
+      )}
       {detail.projectName !== null && (
         <>
           <span aria-hidden="true">/</span>
@@ -193,10 +209,14 @@ function RunBreadcrumb({ instanceId, detail }: { instanceId: string; detail: Run
 }
 
 function RunSummaryLine({ featureId, detail }: { featureId: string; detail: RunDetail }) {
-  const status = detail.status === 'running' && detail.pendingGates.length > 0 ? 'awaiting_gate' : detail.status;
+  const removed = detail.instanceRemoved;
+  const status =
+    !removed && detail.status === 'running' && detail.pendingGates.length > 0 ? 'awaiting_gate' : detail.status;
+  // A removed instance's `running` is only the last thing it reported; nothing will end it.
   return (
     <span className="flex flex-wrap items-center gap-3">
-      <Chip status={status}>{runStatusMeta(status).label}</Chip>
+      {!(removed && status === 'running') && <Chip status={status}>{runStatusMeta(status).label}</Chip>}
+      {removed && <InstanceRemovedChip />}
       <span className="break-all">{featureId}</span>
       {detail.workflow !== null && <span className="break-all">{detail.workflow.name}</span>}
     </span>

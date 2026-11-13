@@ -8,6 +8,7 @@ import { CeremonyError } from '../components/CeremonyError';
 import { InstanceProjectsTable } from '../components/InstanceProjectsTable';
 import { InstanceDetailRunRow } from '../components/InstanceDetailRunRow';
 import { PageHeader } from '../components/PageHeader';
+import { RemoveInstance } from '../components/RemoveInstance';
 import { HubApiError } from '../lib/api';
 import { getInstance, type HubScope, type InstanceDetail } from '../lib/fleet';
 import { useFleet } from '../lib/fleetContext';
@@ -204,6 +205,9 @@ function Loaded({ detail }: { detail: InstanceDetail }) {
                 );
               })}
             </ul>
+          </Section>
+          <Section title="Remove from the Hub">
+            <RemoveInstance instanceId={detail.id} />
           </Section>
         </div>
       </div>

@@ -41,7 +41,8 @@ export function useRunDetail(instanceId: string, featureId: string): RunDetailLo
           if (latestRead.current !== read) return;
           loaded = true;
           setLoad((previous) => settled(previous, detail));
-          if (detail.status === 'running') timer = setTimeout(poll, POLL_MS);
+          // A removed instance reports nothing more, so its run never moves again.
+          if (detail.status === 'running' && !detail.instanceRemoved) timer = setTimeout(poll, POLL_MS);
         },
         (error: unknown) => {
           if (latestRead.current !== read) return;
@@ -73,7 +74,8 @@ export function useRunDetail(instanceId: string, featureId: string): RunDetailLo
  * already on screen rather than equal copies of them.
  */
 function settled(previous: RunDetailLoad, detail: RunDetail): RunDetailLoad {
-  const next = statusByNode(detail.steps, detail.pendingGates);
+  // A removed instance's gate can no longer be decided, so it is not drawn as waiting on anyone.
+  const next = statusByNode(detail.steps, detail.instanceRemoved ? [] : detail.pendingGates);
   const readAt = Date.now();
   if (previous.state !== 'loaded') return { state: 'loaded', detail, statusByNode: next, readAt, stale: false };
   const held = previous.detail.workflow;

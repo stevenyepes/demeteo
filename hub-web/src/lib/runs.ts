@@ -25,6 +25,11 @@ export type RunSummary = {
   stepId: string | null;
   stepTitle: string | null;
   tickets: TicketProgress;
+  /**
+   * The run's instance was removed from the Hub. Nothing can reach it any
+   * more, so the run takes no request and its instance has no page.
+   */
+  instanceRemoved: boolean;
 };
 
 /**
@@ -73,6 +78,8 @@ export type RunDetail = {
    * try, as the code `POST /git-token` answered. `null` for every other run.
    */
   gitTokenProblem: string | null;
+  /** As on `RunSummary`. */
+  instanceRemoved: boolean;
 };
 
 export type RunsFilter = { instance?: string; status?: RunStatus };
@@ -90,6 +97,12 @@ export type WireRunSummary = {
   step_id: string | null;
   step_title: string | null;
   tickets: TicketProgress;
+  /**
+   * Always present on `GET /v1/runs`. An instance detail's `live_runs` reuse
+   * this shape and may leave it out: an instance the Hub still answers for has
+   * not been removed.
+   */
+  instance_removed?: boolean;
 };
 
 type WireStepView = { step_id: string; state: StepState; title: string | null; failure: string | null };
@@ -125,6 +138,7 @@ type WireRunDetail = {
   pending_gates: WirePendingGate[];
   events: WireRunEvent[];
   git_token_problem: string | null;
+  instance_removed: boolean;
 };
 
 const STATUSES: readonly unknown[] = ['running', 'completed', 'failed', 'cancelled'] satisfies RunStatus[];
@@ -161,6 +175,7 @@ export function runSummaryOf(wire: WireRunSummary): RunSummary {
     stepId: wire.step_id,
     stepTitle: wire.step_title,
     tickets: ticketProgressOf(wire.tickets),
+    instanceRemoved: wire.instance_removed === true,
   };
 }
 
@@ -187,6 +202,7 @@ function runDetailOf(wire: WireRunDetail): RunDetail {
     pendingGates: wire.pending_gates.map(pendingGateOf),
     events: wire.events.map(runEventOf),
     gitTokenProblem: wire.git_token_problem,
+    instanceRemoved: wire.instance_removed,
   };
 }
 
@@ -224,7 +240,8 @@ export const isWireRunSummary: Guard<WireRunSummary> = (value): value is WireRun
   isStringOrNull(memberOf(value, 'project_name')) &&
   isStringOrNull(memberOf(value, 'step_id')) &&
   isStringOrNull(memberOf(value, 'step_title')) &&
-  isTicketProgress(memberOf(value, 'tickets'));
+  isTicketProgress(memberOf(value, 'tickets')) &&
+  isBooleanOrAbsent(memberOf(value, 'instance_removed'));
 
 const isRuns: Guard<{ runs: WireRunSummary[] }> = (value): value is { runs: WireRunSummary[] } =>
   isListOf(memberOf(value, 'runs'), isWireRunSummary);
@@ -284,12 +301,17 @@ const isWireRunDetail: Guard<WireRunDetail> = (value): value is WireRunDetail =>
     isTicketProgress(memberOf(value, 'tickets')) &&
     isListOf(memberOf(value, 'pending_gates'), isWirePendingGate) &&
     isListOf(memberOf(value, 'events'), isWireRunEvent) &&
-    isStringOrNull(memberOf(value, 'git_token_problem'))
+    isStringOrNull(memberOf(value, 'git_token_problem')) &&
+    typeof memberOf(value, 'instance_removed') === 'boolean'
   );
 };
 
 function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+function isBooleanOrAbsent(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === 'boolean';
 }
 
 function isNumberOrNull(value: unknown): value is number | null {

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setCsrfToken } from '../lib/api';
@@ -369,5 +369,131 @@ describe('Instance', () => {
     render(<Instance instanceId={ID} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/^internal$/);
+  });
+});
+
+describe('Instance removal', () => {
+  const CHALLENGE_PATH = `${PATH}/remove/challenge`;
+  const FLEET = {
+    instances: [
+      {
+        id: ID,
+        label: 'workstation',
+        present: true,
+        os: 'linux',
+        arch: 'x86_64',
+        version: '1.4.2',
+        scopes: ['read'],
+        read_granted: true,
+        last_seen: NOW,
+        live_runs: 0,
+        needs_you: [],
+        harnesses: null,
+        project_count: 0,
+      },
+    ],
+  };
+  const CHALLENGE = { ceremony_id: 'cer-4', public_key: { challenge: '-_-_', rpId: 'hub.example' } };
+  const ASSERTION = {
+    id: 'ignored',
+    rawId: new Uint8Array([0xfb, 0xff]).buffer,
+    type: 'public-key',
+    response: {
+      clientDataJSON: new Uint8Array([1, 2, 3]).buffer,
+      authenticatorData: new Uint8Array([4, 5, 6, 7]).buffer,
+      signature: new Uint8Array([8]).buffer,
+      userHandle: null,
+    },
+  };
+
+  /** Answers each `"METHOD path"` with its replies in order; anything else, or one call too many, throws. */
+  function stubHub(script: Record<string, Response[]>) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+        const request = `${init?.method ?? 'GET'} ${String(input)}`;
+        asked.push(request);
+        const reply = script[request]?.shift();
+        if (reply === undefined) throw new Error(`fetch double was not told about ${request}`);
+        return reply;
+      }),
+    );
+  }
+
+  function stubPasskey() {
+    const get = vi.fn(async () => ASSERTION);
+    vi.stubGlobal('navigator', { credentials: { get, create: vi.fn() } });
+    vi.stubGlobal('PublicKeyCredential', class {});
+    return get;
+  }
+
+  async function renderInFleet() {
+    render(
+      <FleetProvider readKey="instance">
+        <Instance instanceId={ID} />
+      </FleetProvider>,
+    );
+    await screen.findByRole('heading', { level: 1, name: 'workstation' });
+  }
+
+  afterEach(() => {
+    window.location.hash = '';
+  });
+
+  it('says what removing does before asking for a passkey, and asks nothing when kept', async () => {
+    stubHub({ [`GET ${PATH}`]: [json(detail())], 'GET /v1/fleet': [json(FLEET)] });
+    const get = stubPasskey();
+    await renderInFleet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove instance' }));
+    const confirm = screen.getByRole('group', { name: 'Confirm removal' });
+    expect(confirm).toHaveTextContent(
+      'Removing this instance revokes its pairing. If it is online it is disconnected, and it has to pair again to rejoin. Its run history stays on the Hub.',
+    );
+
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Keep instance' }));
+
+    expect(screen.queryByRole('group', { name: 'Confirm removal' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove instance' })).toBeEnabled();
+    expect(get).not.toHaveBeenCalled();
+    expect(asked.filter((request) => !request.startsWith('GET'))).toEqual([]);
+  });
+
+  it('removes over a passkey, forgets the instance from the fleet, and goes back to Fleet', async () => {
+    stubHub({
+      [`GET ${PATH}`]: [json(detail())],
+      'GET /v1/fleet': [json(FLEET)],
+      [`POST ${CHALLENGE_PATH}`]: [json(CHALLENGE)],
+      [`DELETE ${PATH}`]: [new Response(null, { status: 204 })],
+    });
+    stubPasskey();
+    await renderInFleet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove instance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove with passkey' }));
+
+    await vi.waitFor(() => expect(window.location.hash).toBe(routeHref({ name: 'fleet' })));
+    expect(asked).toContain(`DELETE ${PATH}`);
+    // The held fleet no longer names it, so the label it gave the page is gone.
+    expect(screen.getByRole('heading', { level: 1, name: 'Instance' })).toBeInTheDocument();
+  });
+
+  it('shows a refusal in place and offers the removal again', async () => {
+    stubHub({
+      [`GET ${PATH}`]: [json(detail())],
+      'GET /v1/fleet': [json(FLEET)],
+      [`POST ${CHALLENGE_PATH}`]: [json(CHALLENGE)],
+      [`DELETE ${PATH}`]: [json({ error: 'assertion_invalid' }, 403)],
+    });
+    stubPasskey();
+    await renderInFleet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove instance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove with passkey' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('assertion_invalid');
+    expect(screen.getByText(/did not accept that passkey/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Remove with passkey' })).toBeEnabled();
+    expect(window.location.hash).toBe('');
   });
 });
