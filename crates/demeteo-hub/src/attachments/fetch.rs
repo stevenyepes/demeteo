@@ -23,18 +23,15 @@ use super::envelope::{self, EnvelopeError};
 use super::port::AttachmentStore;
 use super::postgres::PostgresAttachments;
 use crate::auth::handlers::{header_text, store_failed, unix_now, ApiError};
-use crate::pairing::access::{self, refusal, Admission};
+use crate::pairing::access::{self, refusal, AccessStore, Admission, PostgresAccess};
 use crate::pairing::dpop::Expected;
 use crate::pairing::handlers::one_proof;
 use crate::ports::KeyService;
 use crate::routes::AppState;
-use crate::store::tokens::{self, TokenHash, TokenRecord};
-use crate::store::{device_keys, InstanceId, StoreError, UserId};
 use axum::extract::{Path, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
-use std::future::Future;
 use uuid::Uuid;
 
 /// The route [`get_attachment`] is mounted at. A proof is made for the URL
@@ -50,36 +47,20 @@ pub fn fetch_htu(state: &AppState, attachment_id: &str) -> String {
 }
 
 /// [`access::admitted`] for a fetch of `attachment_id`.
-pub async fn admitted<T, TF, I, IF>(
+pub async fn admitted(
     state: &AppState,
     attachment_id: &str,
     authorization: Option<&str>,
     proof: Option<&str>,
     now: u64,
-    find_token: T,
-    instance_of_key: I,
-) -> Result<Admission, ApiError>
-where
-    T: FnOnce(TokenHash) -> TF,
-    TF: Future<Output = Result<Option<TokenRecord>, StoreError>>,
-    I: FnOnce(UserId, String) -> IF,
-    IF: Future<Output = Result<Option<InstanceId>, StoreError>>,
-{
+    store: &impl AccessStore,
+) -> Result<Admission, ApiError> {
     let htu = fetch_htu(state, attachment_id);
     let expected = Expected {
         htm: FETCH_METHOD,
         htu: &htu,
     };
-    access::admitted(
-        state,
-        authorization,
-        proof,
-        &expected,
-        now,
-        find_token,
-        instance_of_key,
-    )
-    .await
+    access::admitted(state, authorization, proof, &expected, now, store).await
 }
 
 /// The content of attachment `attachment_id`, which this call has deleted.
@@ -133,8 +114,7 @@ async fn fetched(
         header_text(headers, AUTHORIZATION),
         one_proof(headers),
         now,
-        |hash| async move { tokens::find_token_by_hash(db, &hash).await },
-        |user, jkt| async move { device_keys::instance_of_key(user, db, &jkt).await },
+        &PostgresAccess(db),
     )
     .await?;
     let attachments = PostgresAttachments::new(db.clone());

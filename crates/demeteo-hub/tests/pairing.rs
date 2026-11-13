@@ -23,7 +23,7 @@ use demeteo_hub::auth::testing::{serve, SoftAuthenticator};
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::grant::{access_verdict, AccessRefusal, TokenSecret};
 use demeteo_hub::pairing::jwk::fingerprint;
-use demeteo_hub::pairing::testing::SoftDeviceKey;
+use demeteo_hub::pairing::testing::{claims, SoftDeviceKey};
 use demeteo_hub::pairing::{ACCESS_TOKEN_TTL_SECS, CONSENT_TTL_SECS, REFRESH_TOKEN_TTL_SECS};
 use demeteo_hub::ports::KeyService;
 use demeteo_hub::routes::{self, AppState};
@@ -356,6 +356,30 @@ fn invalid_grant() -> (u16, Value) {
     (400, json!({ "error": "invalid_grant" }))
 }
 
+/// Uses `access` as an instance does: one request admitted on it, for an
+/// attachment that does not exist. Admission comes before the lookup, so a
+/// `404` is a token that was admitted and a `401` one that was not.
+async fn use_access(hub: &Hub, key: &SoftDeviceKey, access: &str) -> u16 {
+    let path = format!("/attachments/{}", Uuid::new_v4());
+    let mut claims = claims(
+        "GET",
+        &format!("{HUB_ORIGIN}{path}"),
+        now(),
+        &Uuid::new_v4().to_string(),
+    );
+    claims["ath"] = json!(base64url_encode(&Sha256::digest(access.as_bytes())));
+    let proof = key.proof_with(&key.header(), &claims);
+    reqwest::Client::new()
+        .get(format!("{}{path}", hub.base))
+        .header("authorization", format!("DPoP {access}"))
+        .header("dpop", proof)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
 fn raw(secret: &str) -> Vec<u8> {
     let bytes = base64url_decode(secret).unwrap();
     assert_eq!(bytes.len(), 32, "{secret}");
@@ -543,6 +567,9 @@ async fn a_refresh_token_presented_twice_retires_its_whole_family_and_no_other()
         let newest_access = row_of(&hub.db, &second.access).await;
         let jkt = key.thumbprint();
         assert_eq!(access_verdict(&newest_access, &jkt, now()), Ok(()));
+        // Used, so the old token coming back is reuse and not a replay of a
+        // lost answer.
+        assert_eq!(use_access(&hub, &key, &second.access).await, 404);
 
         let reused = refresh(&hub, &key, &first.refresh).await;
         assert_eq!(reused, invalid_grant());
@@ -560,10 +587,12 @@ async fn a_refresh_token_presented_twice_retires_its_whole_family_and_no_other()
         let family = newest_access.family_id;
         assert_eq!(rows_and_live(&hub.db, family).await, (4, 0));
         let newest_access = row_of(&hub.db, &second.access).await;
+        assert!(newest_access.used_at.is_some());
         assert_eq!(
             access_verdict(&newest_access, &jkt, now()),
             Err(AccessRefusal::Retired)
         );
+        assert_eq!(use_access(&hub, &key, &second.access).await, 401);
 
         let other_fourth = refresh(&hub, &other_key, &other_third.refresh).await;
         assert_eq!(other_fourth.0, 200, "{other_fourth:?}");
@@ -574,15 +603,16 @@ async fn a_refresh_token_presented_twice_retires_its_whole_family_and_no_other()
     .await;
 }
 
-/// One of the two rotates and the other finds the token retired, so the
-/// loser's verdict is a reuse and takes the winner's pair with it: one
-/// successor pair is written, and none of the family outlives the race. Two
-/// successor pairs would be two lines of descent from one token; a successor
-/// left alive would be the loser deciding on rows read before the winner
-/// committed.
+/// One of the two rotates, and the other finds the token retired with a
+/// pair nobody has used yet: a lost-answer replay, which the Hub cannot tell
+/// from a second presentation it raced. So the second replaces the first's
+/// pair, one pair is left alive, and the replaced pair's refresh token is
+/// reuse. Two live pairs would be two lines of descent from one token; the
+/// replaced pair left alive would be the second deciding on rows read before
+/// the first committed.
 #[tokio::test]
 #[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
-async fn two_concurrent_refreshes_of_one_token_leave_exactly_one_successor_and_no_live_row() {
+async fn two_concurrent_refreshes_of_one_token_leave_exactly_one_live_pair() {
     in_fresh_schema(|db| async move {
         let hub = hub_over(db).await;
         for round in 0..8 {
@@ -595,26 +625,85 @@ async fn two_concurrent_refreshes_of_one_token_leave_exactly_one_successor_and_n
                 refresh(&hub, &key, &first.refresh),
             );
 
-            let (won, lost) = match (one.0, other.0) {
-                (200, 200) => panic!("round {round}: both refreshes were granted"),
-                (200, _) => (one, other),
-                _ => (other, one),
+            let (one, other) = (issued(&one), issued(&other));
+            let live = |pair: &Issued| {
+                let pair = (pair.access.clone(), pair.refresh.clone());
+                let db = hub.db.clone();
+                async move {
+                    let access = row_of(&db, &pair.0).await;
+                    let refresh = row_of(&db, &pair.1).await;
+                    assert_eq!(access.family_id, family, "round {round}");
+                    assert_eq!(refresh.retired_at.is_none(), access.retired_at.is_none());
+                    refresh.retired_at.is_none()
+                }
             };
-            let successor = issued(&won);
-            assert_eq!(won, (200, refresh_body(&successor)), "round {round}");
-            assert_eq!(lost, invalid_grant(), "round {round}");
+            let (replaced, kept) = match (live(&one).await, live(&other).await) {
+                (false, true) => (one, other),
+                (true, false) => (other, one),
+                both => panic!("round {round}: live {both:?}"),
+            };
             assert_eq!(
                 rows_and_live(&hub.db, family).await,
-                (4, 0),
+                (6, 3),
                 "round {round}"
             );
-            for token in [&successor.access, &successor.refresh] {
-                let row = row_of(&hub.db, token).await;
-                assert_eq!(row.family_id, family, "round {round}");
-            }
-            let later = refresh(&hub, &key, &successor.refresh).await;
+
+            let presented = refresh(&hub, &key, &replaced.refresh).await;
+            assert_eq!(presented, invalid_grant(), "round {round}");
+            assert_eq!(
+                rows_and_live(&hub.db, family).await,
+                (6, 0),
+                "round {round}"
+            );
+            let later = refresh(&hub, &key, &kept.refresh).await;
             assert_eq!(later, invalid_grant(), "round {round}");
         }
+    })
+    .await;
+}
+
+/// The answer to the first refresh is dropped on the way, as a proxy's `502`
+/// drops it: the instance holds the token it sent and presents it again.
+/// That is answered a new pair and the lost one is retired, until the pair
+/// is used; from then on the old token is reuse, and ends the family.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_refresh_whose_answer_was_lost_is_replayed_until_its_new_pair_is_used() {
+    in_fresh_schema(|db| async move {
+        let hub = hub_over(db).await;
+        let key = SoftDeviceKey::new();
+        let first = pair(&hub, Desktop::named("Workstation", &key)).await;
+        let family = row_of(&hub.db, &first.refresh).await.family_id;
+
+        let lost = issued(&refresh(&hub, &key, &first.refresh).await);
+        let replayed = refresh(&hub, &key, &first.refresh).await;
+        let second = issued(&replayed);
+        assert_eq!(replayed, (200, refresh_body(&second)));
+
+        let presented = row_of(&hub.db, &first.refresh).await;
+        for token in [&lost.access, &lost.refresh] {
+            let row = row_of(&hub.db, token).await;
+            assert!(row.retired_at.is_some());
+            assert_eq!(row.used_at, None);
+        }
+        for token in [&second.access, &second.refresh] {
+            let row = row_of(&hub.db, token).await;
+            assert_eq!((row.family_id, row.retired_at), (family, None));
+            assert_eq!(row.issued_for, Some(presented.id));
+        }
+        assert_eq!(rows_and_live(&hub.db, family).await, (6, 3));
+        assert_eq!(use_access(&hub, &key, &lost.access).await, 401);
+
+        assert_eq!(use_access(&hub, &key, &second.access).await, 404);
+        let used_at = row_of(&hub.db, &second.access).await.used_at;
+        assert!(used_at.is_some());
+        assert_eq!(use_access(&hub, &key, &second.access).await, 404);
+        assert_eq!(row_of(&hub.db, &second.access).await.used_at, used_at);
+
+        let reused = refresh(&hub, &key, &first.refresh).await;
+        assert_eq!(reused, invalid_grant());
+        assert_eq!(rows_and_live(&hub.db, family).await, (6, 0));
+        assert_eq!(use_access(&hub, &key, &second.access).await, 401);
     })
     .await;
 }
@@ -635,6 +724,7 @@ async fn an_access_token_inserted_already_expired_is_refused_on_the_row_its_hash
             family_id,
             jkt: jkt.clone(),
             expires_at: at(expires_at),
+            issued_for: None,
         };
         let in_its_lifetime = expiring(now + ACCESS_TOKEN_TTL_SECS);
         let expired = expiring(now - 1);

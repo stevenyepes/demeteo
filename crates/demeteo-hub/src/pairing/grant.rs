@@ -29,7 +29,10 @@
 use super::authorize::scope_name;
 use super::pending::ApprovedPairing;
 use super::pkce;
-use super::{ACCESS_TOKEN_TTL_SECS, AUTHORIZATION_CODE_TTL_SECS, REFRESH_TOKEN_TTL_SECS};
+use super::{
+    ACCESS_TOKEN_TTL_SECS, AUTHORIZATION_CODE_TTL_SECS, LOST_ANSWER_GRACE_SECS,
+    REFRESH_TOKEN_TTL_SECS,
+};
 use crate::auth::challenge::{base64url_decode, base64url_encode, RandomSourceFailed};
 use crate::auth::policy::Status;
 use crate::store::instances::Paired;
@@ -161,6 +164,7 @@ impl FreshPair {
                 family_id,
                 jkt: jkt.to_owned(),
                 expires_at: expiry(now, ttl)?,
+                issued_for: None,
             })
         };
         Ok(PairRows {
@@ -228,11 +232,14 @@ impl RefreshDecision {
 /// row whatever its state, and the rows of its family that are neither
 /// retired nor expired. That is enough for the reuse branch, which retires
 /// every live row it is shown: a row the store left out is retired already
-/// or has expired.
+/// or has expired. It is enough for a lost-answer replay too, which reads
+/// only the pair issued for the presented row, and that pair is live or the
+/// replay is reuse.
 ///
 /// A rotation retires the presented row only. The access token issued with it
 /// stays good until its own expiry, which is at most
-/// [`ACCESS_TOKEN_TTL_SECS`] away.
+/// [`ACCESS_TOKEN_TTL_SECS`] away. Every row it adds names the presented row
+/// as [`issued_for`](TokenRecord::issued_for).
 ///
 /// The error is not a refusal: it is a clock so far from the present that the
 /// new rows have no expiry to carry.
@@ -257,15 +264,22 @@ pub fn refresh_change(
         return Ok(RefreshDecision::refused(RefreshRefusal::KeyMismatch));
     }
     if row.retired_at.is_some() {
+        if let Some(replaced) = lost_answer_successor(family, row, now) {
+            return Ok(RefreshDecision {
+                change: FamilyChange {
+                    retire: replaced.to_vec(),
+                    insert: successor_rows(fresh, row, now)?,
+                },
+                verdict: Ok(()),
+            });
+        }
         // `docs/HUB.md` §4: a stolen token and the real one cannot both
-        // survive. A retired refresh token presented with the right key is
-        // what two holders of that key and of this token's line of descent
-        // look like, and nothing here can tell which of them is the instance.
-        // So neither keeps anything: every live row goes, the newest pair
-        // included, and the instance pairs again. There is no grace window
-        // for a client retrying a refresh whose answer it lost, which looks
-        // the same: a window is the time in which a copy still rotates, and
-        // the copy is the case this exists for.
+        // survive. A retired refresh token presented with the right key, and
+        // not as a lost-answer replay, is what two holders of that key and
+        // of this token's line of descent look like, and nothing here can
+        // tell which of them is the instance. So neither keeps anything:
+        // every live row goes, the newest pair included, and the instance
+        // pairs again.
         let retire = family
             .iter()
             .filter(|other| other.family_id == row.family_id && other.retired_at.is_none())
@@ -282,14 +296,103 @@ pub fn refresh_change(
     if is_expired(row, now) {
         return Ok(RefreshDecision::refused(RefreshRefusal::Expired));
     }
-    let rows = fresh.rows(row.family_id, &row.jkt, now)?;
     Ok(RefreshDecision {
         change: FamilyChange {
             retire: vec![row.id],
-            insert: vec![rows.access, rows.refresh],
+            insert: successor_rows(fresh, row, now)?,
         },
         verdict: Ok(()),
     })
+}
+
+/// The rows of `fresh`, issued at `now` for the presented refresh row
+/// `parent`: in its family, bound to its key, and naming it.
+fn successor_rows(
+    fresh: &FreshPair,
+    parent: &TokenRecord,
+    now: u64,
+) -> Result<Vec<NewToken>, ExpiryOutOfRange> {
+    let PairRows {
+        mut access,
+        mut refresh,
+    } = fresh.rows(parent.family_id, &parent.jkt, now)?;
+    access.issued_for = Some(parent.id);
+    refresh.issued_for = Some(parent.id);
+    Ok(vec![access, refresh])
+}
+
+/// The ids of the access and the refresh row issued for the retired refresh
+/// row `retired`, when presenting it again at `now` is a lost-answer replay
+/// that replaces them (decision 76); `None` when it is reuse.
+///
+/// A refresh whose answer never reached the client — a proxy's `502`, a
+/// reset, a timeout — left the Hub rotated and the client holding the token
+/// it sent. Without this, presenting that token again would end the family,
+/// so any lost answer would cost an honest instance its pairing. It is a
+/// replay, and not reuse, only if all of these hold:
+///
+/// - the token was retired at most [`LOST_ANSWER_GRACE_SECS`] before `now`
+///   and has not expired. The bound runs from the retirement, by Postgres's
+///   clock, to `now`, by the caller's, as the expiry filter of
+///   [`rotate_family`](crate::store::tokens::rotate_family) does;
+/// - exactly one access and one refresh row in `family` name it as
+///   [`issued_for`](TokenRecord::issued_for), both live. A live successor
+///   means nothing has rotated past it, so it is the family's most recently
+///   rotated token: an older one's successor is retired, and a pairing that
+///   replaced this one retired every row of the key;
+/// - its successor refresh row is the family's only live refresh row, so
+///   the pair it would replace is the family's live pair;
+/// - neither successor has been used: the access row was never admitted
+///   ([`used_at`](TokenRecord::used_at)), and the refresh row, being live,
+///   was never presented with this key.
+///
+/// The key was checked before this is asked, and it is what makes the
+/// window safe to open. A copy of a refresh token is worth nothing without
+/// the device key; a thief holding both, presenting the token after the
+/// instance used its pair, meets a used pair and ends the family as reuse
+/// always has. One that presents it before replaces the instance's pair
+/// instead, and the instance's next refresh, of the refresh token it was
+/// sent, is then a retired token with no successor: reuse. Either way two
+/// holders do not both keep a line of descent past the next refresh.
+///
+/// A replay's pair names the replayed token, so the window stays where its
+/// first retirement put it however often it is replayed, and the pair it
+/// replaces, retired with no successor, is reuse if it is ever presented.
+fn lost_answer_successor(
+    family: &[TokenRecord],
+    retired: &TokenRecord,
+    now: u64,
+) -> Option<[Uuid; 2]> {
+    let retired_at = retired.retired_at?;
+    let last_good = retired_at
+        .unix_timestamp()
+        .checked_add(i64::try_from(LOST_ANSWER_GRACE_SECS).ok()?)?;
+    if i64::try_from(now).map_or(true, |now| now > last_good) || is_expired(retired, now) {
+        return None;
+    }
+    let live = |row: &&TokenRecord| row.family_id == retired.family_id && row.retired_at.is_none();
+    let successors: Vec<&TokenRecord> = family
+        .iter()
+        .filter(live)
+        .filter(|row| row.issued_for == Some(retired.id))
+        .collect();
+    let [first, second] = successors.as_slice() else {
+        return None;
+    };
+    let (access, refresh) = match (first.kind, second.kind) {
+        (TokenKind::Access, TokenKind::Refresh) => (first, second),
+        (TokenKind::Refresh, TokenKind::Access) => (second, first),
+        _ => return None,
+    };
+    let live_refresh = family
+        .iter()
+        .filter(live)
+        .filter(|row| row.kind == TokenKind::Refresh)
+        .count();
+    if live_refresh != 1 || access.used_at.is_some() || refresh.used_at.is_some() {
+        return None;
+    }
+    Some([access.id, refresh.id])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -546,6 +649,8 @@ mod tests {
             jkt: JKT.to_owned(),
             expires_at: at(expires as i64),
             retired_at: None,
+            used_at: None,
+            issued_for: None,
         }
     }
 
@@ -891,6 +996,176 @@ mod tests {
         let decision = presenting(&family, 1, JKT, REFRESH_EXPIRES + 1);
         assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
         assert_eq!(decision.change.retire, ids(&[2]));
+    }
+
+    /// Row `row`, issued by presenting row `parent`.
+    fn issued_for(parent: u8, row: TokenRecord) -> TokenRecord {
+        TokenRecord {
+            issued_for: Some(Uuid::from_u128(parent.into())),
+            ..row
+        }
+    }
+
+    fn used(row: TokenRecord) -> TokenRecord {
+        TokenRecord {
+            used_at: Some(at(NOW as i64 + 1)),
+            ..row
+        }
+    }
+
+    /// A family whose refresh token 2 was rotated at `NOW` into the pair 3
+    /// and 4, with the pairing's access token 1 still live.
+    fn rotated_at_now() -> Vec<TokenRecord> {
+        vec![
+            record(1, TokenKind::Access),
+            retired(record(2, TokenKind::Refresh)),
+            issued_for(2, record(3, TokenKind::Access)),
+            issued_for(2, record(4, TokenKind::Refresh)),
+        ]
+    }
+
+    #[test]
+    fn a_replay_inside_the_grace_of_a_pair_nobody_used_replaces_that_pair() {
+        let family = rotated_at_now();
+
+        for now in [NOW, NOW + 1, NOW + 120] {
+            let decision = presenting(&family, 2, JKT, now);
+
+            assert_eq!(decision.verdict, Ok(()), "{now}");
+            assert_eq!(decision.change.retire, ids(&[3, 4]), "{now}");
+            let [access, refresh] = decision.change.insert.as_slice() else {
+                panic!("{decision:?}");
+            };
+            assert_eq!(access.kind, TokenKind::Access);
+            assert_eq!(access.hash, TokenHash::digest(&bytes()));
+            assert_eq!(access.expires_at, at((now + 900) as i64));
+            assert_eq!(refresh.kind, TokenKind::Refresh);
+            assert_eq!(refresh.hash, TokenHash::digest(&other_bytes()));
+            for row in [access, refresh] {
+                assert_eq!(row.family_id, Uuid::from_u128(7));
+                assert_eq!(row.jkt, JKT);
+                assert_eq!(row.issued_for, Some(Uuid::from_u128(2)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotation_names_the_token_it_rotated_in_both_rows_it_issues() {
+        let family = [record(1, TokenKind::Access), record(2, TokenKind::Refresh)];
+        let decision = presenting(&family, 2, JKT, NOW);
+        assert_eq!(decision.verdict, Ok(()));
+        for row in &decision.change.insert {
+            assert_eq!(row.issued_for, Some(Uuid::from_u128(2)), "{row:?}");
+        }
+        let rows = pair().rows(Uuid::from_u128(7), JKT, NOW).unwrap();
+        assert_eq!(
+            (rows.access.issued_for, rows.refresh.issued_for),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_replay_after_the_grace_is_reuse() {
+        let family = rotated_at_now();
+        for now in [NOW + 121, NOW + 900, REFRESH_EXPIRES + 1, u64::MAX] {
+            let decision = presenting(&family, 2, JKT, now);
+            assert_eq!(decision.verdict, Err(RefreshRefusal::Reused), "{now}");
+            assert_eq!(decision.change.retire, ids(&[1, 3, 4]), "{now}");
+            assert!(decision.change.insert.is_empty(), "{now}");
+        }
+    }
+
+    #[test]
+    fn a_replay_once_the_successor_access_token_was_admitted_is_reuse() {
+        let mut family = rotated_at_now();
+        family[2] = used(family[2].clone());
+
+        let decision = presenting(&family, 2, JKT, NOW + 30);
+
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+        assert_eq!(decision.change.retire, ids(&[1, 3, 4]));
+        assert!(decision.change.insert.is_empty(), "{decision:?}");
+    }
+
+    #[test]
+    fn a_replay_once_the_successor_refresh_token_was_presented_is_reuse() {
+        let rotated_again = [
+            record(1, TokenKind::Access),
+            retired(record(2, TokenKind::Refresh)),
+            issued_for(2, record(3, TokenKind::Access)),
+            retired(issued_for(2, record(4, TokenKind::Refresh))),
+            issued_for(4, record(5, TokenKind::Access)),
+            issued_for(4, record(6, TokenKind::Refresh)),
+        ];
+        let decision = presenting(&rotated_again, 2, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+        assert_eq!(decision.change.retire, ids(&[1, 3, 5, 6]));
+
+        let mut marked = rotated_at_now();
+        marked[3] = used(marked[3].clone());
+        let decision = presenting(&marked, 2, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+    }
+
+    /// Token 0 was rotated into 2, and 2 into the live pair: 0 is not the
+    /// most recently rotated token, whatever its age. Nor is a pair a replay
+    /// replaced, which has no successor.
+    #[test]
+    fn a_retired_token_older_than_the_most_recently_rotated_one_is_reuse() {
+        let family = [
+            retired(record(0, TokenKind::Refresh)),
+            issued_for(0, record(1, TokenKind::Access)),
+            retired(issued_for(0, record(2, TokenKind::Refresh))),
+            issued_for(2, record(3, TokenKind::Access)),
+            issued_for(2, record(4, TokenKind::Refresh)),
+        ];
+        let decision = presenting(&family, 0, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+        assert_eq!(decision.change.retire, ids(&[1, 3, 4]));
+
+        let replaced = [
+            record(1, TokenKind::Access),
+            retired(record(2, TokenKind::Refresh)),
+            retired(issued_for(2, record(3, TokenKind::Access))),
+            retired(issued_for(2, record(4, TokenKind::Refresh))),
+            issued_for(2, record(5, TokenKind::Access)),
+            issued_for(2, record(6, TokenKind::Refresh)),
+        ];
+        let decision = presenting(&replaced, 4, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+        assert_eq!(decision.change.retire, ids(&[1, 5, 6]));
+    }
+
+    #[test]
+    fn a_replay_whose_successor_is_not_the_familys_only_live_pair_is_reuse() {
+        let mut half = rotated_at_now();
+        half.remove(2);
+        let decision = presenting(&half, 2, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+
+        let mut beside = rotated_at_now();
+        beside.push(record(5, TokenKind::Refresh));
+        let decision = presenting(&beside, 2, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
+        assert_eq!(decision.change.retire, ids(&[1, 3, 4, 5]));
+    }
+
+    #[test]
+    fn a_replay_with_another_keys_proof_is_a_key_mismatch_and_writes_nothing() {
+        let family = rotated_at_now();
+        for jkt in [OTHER_JKT, "", &JKT[..42]] {
+            let decision = presenting(&family, 2, jkt, NOW + 30);
+            assert_refused_with_nothing_to_write(&decision, RefreshRefusal::KeyMismatch);
+        }
+    }
+
+    #[test]
+    fn a_replay_of_a_token_that_has_since_expired_is_reuse() {
+        let mut family = rotated_at_now();
+        family[1].expires_at = at(NOW as i64 + 30);
+        assert_eq!(presenting(&family, 2, JKT, NOW + 29).verdict, Ok(()));
+        let decision = presenting(&family, 2, JKT, NOW + 30);
+        assert_eq!(decision.verdict, Err(RefreshRefusal::Reused));
     }
 
     #[test]

@@ -18,12 +18,11 @@ use super::postgres::PostgresStore;
 use super::session::{self, Limits};
 use super::{MAX_MESSAGE_BYTES, PING_INTERVAL_SECS, PONG_DEADLINE_SECS};
 use crate::auth::handlers::{header_text, unix_now, ApiError};
-use crate::pairing::access::{self, refusal};
+use crate::pairing::access::{self, refusal, AccessStore, PostgresAccess};
 use crate::pairing::dpop::Expected;
 use crate::pairing::handlers::one_proof;
 use crate::routes::AppState;
-use crate::store::tokens::{self, TokenHash, TokenRecord};
-use crate::store::{device_keys, InstanceId, StoreError, UserId};
+use crate::store::InstanceId;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
@@ -32,7 +31,6 @@ use axum::extract::State;
 use axum::http::header::AUTHORIZATION;
 use axum::http::HeaderMap;
 use axum::response::Response;
-use std::future::Future;
 use std::time::Duration;
 
 pub use crate::pairing::access::Admission;
@@ -46,35 +44,19 @@ const SOCKET_METHOD: &str = "GET";
 ///
 /// `htu` is the `https` spelling, though the client dials `wss`: it is built
 /// by [`access::htu`], and there is one spelling of it.
-pub async fn admitted<T, TF, I, IF>(
+pub async fn admitted(
     state: &AppState,
     authorization: Option<&str>,
     proof: Option<&str>,
     now: u64,
-    find_token: T,
-    instance_of_key: I,
-) -> Result<Admission, ApiError>
-where
-    T: FnOnce(TokenHash) -> TF,
-    TF: Future<Output = Result<Option<TokenRecord>, StoreError>>,
-    I: FnOnce(UserId, String) -> IF,
-    IF: Future<Output = Result<Option<InstanceId>, StoreError>>,
-{
+    store: &impl AccessStore,
+) -> Result<Admission, ApiError> {
     let htu = access::htu(state, SOCKET_PATH);
     let expected = Expected {
         htm: SOCKET_METHOD,
         htu: &htu,
     };
-    access::admitted(
-        state,
-        authorization,
-        proof,
-        &expected,
-        now,
-        find_token,
-        instance_of_key,
-    )
-    .await
+    access::admitted(state, authorization, proof, &expected, now, store).await
 }
 
 /// One connection's entry in the registry, given up when this is dropped.
@@ -132,8 +114,7 @@ async fn opened(
         header_text(headers, AUTHORIZATION),
         one_proof(headers),
         unix_now(),
-        |hash| async move { tokens::find_token_by_hash(db, &hash).await },
-        |user, jkt| async move { device_keys::instance_of_key(user, db, &jkt).await },
+        &PostgresAccess(db),
     )
     .await?;
     let upgrade = upgrade.map_err(|_| ApiError::INVALID_REQUEST)?;

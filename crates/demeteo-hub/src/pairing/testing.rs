@@ -20,11 +20,12 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::access::AccessStore;
 use super::grant::{FamilyChange, FreshPair};
 use crate::auth::challenge::base64url_encode;
 use crate::auth::cose::P256Point;
 use crate::store::tokens::{TokenHash, TokenRecord};
-use crate::store::UserId;
+use crate::store::{InstanceId, StoreError, UserId};
 
 pub struct SoftDeviceKey {
     key_pair: EcdsaKeyPair,
@@ -208,7 +209,61 @@ impl MemoryFamily {
                 jkt: new.jkt.clone(),
                 expires_at: new.expires_at,
                 retired_at: None,
+                used_at: None,
+                issued_for: new.issued_for,
             });
         }
+    }
+
+    /// Records the access token whose hash is `hash` as admitted at `now`,
+    /// as [`mark_first_use`](crate::store::tokens::mark_first_use) does: once,
+    /// and only while it is unretired. Answers whether it was unretired.
+    pub fn mark_used(&mut self, hash: &TokenHash, now: u64) -> bool {
+        let at = i64::try_from(now)
+            .ok()
+            .and_then(|now| OffsetDateTime::from_unix_timestamp(now).ok());
+        let Some(at) = at else {
+            panic!("memory family: {now} is not a time a row can hold");
+        };
+        let Some(row) = self.rows.iter_mut().find(|row| row.hash == *hash) else {
+            return false;
+        };
+        if row.retired_at.is_some() {
+            return false;
+        }
+        row.used_at.get_or_insert(at);
+        true
+    }
+}
+
+/// An [`AccessStore`] over rows a test holds: tokens read from `tokens`, the
+/// instance of a key from `instance_of_key`. A first use is answered by
+/// whether the row is still unretired and is not recorded, so a test that
+/// judges admission alone needs no mutable family;
+/// [`MemoryFamily::mark_used`] is the record where one matters.
+pub struct FamilyAccess<'a, I> {
+    pub tokens: &'a MemoryFamily,
+    pub instance_of_key: I,
+}
+
+impl<I> AccessStore for FamilyAccess<'_, I>
+where
+    I: Fn(UserId, &str) -> Option<InstanceId> + Sync,
+{
+    async fn find_token(&self, hash: TokenHash) -> Result<Option<TokenRecord>, StoreError> {
+        Ok(self.tokens.find(&hash).cloned())
+    }
+
+    async fn instance_of_key(
+        &self,
+        user: UserId,
+        jkt: String,
+    ) -> Result<Option<InstanceId>, StoreError> {
+        Ok((self.instance_of_key)(user, &jkt))
+    }
+
+    async fn mark_first_use(&self, _: UserId, id: Uuid) -> Result<bool, StoreError> {
+        let row = self.tokens.rows().iter().find(|row| row.id == id);
+        Ok(row.is_some_and(|row| row.retired_at.is_none()))
     }
 }
