@@ -417,6 +417,7 @@ mod tests {
             family_id,
             jkt: jkt.to_owned(),
             expires_at: OffsetDateTime::UNIX_EPOCH,
+            issued_for: None,
         }
     }
 

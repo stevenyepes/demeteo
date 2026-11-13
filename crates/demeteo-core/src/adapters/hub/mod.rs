@@ -547,10 +547,13 @@ impl HubPairing {
     }
 
     /// Rotates the stored refresh token for a new access token. One `/token`
-    /// call, never retried, made under the refresh lock: a second caller
-    /// waits and then presents the token this one stored. The rotated
+    /// call, never retried here, made under the refresh lock: a second
+    /// caller waits and then presents the token this one stored. The rotated
     /// refresh token is in the keyring before the access token is held or
-    /// returned; if that write fails the access token is dropped with it.
+    /// returned; if that write fails the access token is dropped with it. A
+    /// call with no answer writes nothing, so the token it presented is
+    /// still stored for the one replay the socket supervisor may send
+    /// (decision 76).
     ///
     /// A missing endpoint, pairing, device key or refresh token is
     /// [`RefreshEnd::Refused`] with nothing sent.

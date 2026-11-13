@@ -15,7 +15,9 @@ use demeteo_hub::auth::testing::{answered, lazy_state, serve};
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::pairing::grant::{FamilyChange, FreshPair, TokenSecret};
 use demeteo_hub::pairing::signing_key::SigningKey;
-use demeteo_hub::pairing::testing::{claims, verifies_ed25519, MemoryFamily, SoftDeviceKey};
+use demeteo_hub::pairing::testing::{
+    claims, verifies_ed25519, FamilyAccess, MemoryFamily, SoftDeviceKey,
+};
 use demeteo_hub::ports::{KeyService, KeyServiceError};
 use demeteo_hub::protocol::{
     Hello, RefusalReason, RequestOutcome, RequestPayload, RequestResult, RunEvent, RunEventKind,
@@ -36,13 +38,12 @@ use demeteo_hub::startup;
 use demeteo_hub::store::requests::{
     NewRequest, QueuedRequest, RequestId, RequestState, RequestStatus,
 };
-use demeteo_hub::store::tokens::TokenHash;
 use demeteo_hub::store::{InstanceId, StoreError, UserId};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::future::{ready, Future};
+use std::future::Future;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -345,22 +346,22 @@ impl Paired {
     /// client is sent in its place. The two reads answer what the rows say
     /// and nothing else, so a token or a key nobody wrote is not found.
     async fn answer(&self, upgrade: &Upgrade) -> Result<Admission, (u16, Value)> {
-        let find_token =
-            |hash: TokenHash| ready(Ok::<_, StoreError>(self.tokens.find(&hash).cloned()));
-        let instance_of_key = |user: UserId, jkt: String| {
-            let held = self
-                .device_keys
-                .iter()
-                .find(|(owner, key, _)| *owner == user && *key == jkt);
-            ready(Ok::<_, StoreError>(held.map(|(_, _, instance)| *instance)))
+        let store = FamilyAccess {
+            tokens: &self.tokens,
+            instance_of_key: |user: UserId, jkt: &str| {
+                let held = self
+                    .device_keys
+                    .iter()
+                    .find(|(owner, key, _)| *owner == user && *key == jkt);
+                held.map(|(_, _, instance)| *instance)
+            },
         };
         let outcome = admitted(
             &self.state,
             upgrade.authorization.as_deref(),
             upgrade.proof.as_deref(),
             upgrade.now,
-            find_token,
-            instance_of_key,
+            &store,
         )
         .await;
         match outcome {

@@ -13,13 +13,12 @@ use super::verdict::{
     window_verdict, TokenRefusal,
 };
 use crate::auth::handlers::{header_text, store_failed, unix_now, ApiError};
-use crate::pairing::access::{self, refusal, Admission};
+use crate::pairing::access::{self, refusal, Admission, PostgresAccess};
 use crate::pairing::dpop::Expected;
 use crate::pairing::handlers::one_proof;
 use crate::ports::{GitTokenMinter, InstallationToken};
 use crate::routes::AppState;
 use crate::socket::requests::named_request;
-use crate::store::{device_keys, tokens};
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL};
@@ -112,8 +111,7 @@ async fn issued(
         one_proof(headers),
         &expected,
         now,
-        |hash| async move { tokens::find_token_by_hash(db, &hash).await },
-        |user, jkt| async move { device_keys::instance_of_key(user, db, &jkt).await },
+        &PostgresAccess(db),
     )
     .await?;
     let store = PostgresGitTokens::new(db.clone());

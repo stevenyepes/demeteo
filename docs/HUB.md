@@ -173,7 +173,7 @@ Hub ─────────────▶ access token (15 min, bound to th
 | `/token` | a DPoP proof on every request (RFC 9449), each proof accepted once |
 | Access token | **15 minutes**, bound to the device-key thumbprint. It is opaque — 32 random bytes — so the binding is the row the Hub holds for its hash, not a claim inside it. It is presented with a fresh DPoP proof on every use |
 | Refresh token | **rotating**: each use returns a new pair and retires the old refresh token. It lives 30 days, a carried default (§11) |
-| Reuse detection | a retired refresh token presented again **revokes the whole pairing** — a stolen token and the real one cannot both survive. There is no grace window |
+| Reuse detection | a retired refresh token presented again **revokes the whole pairing** — a stolen token and the real one cannot both survive — unless it is a lost-answer replay: the most recently rotated token, within 120 seconds, of a pair nobody has used ([decision 76](DECISIONS.md#76--lost-answer-grace-on-hub-refresh-detail)) |
 
 ### `GET /authorize`
 
@@ -310,10 +310,17 @@ takes its turn on the device key the token is bound to, so that two refreshes of
 one key never run together, and requires, in this order, that the token exists,
 is a refresh token, is bound to the proof's key, has not been retired, and has
 not expired. A rotation retires the presented token and issues a new pair in the
-same family, bound to the same key; the access token issued with the old one
-stays good until its own expiry. A retired token presented again with the right
-key is reuse: every live token of the family is retired, the newest pair
-included, and that is committed although the answer is a refusal. A used refresh
+same family, bound to the same key, each row naming the token it was issued
+for; the access token issued with the old one stays good until its own expiry.
+A retired token presented again with the right key is a **lost-answer
+replay** when it was retired at most 120 seconds ago and the pair issued for it
+is the family's live pair and unused — its access token never admitted on a
+route, its refresh token never presented. The Hub retires that pair and
+answers a new one, as a rotation does
+([decision 76](DECISIONS.md#76--lost-answer-grace-on-hub-refresh-detail)).
+Any other retired token presented with the right key is reuse: every live token
+of the family is retired, the newest pair included, and that is committed
+although the answer is a refusal. A used refresh
 token is remembered until its own expiry and no longer: a rotation deletes the
 key's expired tokens as it commits, and one presented after that is an unknown
 token, refused with the same `invalid_grant`.
@@ -402,9 +409,10 @@ The key is looked up among that tenant's keys alone: a thumbprint another tenant
 holds is a first pairing here.
 
 **Rejected: refusing a key that is already paired.** Reuse detection retires a
-whole family, and a refresh whose answer was lost looks the same as a stolen one,
-so an honest desktop can find every token it holds retired. **Pairing again is the
-recovery**, and the only one: with a refusal that desktop would have no way back.
+whole family, and a refresh whose answer was lost, replayed outside the grace
+of decision 76 or after a second loss, looks the same as a stolen one, so an
+honest desktop can find every token it holds retired. **Pairing again is the
+recovery** from that: with a refusal that desktop would have no way back.
 
 ### Revocation
 
@@ -596,7 +604,10 @@ The Hub verifies the proof, remembers its `jti`, checks `ath`, and only then
 looks the token up: it must be an access token, bound to the key that made the
 proof, not retired and not expired, and that key must still belong to an
 instance. **The tenant and the instance a socket writes for come from that
-token's row and that key, and from nothing the instance says afterwards.**
+token's row and that key, and from nothing the instance says afterwards.** The
+first admission of a token records it as used, which is what keeps a
+lost-answer replay from replacing its pair (§4); a token a replay retired before
+that record is refused like any retired token.
 
 A proof is spent by being presented, whatever becomes of the upgrade it came
 with. A client that is refused makes a new proof, with a new `jti`, for its next
@@ -2736,6 +2747,7 @@ constant in [`pairing/mod.rs`](../crates/demeteo-hub/src/pairing/mod.rs).
 | Default | Value | What moving it changes |
 |---|---|---|
 | Refresh-token lifetime | 30 days | a desktop offline for longer must pair again |
+| Lost-answer grace | 120 seconds (`LOST_ANSWER_GRACE_SECS`) | how long after a rotation its token may be replayed for a lost answer, and how long a copy of it with the device key could replace an unused pair. The desktop's `REFRESH_REPLAY_GRACE_SECS` mirrors it |
 | Authorization-code lifetime | 60 seconds | how long the desktop has to redeem after the user approves |
 | Consent lifetime | 300 seconds | how long the approval page may sit open before its answer is `pairing_expired` |
 | DPoP proof skew | 60 seconds either side of the Hub's clock | how far a desktop's clock may drift, and how long a proof is remembered against replay |
@@ -2866,7 +2878,7 @@ is decided; each is what the desktop does today.
 |---|---|
 | `Displaced` | a `4002` close: redialling would displace the connection that displaced this one |
 | `NeedsRepair` | a refresh refused with `invalid_grant` |
-| `RefreshUncertain` | a refresh sent with no answer read: the Hub may have rotated the token, and presenting the old one again would revoke the family. The log names which way it went unanswered (`NoAnswer` in `verdict.rs`) |
+| `RefreshUncertain` | a refresh sent with no answer read, and its one replay ([decision 76](DECISIONS.md#76--lost-answer-grace-on-hub-refresh-detail)) unanswered too, or out of time: the Hub may have rotated the token, and presenting it past the grace would revoke the family. Each lost answer is logged with its cause (`NoAnswer` in `verdict.rs`) |
 | `ClockSkew` | a refresh whose proof the Hub refused for its time |
 | `ProtocolViolation` | a `1008` close |
 | `Unauthorized` | an upgrade `401` to an access token refreshed for that very attempt |
@@ -2875,7 +2887,8 @@ is decided; each is what the desktop does today.
 The numbers are constants in
 [`verdict.rs`](../crates/demeteo-core/src/domain/hub_socket/verdict.rs):
 a backoff of `2^attempt` seconds capped at 300 and scaled by a jitter in
-`[0.5, 1.0]`, reset by the first `CursorAck` of a session; 90 seconds of
+`[0.5, 1.0]`, reset by the first `CursorAck` of a session; one replay of an
+unanswered refresh, after that backoff cut to what is left of 120 seconds; 90 seconds of
 silence before a connection is dropped, mirroring the Hub's deadline above;
 128 rows read per page; and at most 256 events sent past the last ack.
 

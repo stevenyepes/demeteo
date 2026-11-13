@@ -183,7 +183,8 @@ pub struct RefreshCall {
 
 /// A `/token` refresh grant that answers each call with the next scripted
 /// outcome. A call with nothing left to answer it gets
-/// [`RefreshEnd::Unanswered`] ([`NoAnswer::ConnectionLost`]) — the outcome that stops a supervisor, so an
+/// [`RefreshEnd::Unanswered`] ([`NoAnswer::ConnectionLost`]) — the outcome
+/// that stops a supervisor once its one replay is answered the same, so an
 /// unscripted refresh cannot pass as a success — and is counted by
 /// [`Self::unscripted`], which a test asserts is `0`. It does not panic: the
 /// caller is usually a spawned task, whose panic the test would never see.

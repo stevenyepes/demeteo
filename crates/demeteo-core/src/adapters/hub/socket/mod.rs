@@ -4,7 +4,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::runtime::Handle;
@@ -14,8 +14,8 @@ use tokio::task::JoinHandle;
 use crate::domain::hub_pairing::{socket_dial_url, socket_url, SecretString};
 use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
-    after_close, after_refresh, backoff, resets_backoff, Reconnect, RefreshEnd, SocketEnd,
-    StopReason,
+    after_close, after_refresh, backoff, replay_wait, resets_backoff, Reconnect, RefreshEnd,
+    SocketEnd, StopReason,
 };
 use crate::ports::hub::{
     DialFailure, HarnessCatalogSource, HubRunKeys, HubSnapshotSource, HubSocketDialer,
@@ -186,7 +186,11 @@ pub struct SupervisorDeps {
 /// [`status::ConnectionCell`], and the reason it stops on is recorded
 /// before it returns, so whoever awaits the task finds it there.
 pub async fn supervise(deps: SupervisorDeps, mut stop: watch::Receiver<bool>) -> StopReason {
-    let mut supervisor = Supervisor { deps, attempt: 0 };
+    let mut supervisor = Supervisor {
+        deps,
+        attempt: 0,
+        unanswered: None,
+    };
     let reason = match supervisor.run(&mut stop).await {
         Err(reason) => reason,
         Ok(never) => match never {},
@@ -202,6 +206,12 @@ struct Supervisor {
     deps: SupervisorDeps,
     /// Backoffs since the last session [`resets_backoff`] counted.
     attempt: u32,
+    /// When the first request of a refresh that went unanswered left, and
+    /// whether it was sent again since. Held until a refresh is answered,
+    /// not per verdict: until then the stored refresh token is the one that
+    /// request presented, and a refresh that never left in between neither
+    /// moves the grace nor earns a second replay.
+    unanswered: Option<(Instant, bool)>,
 }
 
 impl Supervisor {
@@ -268,6 +278,7 @@ impl Supervisor {
         mut verdict: Reconnect,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Option<SecretString>, StopReason> {
+        let mut sent = Instant::now();
         loop {
             match verdict {
                 Reconnect::Stop(reason) => return Err(reason),
@@ -279,10 +290,21 @@ impl Supervisor {
                     self.back_off(stop).await?;
                     verdict = Reconnect::RefreshNow;
                 }
+                Reconnect::ReplayRefresh => {
+                    let (first_sent, replayed) = *self.unanswered.get_or_insert((sent, false));
+                    let wait = replay_wait(replayed, first_sent.elapsed(), self.next_backoff())?;
+                    self.wait(wait, stop).await?;
+                    self.unanswered = Some((first_sent, true));
+                    verdict = Reconnect::RefreshNow;
+                }
                 Reconnect::RefreshNow => {
                     self.record(ConnectionState::Reconnecting, None);
+                    sent = Instant::now();
                     match unless_stopped(stop, self.deps.tokens.refresh_access()).await? {
-                        Ok(token) => return Ok(Some(token)),
+                        Ok(token) => {
+                            self.unanswered = None;
+                            return Ok(Some(token));
+                        }
                         Err(end) => {
                             // `RefreshEnd` carries categories and Hub error
                             // codes only, never a token: see `HubPairingError`.
@@ -296,8 +318,20 @@ impl Supervisor {
     }
 
     async fn back_off(&mut self, stop: &mut watch::Receiver<bool>) -> Result<(), StopReason> {
+        let wait = self.next_backoff();
+        self.wait(wait, stop).await
+    }
+
+    fn next_backoff(&mut self) -> Duration {
+        backoff(self.attempt, (self.deps.jitter)())
+    }
+
+    async fn wait(
+        &mut self,
+        wait: Duration,
+        stop: &mut watch::Receiver<bool>,
+    ) -> Result<(), StopReason> {
         self.record(ConnectionState::Reconnecting, None);
-        let wait = backoff(self.attempt, (self.deps.jitter)());
         self.attempt = self.attempt.saturating_add(1);
         unless_stopped(stop, self.deps.sleeper.sleep(wait)).await
     }

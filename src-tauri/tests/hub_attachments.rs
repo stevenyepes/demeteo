@@ -33,7 +33,9 @@ use demeteo_hub::config::{Config, ConfigError};
 use demeteo_hub::pairing::access::Admission;
 use demeteo_hub::pairing::grant::{FreshPair, TokenSecret};
 use demeteo_hub::pairing::signing_key::SigningKey;
-use demeteo_hub::pairing::testing::{claims, verifies_ed25519, MemoryFamily, SoftDeviceKey};
+use demeteo_hub::pairing::testing::{
+    claims, verifies_ed25519, FamilyAccess, MemoryFamily, SoftDeviceKey,
+};
 use demeteo_hub::ports::{DataKey, KeyService, KeyServiceError};
 use demeteo_hub::protocol::{AttachmentRef, RequestOutcome, RequestPayload, Scope};
 use demeteo_hub::routes::{self, AppState};
@@ -43,12 +45,10 @@ use demeteo_hub::socket::requests::{self, OutcomeChange};
 use demeteo_hub::socket::testing::MemoryStore;
 use demeteo_hub::socket::REQUEST_TTL_SECS;
 use demeteo_hub::store::requests::{RequestId, RequestState};
-use demeteo_hub::store::tokens::TokenHash;
-use demeteo_hub::store::{InstanceId, StoreError, UserId};
+use demeteo_hub::store::{InstanceId, UserId};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::future::ready;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -998,11 +998,11 @@ impl Fetcher {
     async fn answer(&self, attachment_id: &str, proof: &str) -> Result<Admission, (u16, Value)> {
         let user = self.tokens.rows()[0].user_id;
         let jkt = self.key.thumbprint();
-        let find_token =
-            |hash: TokenHash| ready(Ok::<_, StoreError>(self.tokens.find(&hash).cloned()));
-        let instance_of_key = |owner: UserId, key: String| {
-            let held = (owner == user && key == jkt).then_some(self.instance);
-            ready(Ok::<_, StoreError>(held))
+        let store = FamilyAccess {
+            tokens: &self.tokens,
+            instance_of_key: |owner: UserId, key: &str| {
+                (owner == user && key == jkt).then_some(self.instance)
+            },
         };
         let authorization = format!("DPoP {}", self.token().text());
         let outcome = admitted(
@@ -1011,8 +1011,7 @@ impl Fetcher {
             Some(&authorization),
             Some(proof),
             NOW,
-            find_token,
-            instance_of_key,
+            &store,
         )
         .await;
         match outcome {
@@ -1220,22 +1219,13 @@ impl ServedHub {
     ) -> (u16, Vec<u8>) {
         let now = now_secs();
         let (user, instance) = (self.user, self.instance);
-        let find_token =
-            |hash: TokenHash| ready(Ok::<_, StoreError>(self.tokens.find(&hash).cloned()));
-        let instance_of_key = |owner: UserId, key: String| {
-            let held = (owner == user && key == self.jkt).then_some(instance);
-            ready(Ok::<_, StoreError>(held))
+        let store = FamilyAccess {
+            tokens: &self.tokens,
+            instance_of_key: |owner: UserId, key: &str| {
+                (owner == user && key == self.jkt).then_some(instance)
+            },
         };
-        let admitted = admitted(
-            &self.state,
-            id,
-            authorization,
-            proof,
-            now,
-            find_token,
-            instance_of_key,
-        )
-        .await;
+        let admitted = admitted(&self.state, id, authorization, proof, now, &store).await;
         let fetched = match admitted {
             Ok(admission) => {
                 fetch(
