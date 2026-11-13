@@ -55,6 +55,7 @@ function run(featureId: string, overrides: Partial<RunSummary> = {}): RunSummary
     stepId: 's-implement',
     stepTitle: 'Implement',
     tickets: { completed: 3, failed: 0, running: 1 },
+    instanceRemoved: false,
     ...overrides,
   };
 }

@@ -597,6 +597,34 @@ describe('HubTab', () => {
     expect(reportError).not.toHaveBeenCalled();
   });
 
+  it('says so when the Hub was not told of the disconnect, and not when it was', async () => {
+    hub(PAIRED, CONNECTED, {
+      hub_disconnect: () => ({
+        ...UNPAIRED,
+        hub_notice: { outcome: 'not_told', reason: 'the Hub did not answer in time' },
+      }),
+    });
+    const { unmount } = render(<HubTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect from Hub' }));
+    const confirm = screen.getByRole('alertdialog', { name: 'Confirm disconnect' });
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Disconnect' }));
+
+    const note = await screen.findByRole('status', { name: 'Hub not told' });
+    expect(within(note).getByText(/the Hub was not told/)).toBeInTheDocument();
+    expect(within(note).getByText('the Hub did not answer in time')).toBeInTheDocument();
+    unmount();
+
+    hub(PAIRED, CONNECTED, {
+      hub_disconnect: () => ({ ...UNPAIRED, hub_notice: { outcome: 'removed' } }),
+    });
+    render(<HubTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect from Hub' }));
+    const again = screen.getByRole('alertdialog', { name: 'Confirm disconnect' });
+    await userEvent.click(within(again).getByRole('button', { name: 'Disconnect' }));
+    await screen.findByLabelText('Hub URL');
+    expect(screen.queryByText(/the Hub was not told/)).not.toBeInTheDocument();
+  });
+
   it('offers disconnect on an incomplete pairing but not when unpaired', async () => {
     hub({ ...PAIRED, state: 'incomplete' }, NOT_RUNNING);
     const { unmount } = render(<HubTab />);

@@ -14,7 +14,8 @@ use demeteo_core::adapters::hub::HubPairing;
 use demeteo_core::application::hub_settings::save_hub_policy;
 use demeteo_core::domain::hub_pairing::device::{DevicePairing, DeviceTicket};
 use demeteo_core::domain::hub_pairing::runner_view::{HubStatusView, PairStateView};
-use demeteo_core::domain::hub_pairing::{HubPairingError, HubStatus};
+use demeteo_core::domain::hub_pairing::unpair::HubDisconnected;
+use demeteo_core::domain::hub_pairing::HubPairingError;
 use demeteo_core::domain::hub_request::log::MAX_LOG_PAGE;
 use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use serde::{Deserialize, Serialize};
@@ -120,7 +121,7 @@ fn status(hub: &HubControl) -> Result<HubStatusView, String> {
     })
 }
 
-async fn disconnect(hub: &HubControl) -> Result<HubStatus, String> {
+async fn disconnect(hub: &HubControl) -> Result<HubDisconnected, String> {
     pairing(hub)?.disconnect().await.map_err(|e| e.to_string())
 }
 

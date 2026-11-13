@@ -90,6 +90,10 @@ pub enum StopReason {
     /// clients of one instance would displace each other forever (docs/HUB.md
     /// §5 *Close codes*).
     Displaced,
+    /// Closed `4003`: the instance was removed on the Hub, its device key
+    /// revoked and its tokens retired, so every redial and refresh would be
+    /// refused. Only pairing again rejoins (docs/HUB.md §4 *Revocation*).
+    Removed,
     /// Closed `1008`: the Hub would refuse the same frame again.
     ProtocolViolation,
     /// A `401` to an access token issued for this very attempt.
@@ -121,6 +125,7 @@ pub fn after(end: SocketEnd) -> Reconnect {
         SocketEnd::Closed(Some(4001)) => Reconnect::RefreshNow,
         // Never redial: see `StopReason::Displaced`.
         SocketEnd::Closed(Some(4002)) => Reconnect::Stop(StopReason::Displaced),
+        SocketEnd::Closed(Some(4003)) => Reconnect::Stop(StopReason::Removed),
         SocketEnd::Closed(Some(1008)) => Reconnect::Stop(StopReason::ProtocolViolation),
         SocketEnd::Closed(_) | SocketEnd::Silent | SocketEnd::Unreachable => {
             Reconnect::AfterBackoff

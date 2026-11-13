@@ -3,6 +3,7 @@ import { runStatusMeta } from '../../../src/lib/runStatus';
 import { elapsedText } from '../lib/fleetSummary';
 import { routeHref } from '../lib/router';
 import { type ListedRun, ticketText } from '../lib/runsList';
+import { InstanceRemovedChip } from './InstanceRemoved';
 import { TONE_BAR } from './ToneCard';
 
 interface RunRowProps {
@@ -18,6 +19,7 @@ export function RunRow({ listed, now, selected }: RunRowProps) {
   const { run, gate, instanceLabel } = listed;
   const status = gate !== null ? 'awaiting_gate' : run.status;
   const meta = runStatusMeta(status);
+  const removed = run.instanceRemoved;
   const facts = [
     instanceLabel,
     run.projectName,
@@ -34,14 +36,15 @@ export function RunRow({ listed, now, selected }: RunRowProps) {
         selected ? 'border-accent-edge bg-accent-tint' : 'border-transparent hover:border-hairline hover:bg-white/5'
       }`}
     >
-      <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${TONE_BAR[meta.tone]}`} />
+      <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${TONE_BAR[removed ? 'slate' : meta.tone]}`} />
       {run.title !== null ? (
         <span className="text-sm font-medium text-slate-100 break-words">{run.title}</span>
       ) : (
         <span className="font-mono text-sm text-slate-200 break-all">{run.featureId}</span>
       )}
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Chip status={status}>{meta.label}</Chip>
+        {!(removed && status === 'running') && <Chip status={status}>{meta.label}</Chip>}
+        {removed && <InstanceRemovedChip />}
         <span className="font-mono text-xs text-slate-400 break-words">{facts.join(' · ')}</span>
       </span>
     </a>
@@ -50,6 +53,6 @@ export function RunRow({ listed, now, selected }: RunRowProps) {
 
 function timeText({ run, gate }: ListedRun, now: number): string | null {
   if (gate !== null) return `waiting ${elapsedText(gate.since, now)}`;
-  if (run.status === 'running') return run.startedAt === null ? null : elapsedText(run.startedAt, now);
+  if (run.status === 'running' && !run.instanceRemoved) return run.startedAt === null ? null : elapsedText(run.startedAt, now);
   return `updated ${elapsedText(run.updatedAt, now)} ago`;
 }

@@ -155,6 +155,21 @@ pub fn device_approval_challenge(
     .map(|pre_image| digest(&pre_image))
 }
 
+/// The challenge a passkey signs to remove `instance` from the Hub, under
+/// `binding`'s request id and expiry. `binding.instance_id` is not read: the
+/// instance is named by its own id, spelled as a gate challenge spells it.
+pub fn instance_removal_challenge(
+    binding: &ChallengeBinding,
+    instance: InstanceId,
+) -> Result<[u8; 32], EncodeError> {
+    demeteo_hub_protocol::instance_removal_challenge(
+        &instance.0.to_string(),
+        &binding.request_id,
+        binding.expires_at,
+    )
+    .map(|pre_image| digest(&pre_image))
+}
+
 fn digest(pre_image: &[u8]) -> [u8; 32] {
     Sha256::digest(pre_image).into()
 }
@@ -174,6 +189,7 @@ pub fn base64url_decode(text: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::auth::cose;
+    use uuid::Uuid;
 
     const REQUEST_ID: &str = "AAECAwQFBgcICQoLDA0ODw";
     const EXPIRES_AT: u64 = 1_700_000_300;
@@ -374,6 +390,32 @@ mod tests {
                 Some("rework the parser"),
             )
         );
+    }
+
+    /// The instance is spelled in its hyphenated form, as everywhere else an
+    /// instance id is signed, and each input moves the digest.
+    #[test]
+    fn the_removal_challenge_binds_the_instance_and_the_binding() {
+        let pre_image =
+            demeteo_hub_protocol::instance_removal_challenge(INSTANCE, REQUEST_ID, EXPIRES_AT)
+                .unwrap();
+        let expected: [u8; 32] = Sha256::digest(&pre_image).into();
+        let base = instance_removal_challenge(&binding(), instance());
+        assert_eq!(base, Ok(expected));
+
+        let mut later = binding();
+        later.expires_at += 1;
+        let mut other_request = binding();
+        other_request.request_id.push('x');
+        let other_instance = InstanceId(Uuid::from_u128(1));
+        for variant in [
+            instance_removal_challenge(&later, instance()),
+            instance_removal_challenge(&other_request, instance()),
+            instance_removal_challenge(&binding(), other_instance),
+        ] {
+            assert!(variant.is_ok());
+            assert_ne!(variant, base);
+        }
     }
 
     #[test]

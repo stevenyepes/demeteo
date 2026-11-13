@@ -463,6 +463,29 @@ pub async fn mark_request_expired(
     Ok(done.rows_affected() > 0)
 }
 
+/// Marks every request still `queued` for `instance` as `expired`, whatever
+/// its `expires_at`: what removing the instance does to its queue
+/// ([`remove_instance`](super::instances::remove_instance)), since nothing
+/// will deliver one again. An attachment bound to one is left to the sweep,
+/// which takes it at the request's own expiry, as for any expired request.
+pub(super) async fn expire_queued_requests(
+    user: UserId,
+    db: impl PgExecutor<'_>,
+    instance: InstanceId,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "UPDATE instance_requests SET status = $3 \
+         WHERE user_id = $1 AND instance_id = $2 AND status = $4",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(RequestStatus::Expired.as_str())
+    .bind(RequestStatus::Queued.as_str())
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// Shows `decide` the request as it stands and writes what it answers:
 /// nothing for `None`, and for an outcome the status `answered`, the outcome
 /// and `now`, in one statement because migration 0006 accepts those columns

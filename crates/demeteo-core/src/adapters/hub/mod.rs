@@ -41,6 +41,7 @@ use crate::domain::hub_pairing::device::{
 };
 use crate::domain::hub_pairing::keyring_names::hub_keyring_account;
 use crate::domain::hub_pairing::pkce::s256_challenge;
+use crate::domain::hub_pairing::unpair::HubDisconnected;
 use crate::domain::hub_pairing::{
     authorize_url, check_pairing_origin, consent_machine, hub_origin, hub_status, token_url,
     AuthorizeRequest, HubMachine, HubPairingError, HubSecret, HubStatus, PairingAnswer,
@@ -54,6 +55,7 @@ use crate::error::AppError;
 use crate::ports::hub::{
     BrowserLauncher, HubAttachmentFetcher, HubDeviceEndpoint, HubGitTokenFetcher, HubPinRepository,
     HubPolicyReader, HubRefreshEndpoint, HubRequestHandler, HubSecretStore, HubTokenEndpoint,
+    HubUnpairEndpoint,
 };
 use crate::shared::time::now_secs;
 use crate::state::AppVersion;
@@ -80,6 +82,7 @@ pub mod socket;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod token_client;
+mod unpair;
 
 pub struct HubPairing {
     token: Arc<dyn HubTokenEndpoint>,
@@ -100,6 +103,7 @@ pub struct HubPairing {
     /// either takes it (see [`HubPairing::begin_device_pairing`]).
     in_flight: Arc<tokio::sync::Mutex<()>>,
     device: Option<Arc<dyn HubDeviceEndpoint>>,
+    unpair: Option<Arc<dyn HubUnpairEndpoint>>,
     device_sleeper: Arc<dyn Sleeper>,
     device_flow: std::sync::Mutex<DeviceFlow>,
     refresher: Refresher,
@@ -185,6 +189,7 @@ impl HubPairing {
             instance_fallback: DESKTOP_INSTANCE_FALLBACK,
             in_flight: Arc::default(),
             device: None,
+            unpair: None,
             device_sleeper: Arc::new(TokioSleeper),
             device_flow: std::sync::Mutex::new(DeviceFlow {
                 state: DevicePairing::Idle,
@@ -208,6 +213,12 @@ impl HubPairing {
     /// Without one, [`Self::refresh_access`] fails rather than refreshing.
     pub fn with_refresh_endpoint(mut self, endpoint: Arc<dyn HubRefreshEndpoint>) -> Self {
         self.refresher.endpoint = Some(endpoint);
+        self
+    }
+
+    /// Without one, [`Self::disconnect`] tells the Hub nothing, and says so.
+    pub fn with_unpair_endpoint(mut self, endpoint: Arc<dyn HubUnpairEndpoint>) -> Self {
+        self.unpair = Some(endpoint);
         self
     }
 
@@ -737,12 +748,17 @@ impl HubPairing {
         ))
     }
 
-    /// Forgets the Hub on this machine only: both keyring entries, then the
-    /// pins. A pending device pairing is cancelled first. Refused with
+    /// Asks the Hub to remove this instance, then forgets the Hub on this
+    /// machine: both keyring entries, then the pins. A pending device
+    /// pairing is cancelled first. Refused with
     /// [`HubPairingError::PairingInProgress`] while a `pair` is waiting on
-    /// the browser; it can be retried once that ends. The Hub has no revoke route, so the instance stays listed there
-    /// and its refresh family lapses on its own within 30 days. Idempotent,
-    /// and it touches no table but the pins — runs carry on unaffected.
+    /// the browser; it can be retried once that ends. Idempotent, and it
+    /// touches no table but the pins — runs carry on unaffected.
+    ///
+    /// Telling the Hub is best effort ([`crate::domain::hub_pairing::unpair`]):
+    /// whatever it answers, or if it does not answer within
+    /// [`unpair::UNPAIR_BUDGET`], the local delete goes ahead, and the
+    /// answer says whether the Hub was told.
     ///
     /// The device key goes too, so a later pairing proves a fresh one.
     ///
@@ -758,13 +774,16 @@ impl HubPairing {
     ///    waited is stopped too: `pair` starts it under the same lock.
     /// 3. The socket task is awaited, so nothing it owns outlives the call,
     ///    and the connection it recorded reads as not running.
-    /// 4. Under the lock still, the access token is dropped, both keyring
+    /// 4. Under the lock still, the Hub is told, refreshing the access token
+    ///    first if none is held: the lock makes this the stored refresh
+    ///    token's only writer while it does.
+    /// 5. Under the lock still, the access token is dropped, both keyring
     ///    entries are deleted and the pins cleared.
-    /// 5. The status is read back.
+    /// 6. The status is read back.
     ///
     /// Taking the lock before raising the stop would wait on a refresh the
     /// endpoint may never answer.
-    pub async fn disconnect(&self) -> Result<HubStatus, HubPairingError> {
+    pub async fn disconnect(&self) -> Result<HubDisconnected, HubPairingError> {
         self.cancel_device_pairing().await;
         let _in_flight = self
             .in_flight
@@ -778,6 +797,7 @@ impl HubPairing {
         }
         self.connection
             .update(|facts| *facts = ConnectionFacts::default());
+        let hub_notice = unpair::tell_hub(&self.refresher, self.unpair.as_deref()).await;
 
         let Refresher {
             pins,
@@ -793,7 +813,10 @@ impl HubPairing {
                 .map_err(storage)?;
         }
         pins.clear().map_err(storage)?;
-        self.status()
+        Ok(HubDisconnected {
+            status: self.status()?,
+            hub_notice: Some(hub_notice),
+        })
     }
 
     /// The stored key, or a new one written to the keyring before it is
@@ -840,11 +863,17 @@ impl Refresher {
     }
 
     async fn refresh_access(&self) -> Result<SecretString, RefreshEnd> {
+        let _refresh_lock = self.lock.lock().await;
+        self.refresh_under_lock().await
+    }
+
+    /// [`Self::refresh_access`] for a caller that already holds the refresh
+    /// lock, as `disconnect` does while it tells the Hub.
+    async fn refresh_under_lock(&self) -> Result<SecretString, RefreshEnd> {
         let endpoint = self
             .endpoint
             .as_ref()
             .ok_or_else(|| not_paired("no refresh endpoint is configured"))?;
-        let _refresh_lock = self.lock.lock().await;
 
         let origin = self
             .pins

@@ -27,8 +27,8 @@ mod scope;
 mod snapshot;
 
 pub use canonical::{
-    device_approval_challenge, endorsement_challenge, gate_challenge, revocation_challenge,
-    EncodeError,
+    device_approval_challenge, endorsement_challenge, gate_challenge, instance_removal_challenge,
+    revocation_challenge, EncodeError,
 };
 pub use message::{
     CursorAck, FailureReason, Hello, RefusalReason, RequestHeader, RequestOutcome, RequestResult,

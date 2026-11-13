@@ -74,6 +74,7 @@ const WIRE_RUN = {
   step_id: 'review',
   step_title: 'Review gate',
   tickets: { completed: 1, failed: 0, running: 0 },
+  instance_removed: false,
 };
 
 const WORKFLOW = {
@@ -121,6 +122,7 @@ const WIRE_DETAIL = {
   pending_gates: [WIRE_PENDING_GATE],
   events: [WIRE_EVENT],
   git_token_problem: 'github_app_not_installed',
+  instance_removed: false,
 };
 
 const DETAIL_PATH = `/v1/instances/${INSTANCE_ID}/runs/f-1`;
@@ -143,7 +145,14 @@ describe('listRuns', () => {
       get('/v1/runs', {
         runs: [
           WIRE_RUN,
-          { ...WIRE_RUN, instance_id: OTHER_ID, feature_id: 'f-2', status: 'cancelled', started_at: null },
+          {
+            ...WIRE_RUN,
+            instance_id: OTHER_ID,
+            feature_id: 'f-2',
+            status: 'cancelled',
+            started_at: null,
+            instance_removed: true,
+          },
         ],
       }),
     ]);
@@ -163,6 +172,7 @@ describe('listRuns', () => {
         stepId: 'review',
         stepTitle: 'Review gate',
         tickets: { completed: 1, failed: 0, running: 0 },
+        instanceRemoved: false,
       },
       {
         instanceId: OTHER_ID,
@@ -178,6 +188,7 @@ describe('listRuns', () => {
         stepId: 'review',
         stepTitle: 'Review gate',
         tickets: { completed: 1, failed: 0, running: 0 },
+        instanceRemoved: true,
       },
     ]);
     expect(pending).toEqual([]);
@@ -212,6 +223,7 @@ describe('listRuns', () => {
     ['no step_title', { ...WIRE_RUN, step_title: undefined }],
     ['no tickets', { ...WIRE_RUN, tickets: undefined }],
     ['a string ticket count', { ...WIRE_RUN, tickets: { completed: '1', failed: 0, running: 0 } }],
+    ['a string instance_removed', { ...WIRE_RUN, instance_removed: 'false' }],
     ['null', null],
   ])('refuses a run with %s', async (_, run) => {
     stubFetch([get('/v1/runs', { runs: [run] })]);
@@ -261,6 +273,7 @@ describe('getRunDetail', () => {
         },
       ],
       gitTokenProblem: 'github_app_not_installed',
+      instanceRemoved: false,
     });
     expect(pending).toEqual([]);
   });
@@ -334,6 +347,8 @@ describe('getRunDetail', () => {
     ['an event with no kind', { ...WIRE_DETAIL, events: [{ ...WIRE_EVENT, kind: undefined }] }],
     ['an event with no ticket_id', { ...WIRE_DETAIL, events: [{ ...WIRE_EVENT, ticket_id: undefined }] }],
     ['an event with a numeric kind', { ...WIRE_DETAIL, events: [{ ...WIRE_EVENT, kind: 7 }] }],
+    ['no instance_removed', { ...WIRE_DETAIL, instance_removed: undefined }],
+    ['a string instance_removed', { ...WIRE_DETAIL, instance_removed: 'true' }],
     ['null', null],
   ])('refuses a detail with %s', async (_, detail) => {
     stubFetch([get(DETAIL_PATH, detail)]);

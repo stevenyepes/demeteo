@@ -39,6 +39,7 @@ pub mod fleet;
 pub mod gates;
 pub mod port;
 pub mod postgres;
+pub mod removal;
 pub mod request_status;
 pub mod run_labels;
 pub mod run_state;

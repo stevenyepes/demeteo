@@ -3,6 +3,7 @@
 
 use super::client::ControlClient;
 use super::seal::{self, SealRequest, Sealed, UNIT_NAME};
+use demeteo_core::domain::hub_pairing::unpair::{HubDisconnected, HubUnpairNotice};
 use demeteo_core::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -221,6 +222,26 @@ pub fn describe_status(view: &Value) -> String {
     lines.join("\n")
 }
 
+/// What `hub disconnect` prints: the local outcome, then whether the Hub was
+/// told. A runner whose Hub was not told is still listed there, and the
+/// second sentence says where to remove it.
+pub fn describe_disconnect(answer: &Value) -> String {
+    let state = answer["state"].as_str().unwrap_or("unknown");
+    let local = format!("Disconnected. This runner is {state} with the Hub.");
+    let notice = serde_json::from_value::<HubDisconnected>(answer.clone())
+        .ok()
+        .and_then(|read| read.hub_notice);
+    let hub = match notice {
+        Some(HubUnpairNotice::Removed) => "The Hub removed this runner from its fleet.".to_owned(),
+        Some(HubUnpairNotice::NotPaired) => return local,
+        Some(HubUnpairNotice::NotTold { reason }) => format!(
+            "The Hub was not told ({reason}). Remove this runner on the Hub's Instance page."
+        ),
+        None => "The Hub was not told. Remove this runner on the Hub's Instance page.".to_owned(),
+    };
+    format!("{local}\n{hub}")
+}
+
 /// One line per row, newest first as the runner answers them.
 pub fn describe_log(rows: &[HubRequestLogRow], now_ms: i64) -> String {
     if rows.is_empty() {
@@ -286,11 +307,8 @@ pub async fn run(command: HubCommand, data_dir: &Path) -> i32 {
         }
         HubCommand::Disconnect => {
             with_client(&socket, |mut c| async move {
-                let status = c.call("hub_disconnect", json!({})).await?;
-                Ok(format!(
-                    "Disconnected. This runner is {} with the Hub.",
-                    status["state"].as_str().unwrap_or("unknown")
-                ))
+                let answer = c.call("hub_disconnect", json!({})).await?;
+                Ok(describe_disconnect(&answer))
             })
             .await
         }

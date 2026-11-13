@@ -1,5 +1,5 @@
-//! The Hub's `/token` and `/device_authorization`, over the async reqwest
-//! client.
+//! The Hub's `/token`, `/device_authorization` and `/unpair`, over the async
+//! reqwest client.
 //!
 //! Every grant spends what its body carries: an authorization code is
 //! single-use, a refresh token is rotated by the first POST that reaches
@@ -15,15 +15,20 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::redirect::Policy;
 
 use crate::domain::hub_pairing::device::{
     device_grant_refusal, DeviceAuthorization, DeviceGrantEnd,
 };
-use crate::domain::hub_pairing::{token_refusal, HubPairingError, PairingAnswer, RefreshAnswer};
+use crate::domain::hub_pairing::unpair::UnpairFailure;
+use crate::domain::hub_pairing::{
+    token_refusal, HubPairingError, PairingAnswer, RefreshAnswer, SecretString,
+};
 use crate::domain::hub_socket::{refresh_refusal, NoAnswer, RefreshEnd};
-use crate::ports::hub::{HubDeviceEndpoint, HubRefreshEndpoint, HubTokenEndpoint};
+use crate::ports::hub::{
+    HubDeviceEndpoint, HubRefreshEndpoint, HubTokenEndpoint, HubUnpairEndpoint,
+};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -193,5 +198,39 @@ impl HubDeviceEndpoint for ReqwestTokenEndpoint {
                 "the /token answer is not a pairing answer".into(),
             ))
         })
+    }
+}
+
+/// Short, because a disconnect waits on it: a Hub that has not answered by
+/// then is reported as not told, and the local delete goes ahead.
+const UNPAIR_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[async_trait]
+impl HubUnpairEndpoint for ReqwestTokenEndpoint {
+    async fn unpair(
+        &self,
+        url: &str,
+        access: &SecretString,
+        dpop: String,
+    ) -> Result<(), UnpairFailure> {
+        let response = self
+            .client
+            .post(url)
+            .timeout(UNPAIR_TIMEOUT)
+            .header(AUTHORIZATION, format!("DPoP {}", access.expose()))
+            .header("DPoP", dpop)
+            .send()
+            .await
+            .map_err(|e| {
+                UnpairFailure::Unavailable(transport_error_at(&e, "/unpair").to_string())
+            })?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(UnpairFailure::Refused {
+                status: status.as_u16(),
+            })
+        }
     }
 }
