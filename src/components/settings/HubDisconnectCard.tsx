@@ -50,7 +50,8 @@ export function HubDisconnectCard({ disconnecting, onDisconnect }: HubDisconnect
         >
           <p className="text-xs text-ruby-200 flex-1 leading-relaxed">
             Disconnecting forgets the device key and tokens on this machine. Runs keep going — this
-            does not stop them. The Hub keeps listing this machine until its token expires.
+            does not stop them. The Hub is asked to remove this machine first; if it cannot be
+            reached, the pairing is forgotten here anyway.
           </p>
           <div className="flex gap-2 shrink-0">
             <button

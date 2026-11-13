@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   HubConnection,
+  HubDisconnected,
   HubLocalPolicy,
   HubMachine,
   HubRequestLogEntry,
@@ -56,8 +57,8 @@ export async function remoteHubStatus(machineId: string): Promise<RunnerHubStatu
   return invoke<RunnerHubStatus | null>("remote_hub_status", { machineId });
 }
 
-export async function remoteHubDisconnect(machineId: string): Promise<HubStatus> {
-  return invoke<HubStatus>("remote_hub_disconnect", { machineId });
+export async function remoteHubDisconnect(machineId: string): Promise<HubDisconnected> {
+  return invoke<HubDisconnected>("remote_hub_disconnect", { machineId });
 }
 
 export async function remoteHubPolicyGet(machineId: string): Promise<HubLocalPolicy> {

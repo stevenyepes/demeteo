@@ -16,7 +16,7 @@ use super::rpc::remote_rpc_via;
 use super::runner_hub_state::refresh_runner_hub_state_via;
 use crate::domain::hub_pairing::device::DeviceTicket;
 use crate::domain::hub_pairing::runner_view::{runner_lacks_method, HubStatusView, PairStateView};
-use crate::domain::hub_pairing::HubStatus;
+use crate::domain::hub_pairing::unpair::HubDisconnected;
 use crate::domain::hub_request::log::MAX_LOG_PAGE;
 use crate::domain::hub_request::{HubLocalPolicy, HubRequestLogRow};
 use crate::ports::db::{AppSettingsRepository, MachineHubStateRepository};
@@ -110,7 +110,7 @@ impl<'a> RunnerHubRpc<'a> {
             .await
     }
 
-    pub async fn disconnect(&self, machine_id: &str) -> Result<HubStatus, String> {
+    pub async fn disconnect(&self, machine_id: &str) -> Result<HubDisconnected, String> {
         let status = self.call(machine_id, "hub_disconnect", json!({})).await?;
         self.refresh_state(machine_id).await;
         Ok(status)

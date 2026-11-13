@@ -12,6 +12,7 @@ import {
   parseCeilingDollars,
   refusalReasonCopy,
   stopReasonCopy,
+  unpairNoticeCopy,
   syncStateLabel,
 } from "./hubPresentation";
 
@@ -44,6 +45,7 @@ const EVERY_REFUSAL: HubRefusalReason[] = [
 
 const EVERY_STOP: HubStopReason[] = [
   "displaced",
+  "removed",
   "protocol_violation",
   "unauthorized",
   "refused",
@@ -186,8 +188,19 @@ describe("stopReasonCopy", () => {
     expect(copy).not.toBe(reason);
   });
 
+  it("speaks up after a disconnect only when the Hub was not told", () => {
+    expect(unpairNoticeCopy({ outcome: "removed" })).toBeNull();
+    expect(unpairNoticeCopy({ outcome: "not_paired" })).toBeNull();
+    expect(unpairNoticeCopy({ outcome: "not_told", reason: "offline" })).toEqual({
+      message: expect.stringMatching(/Hub was not told/),
+      reason: "offline",
+    });
+    expect(unpairNoticeCopy(undefined)?.reason).toBeNull();
+  });
+
   it("tells the user to pair again when only a re-pair helps", () => {
     expect(stopReasonCopy("needs_repair")).toMatch(/pair again/);
+    expect(stopReasonCopy("removed")).toMatch(/pair again/);
   });
 });
 

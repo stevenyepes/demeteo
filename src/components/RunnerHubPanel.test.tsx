@@ -212,4 +212,23 @@ describe('RunnerHubPanel', () => {
 
     expect(await screen.findByText('This runner predates Hub pairing')).toBeInTheDocument();
   });
+
+  it('says the Hub was not told when an older runner disconnects without a notice', async () => {
+    let status = PAIRED;
+    backend({
+      remote_hub_status: () => view(status),
+      remote_hub_disconnect: () => {
+        status = UNPAIRED;
+        return UNPAIRED;
+      },
+    });
+
+    await openPanel();
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect from Hub' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+    const note = await screen.findByRole('status', { name: 'Hub not told' });
+    expect(note).toHaveTextContent(/the Hub was not told/);
+    expect(callsTo('remote_hub_disconnect')).toHaveLength(1);
+  });
 });
