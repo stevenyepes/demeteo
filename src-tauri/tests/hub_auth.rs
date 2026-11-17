@@ -1098,7 +1098,7 @@ fn the_session_cookie_is_http_only_secure_and_same_site_strict() {
 /// This table and the next list every state-changing route the Hub serves.
 /// Their lengths are in their types so that losing a row is a compile error
 /// and not a loop that quietly covers one route fewer.
-const SESSION_BOUND_POSTS: [&str; 27] = [
+const SESSION_BOUND_POSTS: [&str; 28] = [
     "/v1/session/end",
     "/v1/passkeys/add/start",
     "/v1/passkeys/add/finish",
@@ -1118,6 +1118,7 @@ const SESSION_BOUND_POSTS: [&str; 27] = [
     "/v1/instances/{instance_id}/runs/{feature_id}/cancel",
     "/v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment",
     "/v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/retry",
+    "/v1/instances/{instance_id}/runs/{feature_id}/budget",
     "/v1/instances/{instance_id}/gates/challenge",
     "/v1/instances/{instance_id}/gates/decision",
     "/v1/instances/{instance_id}/remove/challenge",

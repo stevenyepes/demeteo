@@ -11,7 +11,8 @@ use demeteo_core::ports::notification::DomainEvent;
 use demeteo_core::ports::run_events::RunEvent as RunEventRow;
 use demeteo_hub::adapters::memory_keys::MemoryKeys;
 use demeteo_hub::api::dispatch::{
-    cancel, dispatch, retry_step, set_step_assignment, AssignmentBody, DispatchBody, EnqueuedView,
+    cancel, dispatch, retry_step, set_run_budget, set_step_assignment, AssignmentBody, BudgetBody,
+    DispatchBody, EnqueuedView,
 };
 use demeteo_hub::api::fleet::{fleet, instance_detail};
 use demeteo_hub::api::gates::{
@@ -34,7 +35,7 @@ use demeteo_hub::protocol::{
     CancelFeature, Decision, Effort, FeatureSnapshot, GateDecision, HarnessCatalogEntry,
     ModelChoice, ProjectSnapshot, RefusalReason, RequestOutcome, RequestPayload, RetryStep,
     RunEvent, RunEventKind, RunEventPayload, RunShapeSettings, RunnerRepository, RunnerStart,
-    RunnerWorkflow, Scope, SetStepAssignment, Snapshot, StartFeature, StepOverride,
+    RunnerWorkflow, Scope, SetRunBudget, SetStepAssignment, Snapshot, StartFeature, StepOverride,
     WebAuthnAssertion, WorkflowVersionSnapshot,
 };
 use demeteo_hub::socket::connections::Connections;
@@ -1233,6 +1234,7 @@ async fn a_run_shows_its_steps_tickets_pending_gates_and_events_in_offset_order(
             "git_token_problem": null,
             "steps": [{"step_id": "s1", "state": "running", "title": null, "failure": null}],
             "tickets": {"completed": 1, "failed": 0, "running": 1},
+            "ended_by": null,
             "pending_gates": [{"feature_id": "F1", "step_execution_id": "e1",
                 "step_id": "s-gate", "since": at(10), "step_title": null}],
             "events": [
@@ -1907,6 +1909,80 @@ async fn a_retry_queues_one_retry_step_for_the_feature_and_step_in_the_path() {
     );
     assert_eq!(answer.request_id, row.envelope.request_id);
     assert_eq!(answer.expires_at, row.expires_at);
+}
+
+#[tokio::test]
+async fn a_budget_queues_one_set_run_budget_for_the_feature_in_the_path() {
+    let fleet = MemoryFleet::new();
+    let parts = Parts::new();
+    let user = fleet.tenant();
+    let instance = fleet.paired(user, &[Scope::Spend]);
+
+    let answer = set_run_budget(
+        &parts.over(&fleet),
+        user,
+        &instance.0.to_string(),
+        "f-1",
+        BudgetBody {
+            max_budget_cents: 2_500,
+        },
+        NOW,
+    )
+    .await
+    .expect("spend is granted");
+
+    let queued = fleet.requests(instance);
+    assert_eq!(queued.len(), 1);
+    let row = &queued[0];
+    assert_eq!(row.kind, "set_run_budget");
+    assert_eq!(
+        row.envelope.payload,
+        RequestPayload::SetRunBudget(SetRunBudget {
+            feature_id: "f-1".to_owned(),
+            max_budget_cents: 2_500,
+        })
+    );
+    assert_eq!(answer.request_id, row.envelope.request_id);
+}
+
+/// Scope first, as a retry's; then the id and a cap of zero.
+#[tokio::test]
+async fn a_budget_without_spend_or_with_a_bad_id_or_no_cap_queues_nothing() {
+    let t = TwoTenants::new().await;
+    let parts = Parts::new();
+    let api = parts.over(&t.fleet);
+    let a_instance = t.a_instance.0.to_string();
+    let long = "x".repeat(257);
+    let invalid = (400, json!({"error": "invalid_request"}));
+    let a_before = t.fleet.requests(t.a_instance);
+    let cap = |cents| BudgetBody {
+        max_budget_cents: cents,
+    };
+
+    for (feature_id, cents) in [("a\u{0}b", 100), (long.as_str(), 100), ("f-a", 0)] {
+        let refused = set_run_budget(&api, t.a, &a_instance, feature_id, cap(cents), NOW)
+            .await
+            .expect_err("refused");
+        assert_eq!(answered(refused).await, invalid, "{feature_id:?} {cents}");
+    }
+
+    let refused = set_run_budget(&api, t.a, &t.b_instance.0.to_string(), "f-b", cap(100), NOW)
+        .await
+        .expect_err("not the tenant's");
+    assert_eq!(
+        answered(refused).await,
+        (404, json!({"error": "not_found"}))
+    );
+
+    t.fleet.scopes(t.a_instance, &[Scope::Read, Scope::Gates]);
+    let refused = set_run_budget(&api, t.a, &a_instance, "f-a", cap(0), NOW)
+        .await
+        .expect_err("spend is off");
+    assert_eq!(
+        answered(refused).await,
+        (409, json!({"error": "scope_not_granted", "scope": "spend"}))
+    );
+    assert_eq!(t.fleet.requests(t.a_instance), a_before);
 }
 
 /// Scope first, as a cancel's: no edit to the path changes that answer.

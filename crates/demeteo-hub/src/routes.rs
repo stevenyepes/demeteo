@@ -356,6 +356,10 @@ fn v1(state: AppState) -> Router {
             post(api::dispatch::post_retry),
         )
         .route(
+            "/v1/instances/{instance_id}/runs/{feature_id}/budget",
+            post(api::dispatch::post_budget),
+        )
+        .route(
             "/v1/instances/{instance_id}/gates/challenge",
             post(api::gates::post_gate_challenge),
         )

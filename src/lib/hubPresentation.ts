@@ -152,6 +152,7 @@ const KIND_LABELS: Readonly<Record<HubRequestKind, string>> = {
   passkey_endorsement: "add passkey",
   passkey_revocation: "remove passkey",
   retry_step: "retry step",
+  set_run_budget: "set run cap",
   unknown: "unreadable request",
 };
 

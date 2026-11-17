@@ -1,7 +1,8 @@
 //! What a tenant asks an instance to do: `POST /v1/instances/{instance_id}/runs`
 //! queues a `start_feature`, `…/runs/{feature_id}/cancel` a `cancel_feature`,
-//! `…/runs/{feature_id}/steps/{step_id}/assignment` a `set_step_assignment`
-//! and `…/runs/{feature_id}/steps/{step_id}/retry` a `retry_step`.
+//! `…/runs/{feature_id}/steps/{step_id}/assignment` a `set_step_assignment`,
+//! `…/runs/{feature_id}/steps/{step_id}/retry` a `retry_step` and
+//! `…/runs/{feature_id}/budget` a `set_run_budget`.
 //!
 //! A request is queued, signed, for the instance to fetch; the answer names
 //! it and says when the Hub stops offering it, and nothing more. Whether the
@@ -47,8 +48,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use demeteo_hub_protocol::{
-    AttachmentRef, CancelFeature, Effort, RequestPayload, RetryStep, SetStepAssignment,
-    StartFeature, StepOverride,
+    AttachmentRef, CancelFeature, Effort, RequestPayload, RetryStep, SetRunBudget,
+    SetStepAssignment, StartFeature, StepOverride,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -93,6 +94,15 @@ pub struct AssignmentBody {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<Effort>,
+}
+
+/// The new cost cap of a run, in whole cents. Whether it fits is the
+/// instance's ceilings' to say (`docs/HUB.md` §7); a cap of zero is refused
+/// here, since a run held to it is cancelled on its first poll.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetBody {
+    pub max_budget_cents: u64,
 }
 
 /// A queued request. `request_id` is the envelope's, unpadded base64url.
@@ -270,6 +280,31 @@ pub async fn retry_step(
     queue(api, user, &row, payload, now).await
 }
 
+/// Queues a `set_run_budget` for the run of `feature_id`, refused without
+/// `spend` as [`dispatch`] is. A browser that raises a cap to retry a run the
+/// cap ended waits for this to be accepted before it queues the retry, as it
+/// does for an assignment.
+pub async fn set_run_budget(
+    api: &ApiContext<'_>,
+    user: UserId,
+    instance_id: &str,
+    feature_id: &str,
+    body: BudgetBody,
+    now: u64,
+) -> Result<EnqueuedView, ApiError> {
+    let row = owned_live(api, user, instance_id).await?;
+    let payload = RequestPayload::SetRunBudget(SetRunBudget {
+        feature_id: feature_id.to_owned(),
+        max_budget_cents: body.max_budget_cents,
+    });
+    enqueue_verdict(&granted(&row), &payload).map_err(EnqueueError::from)?;
+    strings_verdict([feature_id].into_iter(), std::iter::empty())?;
+    if body.max_budget_cents == 0 {
+        return Err(ApiError::INVALID_REQUEST);
+    }
+    queue(api, user, &row, payload, now).await
+}
+
 async fn queue(
     api: &ApiContext<'_>,
     user: UserId,
@@ -404,6 +439,27 @@ pub async fn post_retry(
         &instance_id,
         &feature_id,
         &step_id,
+        unix_now(),
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(queued)))
+}
+
+pub async fn post_budget(
+    State(state): State<AppState>,
+    current: CurrentSession,
+    Path((instance_id, feature_id)): Path<(String, String)>,
+    JsonBody(body): JsonBody<BudgetBody>,
+) -> Result<(StatusCode, Json<EnqueuedView>), ApiError> {
+    let store = PostgresApi::new(state.db().clone());
+    let attachments = PostgresAttachments::new(state.db().clone());
+    let api = ApiContext::of(&state, &store, &attachments);
+    let queued = set_run_budget(
+        &api,
+        current.user,
+        &instance_id,
+        &feature_id,
+        body,
         unix_now(),
     )
     .await?;

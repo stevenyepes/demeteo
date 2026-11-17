@@ -6,7 +6,7 @@ import { runStatusMeta, TONE_TEXT } from '../../../src/lib/runStatus';
 import { failureReasonText } from '../lib/failureReason';
 import type { HubScope } from '../lib/fleet';
 import type { RequestTicket } from '../lib/requests';
-import type { RunDetail } from '../lib/runs';
+import type { RunDetail, StepState } from '../lib/runs';
 import { AssignmentForm } from './AssignmentForm';
 import { GatePanel } from './GatePanel';
 import { InstanceRemovedNote } from './InstanceRemoved';
@@ -25,7 +25,7 @@ interface StepInspectorProps {
   instanceId: string;
   featureId: string;
   stepId: string;
-  detail: Pick<RunDetail, 'status' | 'workflow' | 'steps' | 'pendingGates'>;
+  detail: Pick<RunDetail, 'status' | 'workflow' | 'steps' | 'pendingGates' | 'endedBy'>;
   /** The instance's granted scopes; `null` while they load or when they could not be read. */
   scopes: HubScope[] | null;
   /** The run's instance was removed from the Hub, so no request is offered here. */
@@ -92,6 +92,12 @@ export function StepInspector({
             </dd>
           </>
         )}
+        {step?.state === 'interrupted' && detail.endedBy !== null && (
+          <>
+            <dt>Reason</dt>
+            <dd className={TONE_TEXT.ruby}>{failureReasonText(detail.endedBy)}</dd>
+          </>
+        )}
         {node !== undefined && (
           <>
             <dt>Kind</dt>
@@ -113,7 +119,7 @@ export function StepInspector({
       </dl>
       {instanceRemoved ? (
         <InstanceRemovedNote className="mt-4 border-t border-hairline pt-4" />
-      ) : detail.status === 'failed' && step?.state === 'failed' ? (
+      ) : retriable(detail.status, step?.state) ? (
         <RetryForm
           key={stepId}
           instanceId={instanceId}
@@ -121,6 +127,7 @@ export function StepInspector({
           stepId={stepId}
           kind={node?.type ?? null}
           scopes={scopes}
+          cappedOut={detail.endedBy === 'budget_cap'}
         />
       ) : (
         <AssignmentForm
@@ -168,6 +175,15 @@ export function StepInspector({
  * While a gate is pending only its own decision is shown, so a decision on an
  * earlier execution of the step never reads as the answer to a fresh gate.
  */
+/**
+ * A step a run stopped on, once the run has ended: one that failed, or one
+ * its run's end interrupted, as a cap's cancel does. The instance judges the
+ * retry itself; this only decides what is offered.
+ */
+function retriable(status: RunDetail['status'], state: StepState | undefined): boolean {
+  return (status === 'failed' || status === 'cancelled') && (state === 'failed' || state === 'interrupted');
+}
+
 function heldDecision(
   decisions: Readonly<Record<string, GateDecisionTicket>>,
   stepId: string,

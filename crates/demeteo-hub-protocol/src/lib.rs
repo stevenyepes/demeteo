@@ -37,7 +37,7 @@ pub use message::{
 pub use request::{
     AttachmentRef, CancelFeature, GateDecision, PasskeyEndorsement, PasskeyRevocation,
     RequestPayload, RetryStep, RunnerRepository, RunnerSettings, RunnerStart, RunnerWorkflow,
-    SetStepAssignment, SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
+    SetRunBudget, SetStepAssignment, SignedRequest, StartFeature, StepOverride, WebAuthnAssertion,
     MAX_GATE_FEEDBACK_BYTES,
 };
 pub use scope::{Decision, Effort, Scope};

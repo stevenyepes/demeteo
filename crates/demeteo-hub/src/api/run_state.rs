@@ -26,6 +26,10 @@ pub struct RunState {
     /// The Step of the latest `step_started`: the one the run last entered,
     /// whether or not it has finished since.
     pub current_step: Option<String>,
+    /// The reason the latest `feature_failed` or `feature_cancelled` gave,
+    /// while that event is still the run's status. A cancel no cap caused
+    /// gives none (`docs/HUB.md` §5 *Failure reasons*).
+    pub ended_by: Option<FailureReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +56,12 @@ pub enum StepState {
     Running,
     Completed,
     Failed,
+    /// Running when its run failed or was cancelled. Never reported: no
+    /// instance relays a step's `interrupted`, so a Step the run's end
+    /// stopped would otherwise read as running for good. A completed run's
+    /// running Step is left as it is: that is an event that went missing,
+    /// and calling it interrupted would say something nothing did.
+    Interrupted,
 }
 
 /// How many Tickets stand where, each counted once by its latest event.
@@ -82,9 +92,12 @@ enum TicketState {
 /// `events` are one Feature's, in offset order. A Feature with no
 /// feature-level event yet is running: its first events may still be on
 /// their way. A terminal Feature has no pending Gate whatever its log says,
-/// because no decision on one could reach a run that has ended.
+/// because no decision on one could reach a run that has ended. A failed or
+/// cancelled one has no running Step either, for the reason
+/// [`StepState::Interrupted`] gives.
 pub fn fold(events: &[RunEvent]) -> RunState {
     let mut status = FeatureStatus::Running;
+    let mut ended_by = None;
     let mut steps = BTreeMap::new();
     let mut step_failures = BTreeMap::new();
     let mut tickets = BTreeMap::new();
@@ -94,10 +107,14 @@ pub fn fold(events: &[RunEvent]) -> RunState {
     for event in events {
         let payload = &event.payload;
         match event.kind {
-            RunEventKind::FeatureStarted => status = FeatureStatus::Running,
-            RunEventKind::FeatureCompleted => status = FeatureStatus::Completed,
-            RunEventKind::FeatureFailed => status = FeatureStatus::Failed,
-            RunEventKind::FeatureCancelled => status = FeatureStatus::Cancelled,
+            RunEventKind::FeatureStarted => (status, ended_by) = (FeatureStatus::Running, None),
+            RunEventKind::FeatureCompleted => (status, ended_by) = (FeatureStatus::Completed, None),
+            RunEventKind::FeatureFailed => {
+                (status, ended_by) = (FeatureStatus::Failed, payload.failure)
+            }
+            RunEventKind::FeatureCancelled => {
+                (status, ended_by) = (FeatureStatus::Cancelled, payload.failure);
+            }
             RunEventKind::StepStarted => {
                 step(&mut steps, payload.step_id.as_ref(), StepState::Running);
                 failed(&mut step_failures, payload.step_id.as_ref(), None);
@@ -160,6 +177,13 @@ pub fn fold(events: &[RunEvent]) -> RunState {
     if status.is_terminal() {
         pending_gates.clear();
     }
+    if matches!(status, FeatureStatus::Failed | FeatureStatus::Cancelled) {
+        for state in steps.values_mut() {
+            if *state == StepState::Running {
+                *state = StepState::Interrupted;
+            }
+        }
+    }
     RunState {
         status,
         steps,
@@ -167,6 +191,7 @@ pub fn fold(events: &[RunEvent]) -> RunState {
         tickets: progress(tickets.values()),
         pending_gates,
         current_step,
+        ended_by,
     }
 }
 
@@ -350,6 +375,71 @@ mod tests {
                 ]),
                 "{kind:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_step_running_when_its_run_fails_or_is_cancelled_is_interrupted_until_it_runs_again() {
+        let ended = |kind| {
+            log([
+                (RunEventKind::StepStarted, step_id("s1")),
+                (RunEventKind::StepCompleted, step_id("s1")),
+                (RunEventKind::StepStarted, step_id("s2")),
+                (kind, Ids::default()),
+            ])
+        };
+        for kind in [RunEventKind::FeatureCancelled, RunEventKind::FeatureFailed] {
+            assert_eq!(
+                fold(&ended(kind)).steps,
+                BTreeMap::from([
+                    ("s1".to_owned(), StepState::Completed),
+                    ("s2".to_owned(), StepState::Interrupted),
+                ]),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            fold(&ended(RunEventKind::FeatureCompleted)).steps["s2"],
+            StepState::Running,
+            "a completed run's missing event is not an interruption"
+        );
+        let mut retried = ended(RunEventKind::FeatureCancelled);
+        retried.extend(log([
+            (RunEventKind::FeatureStarted, Ids::default()),
+            (RunEventKind::StepStarted, step_id("s2")),
+        ]));
+        assert_eq!(fold(&retried).steps["s2"], StepState::Running);
+    }
+
+    #[test]
+    fn a_run_is_ended_by_the_reason_its_latest_ending_gave_until_it_runs_again() {
+        let ending = |kind, failure| {
+            (
+                kind,
+                Ids {
+                    failure,
+                    ..Ids::default()
+                },
+            )
+        };
+        let capped = log([ending(
+            RunEventKind::FeatureCancelled,
+            Some(FailureReason::BudgetCap),
+        )]);
+        assert_eq!(fold(&capped).ended_by, Some(FailureReason::BudgetCap));
+        let failed = log([ending(
+            RunEventKind::FeatureFailed,
+            Some(FailureReason::Environment),
+        )]);
+        assert_eq!(fold(&failed).ended_by, Some(FailureReason::Environment));
+        for (kind, failure) in [
+            (RunEventKind::FeatureStarted, None),
+            (RunEventKind::FeatureCompleted, None),
+            (RunEventKind::FeatureCancelled, None),
+        ] {
+            let mut again = capped.clone();
+            again.extend(log([ending(kind, failure)]));
+            assert_eq!(fold(&again).ended_by, None, "{kind:?}");
         }
     }
 

@@ -43,7 +43,8 @@ pub fn required_scope(payload: &RequestPayload) -> Option<Scope> {
         RequestPayload::StartFeature(_)
         | RequestPayload::CancelFeature(_)
         | RequestPayload::SetStepAssignment(_)
-        | RequestPayload::RetryStep(_) => Some(Scope::Spend),
+        | RequestPayload::RetryStep(_)
+        | RequestPayload::SetRunBudget(_) => Some(Scope::Spend),
         RequestPayload::GateDecision(_) => Some(Scope::Gates),
         RequestPayload::PasskeyEndorsement(_) | RequestPayload::PasskeyRevocation(_) => None,
     }
@@ -78,6 +79,7 @@ fn kind_name(payload: &RequestPayload) -> &'static str {
         RequestPayload::PasskeyEndorsement(_) => "passkey_endorsement",
         RequestPayload::PasskeyRevocation(_) => "passkey_revocation",
         RequestPayload::RetryStep(_) => "retry_step",
+        RequestPayload::SetRunBudget(_) => "set_run_budget",
     }
 }
 

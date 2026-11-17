@@ -63,6 +63,7 @@ const EVERY_KIND: HubRequestKind[] = [
   "passkey_endorsement",
   "passkey_revocation",
   "retry_step",
+  "set_run_budget",
   "unknown",
 ];
 

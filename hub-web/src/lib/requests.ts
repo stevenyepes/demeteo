@@ -93,6 +93,17 @@ export async function retryStep(instanceId: string, featureId: string, stepId: s
   return requestTicketOf(await postInSession(path, {}, isWireRequestTicket));
 }
 
+/**
+ * Queues a `set_run_budget`: the run's new cost cap, in whole cents. The
+ * instance holds it to its own ceilings and answers whether it took; a retry
+ * of a run its cap ended waits for that answer (docs/HUB.md §7).
+ */
+export async function setRunBudget(instanceId: string, featureId: string, cents: number): Promise<RequestTicket> {
+  const path = `/v1/instances/${encodeURIComponent(instanceId)}/runs/${encodeURIComponent(featureId)}/budget`;
+  rejectSyntheticInstance(instanceId, path);
+  return requestTicketOf(await postInSession(path, { max_budget_cents: cents }, isWireRequestTicket));
+}
+
 /** Only the fields the user set; `null` when none is. */
 export function assignmentOf(agent: string, model: string, effort: string): StepAssignment | null {
   const assignment: StepAssignment = {};

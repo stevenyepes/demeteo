@@ -197,6 +197,18 @@ pub struct RetryStep {
     pub step_id: String,
 }
 
+/// Replace the cost cap of the run of `feature_id` with `max_budget_cents`,
+/// typically to raise the cap that cancelled it before a [`RetryStep`]. The
+/// instance judges the new cap against its own ceilings as it judges a
+/// start's, so a Hub cannot lift a run past them (HUB.md §7). Integer cents,
+/// for [`StartFeature::max_budget_cents`]'s reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRunBudget {
+    pub feature_id: String,
+    pub max_budget_cents: u64,
+}
+
 /// The longest `GateDecision.feedback`, in UTF-8 bytes. The Hub refuses a
 /// longer one before holding a challenge, and an instance refuses one before
 /// verifying the assertion: the text lands in an agent's prompt.
@@ -232,7 +244,7 @@ pub struct PasskeyRevocation {
     pub assertion: WebAuthnAssertion,
 }
 
-/// What a Hub may ask an instance to do. Exactly seven kinds, and none enables a
+/// What a Hub may ask an instance to do. Exactly eight kinds, and none enables a
 /// scope, sets a ceiling or edits project settings — those stay in the
 /// instance's own Settings.
 ///
@@ -252,6 +264,8 @@ pub enum RequestPayload {
     /// instance built before it cannot parse the body and answers
     /// `unknown_kind`.
     RetryStep(RetryStep),
+    /// After [`RequestPayload::RetryStep`], for the same reason it is last.
+    SetRunBudget(SetRunBudget),
 }
 
 /// A Hub-relayed request. `signature` is the Hub's, opaque base64url; the
@@ -406,6 +420,12 @@ fn put_payload(enc: &mut Encoder, payload: &RequestPayload) -> Result<(), Encode
             enc.put_str(&b.feature_id)?;
             enc.put_str(&b.step_id)
         }
+        RequestPayload::SetRunBudget(b) => {
+            enc.put_u8(8);
+            enc.put_str(&b.feature_id)?;
+            enc.put_u64(b.max_budget_cents);
+            Ok(())
+        }
     }
 }
 
@@ -416,9 +436,11 @@ impl SignedRequest {
     /// Layout: `str("demeteo-hub/v1/request")`, `u32 v` (the message's own, not
     /// [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION)), `str request_id`, `str
     /// instance_id`, `u64 issued_at`, `u64 expires_at`, `u8` payload tag
-    /// (start_feature=1 … passkey_revocation=6, retry_step=7), then the
-    /// variant's fields in declaration order, so `StartFeature.max_budget_cents`
-    /// is an `opt<u64>` and a [`RetryStep`] is `str feature_id, str step_id`.
+    /// (start_feature=1 … passkey_revocation=6, retry_step=7,
+    /// set_run_budget=8), then the variant's fields in declaration order, so
+    /// `StartFeature.max_budget_cents` is an `opt<u64>`, a [`RetryStep`] is
+    /// `str feature_id, str step_id` and a [`SetRunBudget`] is `str
+    /// feature_id, u64 max_budget_cents`.
     ///
     /// The one exception is `StartFeature.runner`, the last field: `None`
     /// contributes **no bytes at all**, not the `0x00` of an `opt`, so a start

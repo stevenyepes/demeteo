@@ -89,3 +89,35 @@ fn recording_a_commitment_on_no_run_is_an_error() {
     assert!(adapter.record_hub_commitment("run-missing", 100).is_err());
     assert_eq!(adapter.hub_committed_cents_since(0), Ok(0));
 }
+
+/// A raise counts from when it was made, so one made to a run older than the
+/// window still counts; a lowered cap records nothing.
+#[test]
+fn a_cap_raise_replaces_the_spec_and_counts_from_when_it_was_made() {
+    let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+    adapter.get_or_create("run-old", "{}", "hub", 10).unwrap();
+    adapter.record_hub_commitment("run-old", 900).unwrap();
+    adapter
+        .replace_hub_cap("run-old", r#"{"raised":true}"#, 600, 500)
+        .unwrap();
+    adapter
+        .replace_hub_cap("run-old", r#"{"lowered":true}"#, 0, 600)
+        .unwrap();
+
+    assert_eq!(
+        adapter.get("run-old").unwrap().unwrap().spec_json,
+        r#"{"lowered":true}"#
+    );
+    assert_eq!(adapter.hub_committed_cents_since(0), Ok(1500));
+    assert_eq!(adapter.hub_committed_cents_since(100), Ok(600));
+    assert_eq!(adapter.hub_committed_cents_since(501), Ok(0));
+}
+
+#[test]
+fn replacing_a_cap_on_no_run_is_an_error_and_records_nothing() {
+    let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+    assert!(adapter
+        .replace_hub_cap("run-missing", "{}", 100, 1)
+        .is_err());
+    assert_eq!(adapter.hub_committed_cents_since(0), Ok(0));
+}

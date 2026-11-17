@@ -11,8 +11,8 @@
 
 use demeteo_hub_protocol::{
     AttachmentRef, CancelFeature, Effort, GateDecision as GatePayload, PasskeyRevocation,
-    RefusalReason, RequestPayload, RetryStep, Scope, SetStepAssignment, SignedRequest,
-    StartFeature, StepOverride as WireStepOverride,
+    RefusalReason, RequestPayload, RetryStep, Scope, SetRunBudget, SetStepAssignment,
+    SignedRequest, StartFeature, StepOverride as WireStepOverride,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ pub mod passkeys;
 pub mod runner_spec;
 pub mod verify;
 
-pub use ceiling::spend_verdict;
+pub use ceiling::{cap_change_verdict, spend_verdict};
 pub use log::{HubRequestLogEntry, HubRequestLogRow, LogKind, LogOutcome};
 pub use runner_spec::{runner_run_spec, runner_start_refusal};
 pub use verify::verify_signature;
@@ -81,7 +81,8 @@ pub fn required_scope(payload: &RequestPayload) -> Option<Scope> {
         RequestPayload::StartFeature(_)
         | RequestPayload::CancelFeature(_)
         | RequestPayload::SetStepAssignment(_)
-        | RequestPayload::RetryStep(_) => Some(Scope::Spend),
+        | RequestPayload::RetryStep(_)
+        | RequestPayload::SetRunBudget(_) => Some(Scope::Spend),
         RequestPayload::GateDecision(_) => Some(Scope::Gates),
         RequestPayload::PasskeyEndorsement(_) | RequestPayload::PasskeyRevocation(_) => None,
     }
@@ -154,6 +155,7 @@ pub enum ExecuteKind<'a> {
     CancelFeature(&'a CancelFeature),
     SetStepAssignment(&'a SetStepAssignment),
     RetryStep(&'a RetryStep),
+    SetRunBudget(&'a SetRunBudget),
     GateDecision(&'a GatePayload),
     PasskeyRevocation(&'a PasskeyRevocation),
 }
@@ -222,11 +224,16 @@ pub enum StartSupport {
     Refused,
 }
 
-/// Whether judging `payload` reads the 24-hour committed total. Only a start
-/// does, and not one this instance refuses outright: [`decide`] refuses that
-/// one before any ceiling, so a total that fails to load must not defer it.
+/// Whether judging `payload` reads the 24-hour committed total: a start, but
+/// not one this instance refuses outright, since [`decide`] refuses that one
+/// before any ceiling and a total that fails to load must not defer it; and a
+/// new run cap, whose raise [`cap_change_verdict`] counts.
 pub fn needs_committed_total(payload: &RequestPayload, starts: StartSupport) -> bool {
-    matches!(payload, RequestPayload::StartFeature(_)) && starts == StartSupport::Launches
+    match payload {
+        RequestPayload::StartFeature(_) => starts == StartSupport::Launches,
+        RequestPayload::SetRunBudget(_) => true,
+        _ => false,
+    }
 }
 
 /// Replay, then the kind-specific spend check, for a request [`precheck`]
@@ -275,6 +282,9 @@ pub fn decide<'a>(
         // retry commits no new cap. It re-runs the step under the run's own
         // `max_budget_usd`, which the start was already judged on (HUB.md §7).
         RequestPayload::RetryStep(retry) => Verdict::Execute(ExecuteKind::RetryStep(retry)),
+        // Its ceilings need the run's current cap, which only a lookup reads:
+        // [`cap_change_verdict`] judges it once the run is found.
+        RequestPayload::SetRunBudget(budget) => Verdict::Execute(ExecuteKind::SetRunBudget(budget)),
         RequestPayload::GateDecision(gate) => Verdict::Execute(ExecuteKind::GateDecision(gate)),
         // Refused, assertion unread, until a Hub producer and a desktop-side
         // confirmation or trusted-set view exist (docs/HUB.md §11 item 20).

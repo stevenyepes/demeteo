@@ -17,12 +17,13 @@ use async_trait::async_trait;
 use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::domain::hub_request::{runner_run_spec, runner_start_refusal};
 use demeteo_core::domain::ids::{FeatureId, StepExecutionId};
-use demeteo_core::domain::run_spec::RunSpecAttachment;
+use demeteo_core::domain::run_spec::{cost_cap_cents, with_cost_cap_cents, RunSpecAttachment};
 use demeteo_core::error::AppError;
 use demeteo_core::paths;
 use demeteo_core::ports::hub::{
     HubLaunch, HubLaunched, HubRunControl, RefusalReason, StartFeature, StartSupport,
 };
+use demeteo_core::ports::runner_run::RunnerRun;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -122,6 +123,11 @@ impl RunnerHubRuns {
         }
         Ok(FeatureId::from(feature_id))
     }
+
+    fn run_of(&self, feature_id: &FeatureId) -> Result<RunnerRun, AppError> {
+        control::run_for_feature(self.svc.ctx.runner_runs.as_ref(), feature_id.as_ref())?
+            .ok_or_else(|| AppError::not_found(format!("no run of feature {feature_id}")))
+    }
 }
 
 #[async_trait]
@@ -171,8 +177,7 @@ impl HubRunControl for RunnerHubRuns {
     }
 
     async fn cancel(&self, feature_id: &FeatureId) -> Result<(), AppError> {
-        let run = control::run_for_feature(self.svc.ctx.runner_runs.as_ref(), feature_id.as_ref())?
-            .ok_or_else(|| AppError::not_found(format!("no run of feature {feature_id}")))?;
+        let run = self.run_of(feature_id)?;
         control::cancel_run(&self.svc.ctx, &self.svc.creds, run).await?;
         Ok(())
     }
@@ -189,8 +194,7 @@ impl HubRunControl for RunnerHubRuns {
         feature_id: &FeatureId,
         step_execution_id: &StepExecutionId,
     ) -> Result<(), AppError> {
-        let run = control::run_for_feature(self.svc.ctx.runner_runs.as_ref(), feature_id.as_ref())?
-            .ok_or_else(|| AppError::not_found(format!("no run of feature {feature_id}")))?;
+        let run = self.run_of(feature_id)?;
         let keeper = self.credentials.as_ref().filter(|_| {
             run.owner_client_id == HUB_CLIENT_ID && watch(Some(&run.status), false) == Watch::End
         });
@@ -236,6 +240,42 @@ impl HubRunControl for RunnerHubRuns {
                 run.run_id
             );
         }
+        Ok(())
+    }
+
+    /// Every run here holds its cap in its spec, whichever desktop submitted
+    /// it: the Hub acts for the whole runner, as its cancel and retry do.
+    fn holds_run_caps(&self) -> bool {
+        true
+    }
+
+    fn run_cap_cents(&self, feature_id: &FeatureId) -> Result<Option<u64>, AppError> {
+        let run = self.run_of(feature_id)?;
+        cost_cap_cents(&run.spec_json).map_err(AppError::internal)
+    }
+
+    /// The run's poll loop reads the cap from the row on every pass, so this
+    /// is all a live run needs; an ended one picks it up when a retry
+    /// re-opens it.
+    fn set_run_cap(
+        &self,
+        feature_id: &FeatureId,
+        cents: u64,
+        raise_cents: u64,
+        now_ms: i64,
+    ) -> Result<(), AppError> {
+        let run = self.run_of(feature_id)?;
+        let spec_json = with_cost_cap_cents(&run.spec_json, cents).map_err(AppError::internal)?;
+        self.svc
+            .ctx
+            .runner_runs
+            .replace_hub_cap(&run.run_id, &spec_json, raise_cents, now_ms)?;
+        crate::run::emit(
+            &self.svc.ctx,
+            &run.run_id,
+            "cap_changed",
+            format!("cost cap set to ${:.2} from the Hub", cents as f64 / 100.0),
+        );
         Ok(())
     }
 }

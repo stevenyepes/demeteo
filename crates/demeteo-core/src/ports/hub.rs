@@ -467,6 +467,40 @@ pub trait HubRunControl: Send + Sync {
         feature_id: &crate::domain::ids::FeatureId,
         step_execution_id: &crate::domain::ids::StepExecutionId,
     ) -> Result<(), AppError>;
+
+    /// Whether a run here holds a hard cost cap that a `set_run_budget` can
+    /// replace. A runner's does, its `RunBudget`. A desktop's run has only a
+    /// per-turn budget, which nothing cancels a run on, so a desktop answers
+    /// `unknown_kind` and the two methods below are never called on it.
+    fn holds_run_caps(&self) -> bool {
+        false
+    }
+
+    /// The cost cap the run of `feature_id` holds now, in whole cents, or
+    /// `None` when it has none. `AppError::NotFound` when no run of it is
+    /// here.
+    fn run_cap_cents(
+        &self,
+        _feature_id: &crate::domain::ids::FeatureId,
+    ) -> Result<Option<u64>, AppError> {
+        Err(AppError::validation("this instance holds no run caps"))
+    }
+
+    /// Replace that cap with `cents`, counting `raise_cents` as committed at
+    /// `now_ms` toward the rolling ceiling, in one write: a cap that took
+    /// without its raise counted would let the next start past the ceiling.
+    /// Called only once [`cap_change_verdict`](crate::domain::hub_request::cap_change_verdict)
+    /// passed, under the same turn a start holds. A live run's cap check
+    /// reads the new cap on its next poll; an ended run's on its next pass.
+    fn set_run_cap(
+        &self,
+        _feature_id: &crate::domain::ids::FeatureId,
+        _cents: u64,
+        _raise_cents: u64,
+        _now_ms: i64,
+    ) -> Result<(), AppError> {
+        Err(AppError::validation("this instance holds no run caps"))
+    }
 }
 
 pub trait BrowserLauncher: Send + Sync {

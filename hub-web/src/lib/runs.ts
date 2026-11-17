@@ -3,7 +3,8 @@ import { type Guard, getJson, rejectSyntheticInstance } from './api';
 
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
-export type StepState = 'running' | 'completed' | 'failed';
+/** `interrupted` is the Hub's own word for a step still running when its run failed or was cancelled: no instance reports it. */
+export type StepState = 'running' | 'completed' | 'failed' | 'interrupted';
 
 export type TicketProgress = { completed: number; failed: number; running: number };
 
@@ -71,6 +72,12 @@ export type RunDetail = {
   projectName: string | null;
   steps: StepView[];
   tickets: TicketProgress;
+  /**
+   * Why the run failed, or which cap cancelled it, as its latest ending said:
+   * a `FailureReason` (`lib/failureReason.ts`). `null` while it runs, once it
+   * completed, and for an ending its instance gave no reason for.
+   */
+  endedBy: string | null;
   pendingGates: PendingGate[];
   events: RunEvent[];
   /**
@@ -135,6 +142,8 @@ type WireRunDetail = {
   project_name: string | null;
   steps: WireStepView[];
   tickets: TicketProgress;
+  /** Absent from a Hub that predates it, read as `null`. */
+  ended_by?: string | null;
   pending_gates: WirePendingGate[];
   events: WireRunEvent[];
   git_token_problem: string | null;
@@ -143,7 +152,7 @@ type WireRunDetail = {
 
 const STATUSES: readonly unknown[] = ['running', 'completed', 'failed', 'cancelled'] satisfies RunStatus[];
 
-const STEP_STATES: readonly unknown[] = ['running', 'completed', 'failed'] satisfies StepState[];
+const STEP_STATES: readonly unknown[] = ['running', 'completed', 'failed', 'interrupted'] satisfies StepState[];
 
 export async function listRuns(filter: RunsFilter = {}): Promise<RunSummary[]> {
   const query = new URLSearchParams();
@@ -199,6 +208,7 @@ function runDetailOf(wire: WireRunDetail): RunDetail {
       failure: step.failure,
     })),
     tickets: ticketProgressOf(wire.tickets),
+    endedBy: wire.ended_by ?? null,
     pendingGates: wire.pending_gates.map(pendingGateOf),
     events: wire.events.map(runEventOf),
     gitTokenProblem: wire.git_token_problem,
@@ -299,6 +309,7 @@ const isWireRunDetail: Guard<WireRunDetail> = (value): value is WireRunDetail =>
     isStringOrNull(memberOf(value, 'project_name')) &&
     isListOf(memberOf(value, 'steps'), isWireStepView) &&
     isTicketProgress(memberOf(value, 'tickets')) &&
+    isStringOrNullOrAbsent(memberOf(value, 'ended_by')) &&
     isListOf(memberOf(value, 'pending_gates'), isWirePendingGate) &&
     isListOf(memberOf(value, 'events'), isWireRunEvent) &&
     isStringOrNull(memberOf(value, 'git_token_problem')) &&
@@ -308,6 +319,10 @@ const isWireRunDetail: Guard<WireRunDetail> = (value): value is WireRunDetail =>
 
 function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+function isStringOrNullOrAbsent(value: unknown): value is string | null | undefined {
+  return value === undefined || isStringOrNull(value);
 }
 
 function isBooleanOrAbsent(value: unknown): value is boolean | undefined {

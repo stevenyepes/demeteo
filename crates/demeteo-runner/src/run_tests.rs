@@ -1241,3 +1241,39 @@ async fn a_reopen_that_drives_leaves_the_row_running() {
     s.finish(driving).await;
     assert_eq!(s.status(), "completed");
 }
+
+/// The poll loop's cap is the row's, so a Hub `set_run_budget` reaches a live
+/// run; a row it cannot read falls back to the pass's own spec, never to no
+/// cap at all.
+#[tokio::test]
+async fn the_cap_a_run_is_held_to_is_the_one_its_row_holds_now() {
+    let rig = crate::test_services::Rig::new("runner_live_budget");
+    let started_with = serde_json::json!({
+        "title": "t",
+        "description": "d",
+        "provider": { "kind": "github", "host": "github.com" },
+        "repo_path": "acme/app",
+        "workflow_json": { "steps": [] },
+        "agent_kind": null,
+        "model": null,
+        "loop_iterations": null,
+        "budget": { "max_cost_usd": 2.5, "max_wall_clock_secs": 600 },
+    });
+    let spec: demeteo_core::domain::run_spec::RunSpec =
+        serde_json::from_value(started_with.clone()).expect("a spec");
+    let raised =
+        demeteo_core::domain::run_spec::with_cost_cap_cents(&started_with.to_string(), 1_000)
+            .expect("raised");
+    rig.svc
+        .ctx
+        .runner_runs
+        .get_or_create("run-1", &raised, "hub", 1)
+        .unwrap();
+
+    let live = super::live_budget(&rig.svc, "run-1", &spec).expect("a budget");
+    assert_eq!(live.max_cost_usd, Some(10.0));
+    assert_eq!(live.max_wall_clock_secs, Some(600));
+
+    let unread = super::live_budget(&rig.svc, "run-missing", &spec).expect("a budget");
+    assert_eq!(unread.max_cost_usd, Some(2.5));
+}
