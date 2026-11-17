@@ -141,6 +141,7 @@ export type HubRequestKind =
   | "passkey_endorsement"
   | "passkey_revocation"
   | "retry_step"
+  | "set_run_budget"
   | "unknown";
 
 export type HubScope = "read" | "spend" | "gates";

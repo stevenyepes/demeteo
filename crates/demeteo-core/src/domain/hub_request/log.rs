@@ -21,6 +21,7 @@ pub enum LogKind {
     PasskeyEndorsement,
     PasskeyRevocation,
     RetryStep,
+    SetRunBudget,
     Unknown,
 }
 
@@ -34,6 +35,7 @@ impl LogKind {
             RequestPayload::PasskeyEndorsement(_) => Self::PasskeyEndorsement,
             RequestPayload::PasskeyRevocation(_) => Self::PasskeyRevocation,
             RequestPayload::RetryStep(_) => Self::RetryStep,
+            RequestPayload::SetRunBudget(_) => Self::SetRunBudget,
         }
     }
 
@@ -46,6 +48,7 @@ impl LogKind {
             Self::PasskeyEndorsement => "passkey_endorsement",
             Self::PasskeyRevocation => "passkey_revocation",
             Self::RetryStep => "retry_step",
+            Self::SetRunBudget => "set_run_budget",
             Self::Unknown => "unknown",
         }
     }
@@ -59,6 +62,7 @@ impl LogKind {
             "passkey_endorsement" => Some(Self::PasskeyEndorsement),
             "passkey_revocation" => Some(Self::PasskeyRevocation),
             "retry_step" => Some(Self::RetryStep),
+            "set_run_budget" => Some(Self::SetRunBudget),
             "unknown" => Some(Self::Unknown),
             _ => None,
         }

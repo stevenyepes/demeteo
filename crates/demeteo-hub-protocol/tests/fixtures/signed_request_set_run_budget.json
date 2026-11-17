@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "request_id": "req-a08",
+  "instance_id": "inst-7f3a9c",
+  "issued_at": 1790000060,
+  "expires_at": 1790000660,
+  "payload": {
+    "kind": "set_run_budget",
+    "body": {
+      "feature_id": "f-1791043410984",
+      "max_budget_cents": 2500
+    }
+  },
+  "signature": "c2lnbmVkLWJ5LWh1Yg"
+}

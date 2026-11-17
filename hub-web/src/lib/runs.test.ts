@@ -119,6 +119,7 @@ const WIRE_DETAIL = {
     { step_id: 'build', state: 'failed', title: null, failure: 'usage_limit' },
   ],
   tickets: { completed: 2, failed: 1, running: 3 },
+  ended_by: null,
   pending_gates: [WIRE_PENDING_GATE],
   events: [WIRE_EVENT],
   git_token_problem: 'github_app_not_installed',
@@ -258,6 +259,7 @@ describe('getRunDetail', () => {
         { stepId: 'build', state: 'failed', title: null, failure: 'usage_limit' },
       ],
       tickets: { completed: 2, failed: 1, running: 3 },
+      endedBy: null,
       pendingGates: [
         { featureId: 'f-1', stepExecutionId: 'se-2', stepId: 'review', since: 1_700_000_250, stepTitle: 'Review gate' },
       ],
@@ -276,6 +278,26 @@ describe('getRunDetail', () => {
       instanceRemoved: false,
     });
     expect(pending).toEqual([]);
+  });
+
+  it('carries the reason a run ended, and reads one from a Hub that sends none as null', async () => {
+    const { ended_by: _, ...older } = WIRE_DETAIL;
+    stubFetch([
+      get(DETAIL_PATH, {
+        ...WIRE_DETAIL,
+        status: 'cancelled',
+        ended_by: 'budget_cap',
+        steps: [{ step_id: 'build', state: 'interrupted', title: null, failure: null }],
+      }),
+      get(DETAIL_PATH, older),
+    ]);
+
+    await expect(getRunDetail(INSTANCE_ID, 'f-1')).resolves.toMatchObject({
+      status: 'cancelled',
+      endedBy: 'budget_cap',
+      steps: [{ stepId: 'build', state: 'interrupted' }],
+    });
+    await expect(getRunDetail(INSTANCE_ID, 'f-1')).resolves.toMatchObject({ endedBy: null });
   });
 
   it('carries a reported workflow through as the definition the canvas draws', async () => {

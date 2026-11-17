@@ -194,12 +194,45 @@ impl RunnerRunPort for SqliteAdapter {
         Ok(())
     }
 
+    fn replace_hub_cap(
+        &self,
+        run_id: &str,
+        spec_json: &str,
+        raise_cents: u64,
+        now: i64,
+    ) -> Result<(), String> {
+        let raise = i64::try_from(raise_cents).map_err(|e| e.to_string())?;
+        let mut conn = self.conn.lock()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let updated = tx
+            .execute(
+                "UPDATE runner_runs SET spec_json = ?2, updated_at = ?3 WHERE run_id = ?1",
+                params![run_id, spec_json, now],
+            )
+            .map_err(|e| e.to_string())?;
+        if updated == 0 {
+            return Err(format!("no runner run {run_id} to replace a Hub cap on"));
+        }
+        if raise > 0 {
+            tx.execute(
+                "INSERT INTO runner_run_hub_cap_raises (run_id, cents, raised_at)
+                 VALUES (?1, ?2, ?3)",
+                params![run_id, raise, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
     fn hub_committed_cents_since(&self, since_ms: i64) -> Result<u64, String> {
         let conn = self.conn.lock()?;
         let cents: i64 = conn
             .query_row(
-                "SELECT COALESCE(SUM(hub_committed_cents), 0)
-                 FROM runner_runs WHERE created_at >= ?1",
+                "SELECT
+                   (SELECT COALESCE(SUM(hub_committed_cents), 0)
+                    FROM runner_runs WHERE created_at >= ?1)
+                 + (SELECT COALESCE(SUM(cents), 0)
+                    FROM runner_run_hub_cap_raises WHERE raised_at >= ?1)",
                 params![since_ms],
                 |row| row.get(0),
             )

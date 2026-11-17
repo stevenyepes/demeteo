@@ -269,6 +269,56 @@ impl RunSpec {
     }
 }
 
+/// A run's [`RunBudget`] as the `spec_json` of its row holds it now. Read
+/// alone, without the rest of the spec, because the runner's cap check reads
+/// it on every poll, so a cap a Hub `set_run_budget` replaced applies to the
+/// live run.
+pub fn budget_of(spec_json: &str) -> Result<Option<RunBudget>, String> {
+    #[derive(Deserialize)]
+    struct BudgetOnly {
+        #[serde(default)]
+        budget: Option<RunBudget>,
+    }
+    serde_json::from_str::<BudgetOnly>(spec_json)
+        .map(|spec| spec.budget)
+        .map_err(|e| format!("unreadable run spec: {e}"))
+}
+
+/// The cost cap of [`budget_of`], in whole cents, or `None` when the run has
+/// none.
+pub fn cost_cap_cents(spec_json: &str) -> Result<Option<u64>, String> {
+    Ok(budget_of(spec_json)?
+        .and_then(|budget| budget.max_cost_usd)
+        .map(|usd| (usd * 100.0).round().max(0.0) as u64))
+}
+
+/// `spec_json` with its cost cap replaced by `cents` and every other field as
+/// it was, edited as a document rather than through [`RunSpec`] so nothing it
+/// does not model is dropped. A spec with no `budget` gains one with no wall
+/// clock. The per-turn `max_budget_usd` is left alone: it was copied onto the
+/// Feature at its start, and the Feature row is what the engine reads.
+pub fn with_cost_cap_cents(spec_json: &str, cents: u64) -> Result<String, String> {
+    let mut spec: serde_json::Value =
+        serde_json::from_str(spec_json).map_err(|e| format!("unreadable run spec: {e}"))?;
+    let object = spec
+        .as_object_mut()
+        .ok_or_else(|| "the run spec is not an object".to_owned())?;
+    let budget = object
+        .entry("budget")
+        .or_insert_with(|| serde_json::json!({}));
+    if budget.is_null() {
+        *budget = serde_json::json!({});
+    }
+    let budget = budget
+        .as_object_mut()
+        .ok_or_else(|| "the run spec's budget is not an object".to_owned())?;
+    budget.insert(
+        "max_cost_usd".to_owned(),
+        serde_json::json!(cents as f64 / 100.0),
+    );
+    serde_json::to_string(&spec).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/run_spec.rs"]
 mod tests;

@@ -18,7 +18,7 @@ use demeteo_core::domain::models::{
     GateDecision, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, WorktreeStrategy,
 };
 use demeteo_core::domain::push_lease;
-use demeteo_core::domain::run_spec::RunSpec;
+use demeteo_core::domain::run_spec::{budget_of, RunBudget, RunSpec};
 use demeteo_core::domain::wait_backstop::WaitBackstop;
 use demeteo_core::paths;
 use demeteo_core::ports::db::FeatureRepository;
@@ -604,7 +604,7 @@ async fn await_terminal_and_push_inner(
         // iteration this check actually runs on. Sum the live per-step
         // costs instead, which `update_step_status` writes incrementally
         // as each step finishes.
-        if let Some(budget) = spec.budget.as_ref() {
+        if let Some(budget) = live_budget(svc, run_id, spec) {
             let live_cost = svc
                 .ctx
                 .features
@@ -965,6 +965,23 @@ async fn remote_already_at_local(
     match git_askpass::run_git(askpass_path, &remote_query, Some(pat)).await {
         Ok(remote) => push_lease::already_published(&local_head, &remote, branch),
         Err(_) => false,
+    }
+}
+
+/// The caps as the run's row holds them now, which a Hub `set_run_budget` may
+/// have replaced since this pass began; the pass's own spec when the row
+/// cannot be read, so a read that fails never lifts a cap.
+fn live_budget(svc: &RunnerServices, run_id: &str, spec: &RunSpec) -> Option<RunBudget> {
+    let stored = svc
+        .ctx
+        .runner_runs
+        .get(run_id)
+        .ok()
+        .flatten()
+        .and_then(|run| budget_of(&run.spec_json).ok());
+    match stored {
+        Some(budget) => budget,
+        None => spec.budget.clone(),
     }
 }
 
