@@ -364,3 +364,42 @@ async fn a_retry_of_a_feature_with_no_run_here_is_not_found() {
     assert!(matches!(error, AppError::NotFound { .. }), "{error:?}");
     assert!(rig.executor.retries().is_empty());
 }
+
+/// The cap the Hub replaces is the run's hard cost cap; its wall clock and
+/// the raise's own commitment, counted from when it was made, come with it.
+#[tokio::test]
+async fn a_hub_budget_replaces_the_runs_cost_cap_and_commits_its_raise() {
+    let rig = Rig::new("runner_hub_runs_budget");
+    let _slot = seed_ended_run(&rig, HUB_CLIENT_ID);
+    let runs = RunnerHubRuns::new(rig.svc.clone(), None);
+    let f1 = FeatureId::from("f-1");
+    assert!(runs.holds_run_caps());
+    assert_eq!(runs.run_cap_cents(&f1).expect("a cap"), Some(250));
+
+    runs.set_run_cap(&f1, 1_000, 750, 5_000).expect("replaced");
+
+    assert_eq!(runs.run_cap_cents(&f1).expect("a cap"), Some(1_000));
+    let budget = demeteo_core::domain::run_spec::budget_of(&rig.run("run-1").spec_json)
+        .expect("a readable spec")
+        .expect("a budget");
+    assert_eq!(budget.max_wall_clock_secs, Some(600));
+    assert_eq!(
+        rig.svc.ctx.runner_runs.hub_committed_cents_since(5_000),
+        Ok(750)
+    );
+    assert_eq!(rig.event_kinds("run-1"), ["cap_changed"]);
+    assert_eq!(rig.run("run-1").status, "failed", "nothing re-opened");
+}
+
+#[tokio::test]
+async fn a_budget_for_a_feature_with_no_run_here_is_not_found() {
+    let rig = Rig::new("runner_hub_runs_budget_absent");
+    let runs = RunnerHubRuns::new(rig.svc.clone(), None);
+    let missing = FeatureId::from("f-missing");
+
+    let read = runs.run_cap_cents(&missing).expect_err("no run");
+    let write = runs.set_run_cap(&missing, 100, 100, 1).expect_err("no run");
+
+    assert!(matches!(read, AppError::NotFound { .. }), "{read}");
+    assert!(matches!(write, AppError::NotFound { .. }), "{write}");
+}

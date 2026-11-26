@@ -9,6 +9,8 @@ const FEATURE_ID = 'f-42';
 const STEP_ID = 'implement';
 const ASSIGN_ID = 'assign-1';
 const RETRY_ID = 'retry-1';
+const CAP_ID = 'cap-1';
+const BUDGET_PATH = `/v1/instances/${INSTANCE_ID}/runs/${FEATURE_ID}/budget`;
 const STEP_PATH = `/v1/instances/${INSTANCE_ID}/runs/${FEATURE_ID}/steps/${STEP_ID}`;
 const statusPath = (requestId: string) => `/v1/instances/${INSTANCE_ID}/requests/${requestId}`;
 
@@ -181,5 +183,70 @@ describe('RetryForm', () => {
     renderForm({ kind: 'command' });
     expect(screen.queryByLabelText('Agent')).toBeNull();
     expect(screen.getByRole('button', { name: 'Retry step' })).toBeEnabled();
+  });
+
+  it('on a run its cap ended, raises the cap, then reassigns, then retries, each once the one before is accepted', async () => {
+    const { sent } = stubHub({
+      [`POST ${BUDGET_PATH}`]: [ticket(CAP_ID)],
+      [`GET ${statusPath(CAP_ID)}`]: [requestState(CAP_ID, 'set_run_budget', 'accepted')],
+      [`POST ${STEP_PATH}/assignment`]: [ticket(ASSIGN_ID)],
+      [`GET ${statusPath(ASSIGN_ID)}`]: [requestState(ASSIGN_ID, 'set_step_assignment', 'accepted')],
+      [`POST ${STEP_PATH}/retry`]: [ticket(RETRY_ID)],
+      [`GET ${statusPath(RETRY_ID)}`]: [requestState(RETRY_ID, 'retry_step', 'queued')],
+    });
+    renderForm({ cappedOut: true });
+
+    expect(screen.getByText(/spending cap cancelled it/)).toBeInTheDocument();
+    choose('New spending cap (USD)', '25.50');
+    choose('Agent', 'codex');
+    fireEvent.click(screen.getByRole('button', { name: 'Raise cap, reassign and retry' }));
+    await advance(0);
+    await advance(0);
+    await advance(0);
+
+    expect(sent.map(({ method, path }) => `${method} ${path}`)).toEqual([
+      `POST ${BUDGET_PATH}`,
+      `GET ${statusPath(CAP_ID)}`,
+      `POST ${STEP_PATH}/assignment`,
+      `GET ${statusPath(ASSIGN_ID)}`,
+      `POST ${STEP_PATH}/retry`,
+      `GET ${statusPath(RETRY_ID)}`,
+    ]);
+    expect(sent[0]?.body).toEqual({ max_budget_cents: 2550 });
+    expect(sent[2]?.body).toEqual({ agent_kind: 'codex' });
+  });
+
+  it('sends nothing after a cap the instance refuses', async () => {
+    const { sent } = stubHub({
+      [`POST ${BUDGET_PATH}`]: [ticket(CAP_ID)],
+      [`GET ${statusPath(CAP_ID)}`]: [
+        requestState(CAP_ID, 'set_run_budget', 'refused', { reason: 'over_run_ceiling' }),
+      ],
+    });
+    renderForm({ cappedOut: true });
+
+    choose('New spending cap (USD)', '500');
+    choose('Agent', 'codex');
+    fireEvent.click(screen.getByRole('button', { name: 'Raise cap, reassign and retry' }));
+    await advance(0);
+    await advance(10_000);
+
+    expect(sent.map(({ path }) => path)).toEqual([BUDGET_PATH, statusPath(CAP_ID)]);
+    expect(screen.getByText('The new cap did not take, so the retry was not sent.')).toBeInTheDocument();
+  });
+
+  it('holds an amount it cannot read, and offers no cap on a run its cap did not end', () => {
+    stubHub({});
+    const { unmount } = renderForm({ cappedOut: true });
+
+    choose('New spending cap (USD)', '0');
+    expect(screen.getByRole('button', { name: 'Retry step' })).toBeDisabled();
+    expect(screen.getByText('Enter an amount greater than 0.')).toBeInTheDocument();
+    choose('New spending cap (USD)', '');
+    expect(screen.getByRole('button', { name: 'Retry step' })).toBeEnabled();
+    unmount();
+
+    renderForm();
+    expect(screen.queryByLabelText('New spending cap (USD)')).toBeNull();
   });
 });

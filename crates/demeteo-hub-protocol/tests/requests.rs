@@ -141,7 +141,7 @@ fn request_header_requires_a_request_id() {
     assert!(serde_json::from_value::<RequestHeader>(json!({"v": 1})).is_err());
 }
 
-const FIXTURES: [(&str, &str); 7] = [
+const FIXTURES: [(&str, &str); 8] = [
     (
         "signed_request_start_feature",
         include_str!("fixtures/signed_request_start_feature.json"),
@@ -170,9 +170,13 @@ const FIXTURES: [(&str, &str); 7] = [
         "signed_request_retry_step",
         include_str!("fixtures/signed_request_retry_step.json"),
     ),
+    (
+        "signed_request_set_run_budget",
+        include_str!("fixtures/signed_request_set_run_budget.json"),
+    ),
 ];
 
-const KINDS: [&str; 7] = [
+const KINDS: [&str; 8] = [
     "start_feature",
     "cancel_feature",
     "set_step_assignment",
@@ -180,6 +184,7 @@ const KINDS: [&str; 7] = [
     "passkey_endorsement",
     "passkey_revocation",
     "retry_step",
+    "set_run_budget",
 ];
 
 /// The wildcard-free `match` stops compiling when a variant is added, so a new
@@ -193,6 +198,7 @@ fn fixture_name(payload: &RequestPayload) -> &'static str {
         RequestPayload::PasskeyEndorsement(_) => "signed_request_passkey_endorsement",
         RequestPayload::PasskeyRevocation(_) => "signed_request_passkey_revocation",
         RequestPayload::RetryStep(_) => "signed_request_retry_step",
+        RequestPayload::SetRunBudget(_) => "signed_request_set_run_budget",
     }
 }
 
@@ -208,7 +214,7 @@ fn every_request_fixture_round_trips_and_names_its_own_variant() {
 }
 
 #[test]
-fn the_seven_payload_kinds_are_spelled_as_specified() {
+fn the_eight_payload_kinds_are_spelled_as_specified() {
     let (written, serialised): (Vec<String>, Vec<String>) = FIXTURES
         .iter()
         .map(|(_, text)| {

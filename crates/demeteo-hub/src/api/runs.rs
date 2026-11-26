@@ -50,6 +50,10 @@ pub struct RunDetailView {
     /// Ordered by `step_id`.
     pub steps: Vec<StepView>,
     pub tickets: TicketProgress,
+    /// Why the run failed, or a cap that cancelled it, as its latest
+    /// `feature_failed` or `feature_cancelled` said. `None` while it runs,
+    /// once it completed, and for an ending its instance gave no reason for.
+    pub ended_by: Option<FailureReason>,
     pub pending_gates: Vec<PendingGateView>,
     /// The readable events, in offset order. An unreadable row is left out
     /// for the reason [`by_feature`] gives.
@@ -274,6 +278,7 @@ fn detail(
             })
             .collect(),
         tickets: state.tickets,
+        ended_by: state.ended_by,
         pending_gates: state
             .pending_gates
             .into_iter()

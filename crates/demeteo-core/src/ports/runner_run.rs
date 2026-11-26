@@ -85,10 +85,26 @@ pub trait RunnerRunPort: Send + Sync {
         Err("recording a Hub commitment is not implemented by this repository".into())
     }
 
+    /// Replaces the run's `spec_json`, which holds its cost cap, and records
+    /// `raise_cents` as committed at `now`, in one transaction: a cap that
+    /// took without its raise counted would let the next start past the
+    /// ceiling. A raise of zero records nothing. A row that does not exist is
+    /// an error, as for [`Self::record_hub_commitment`].
+    fn replace_hub_cap(
+        &self,
+        _run_id: &str,
+        _spec_json: &str,
+        _raise_cents: u64,
+        _now: i64,
+    ) -> Result<(), String> {
+        Err("replacing a Hub cap is not implemented by this repository".into())
+    }
+
     /// The caps recorded by [`Self::record_hub_commitment`] on runs created
-    /// at or after `since_ms` (unix ms), in whole cents, whatever became of
-    /// those runs. Defaults to an error: a double answering zero would let
-    /// every Hub start under the ceiling.
+    /// at or after `since_ms` (unix ms), and the raises
+    /// [`Self::replace_hub_cap`] recorded at or after it, in whole cents,
+    /// whatever became of those runs. Defaults to an error: a double
+    /// answering zero would let every Hub start under the ceiling.
     fn hub_committed_cents_since(&self, _since_ms: i64) -> Result<u64, String> {
         Err("summing Hub-committed budgets is not implemented by this repository".into())
     }

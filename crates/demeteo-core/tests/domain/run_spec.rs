@@ -138,3 +138,40 @@ fn an_overlay_replaces_only_the_fields_it_sets() {
     assert_eq!(settings.sync_resolver_effort, Some(EffortLevel::Low));
     assert_eq!(settings.sync_review_before_push, Some(false));
 }
+
+#[test]
+fn a_replaced_cost_cap_keeps_the_wall_clock_and_every_other_field() {
+    let spec = serde_json::json!({
+        "title": "t",
+        "budget": { "max_cost_usd": 9.0, "max_wall_clock_secs": 600 },
+        "a_field_this_build_does_not_model": [1, 2],
+    })
+    .to_string();
+    assert_eq!(cost_cap_cents(&spec), Ok(Some(900)));
+
+    let raised = with_cost_cap_cents(&spec, 2550).unwrap();
+    assert_eq!(cost_cap_cents(&raised), Ok(Some(2550)));
+    let raised: serde_json::Value = serde_json::from_str(&raised).unwrap();
+    assert_eq!(raised["budget"]["max_wall_clock_secs"], 600);
+    assert_eq!(
+        raised["a_field_this_build_does_not_model"],
+        serde_json::json!([1, 2])
+    );
+    assert_eq!(raised["title"], "t");
+}
+
+#[test]
+fn a_spec_without_a_budget_has_no_cap_until_one_is_set() {
+    for spec in [r#"{"title":"t"}"#, r#"{"title":"t","budget":null}"#] {
+        assert_eq!(cost_cap_cents(spec), Ok(None), "{spec}");
+        let capped = with_cost_cap_cents(spec, 100).unwrap();
+        assert_eq!(
+            budget_of(&capped)
+                .unwrap()
+                .map(|b| (b.max_cost_usd, b.max_wall_clock_secs)),
+            Some((Some(1.0), None)),
+            "{spec}"
+        );
+    }
+    assert!(cost_cap_cents("not json").is_err());
+}

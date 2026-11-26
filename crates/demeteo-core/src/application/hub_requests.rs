@@ -12,7 +12,9 @@
 //!
 //! A retry lands there too, as the desktop's retry button,
 //! [`step_control::retry_step`], or a runner's control socket's retry, which
-//! also re-opens the run; `hub_requests/retry.rs` judges it first.
+//! also re-opens the run; `hub_requests/retry.rs` judges it first. So does a
+//! new run cap, which only an instance whose runs hold one takes;
+//! `hub_requests/budget.rs` judges it against the ceilings first.
 //!
 //! Step assignment is the desktop's own call on every instance,
 //! [`step_control::set_step_assignment`], decision 54's resolver. A gate
@@ -47,6 +49,7 @@ use crate::ports::hub::{
 };
 use crate::state::AppContext;
 
+mod budget;
 mod desktop_runs;
 mod retry;
 mod start;
@@ -82,10 +85,10 @@ pub struct HubRequests {
     ctx: Arc<AppContext>,
     ports: HubRequestPorts,
     runs: Arc<dyn HubRunControl>,
-    /// Held across judging and logging a start, so one start is handled at a
-    /// time: the daily ceiling is judged against the starts already
-    /// committed, and two starts judged at once would each miss the other.
-    /// Nothing else takes it — a cancel or an assignment never reads that
+    /// Held across judging and logging a start, or a new run cap, so one is
+    /// handled at a time: the daily ceiling is judged against what is already
+    /// committed, and two judged at once would each miss the other. Nothing
+    /// else takes it — a cancel or an assignment never reads that
     /// total and its id is spent by one atomic insert — so neither waits
     /// behind a start's fetches. It lives here, not on a socket session,
     /// because this handler is bound once per process and outlives every
@@ -282,6 +285,9 @@ impl HubRequests {
             }
             Verdict::Execute(ExecuteKind::SetStepAssignment(change)) => self.assign(change).await,
             Verdict::Execute(ExecuteKind::RetryStep(retry)) => self.retry(retry).await,
+            Verdict::Execute(ExecuteKind::SetRunBudget(budget)) => {
+                self.set_budget(budget, committed, &policy, now_ms)
+            }
             Verdict::Execute(ExecuteKind::GateDecision(gate)) => {
                 self.gate(request, gate, &pins, record, trust).await
             }
@@ -408,7 +414,9 @@ impl HubRequestHandler for HubRequests {
             return None;
         }
         let _turn = match request.payload {
-            RequestPayload::StartFeature(_) => Some(self.turn.lock().await),
+            RequestPayload::StartFeature(_) | RequestPayload::SetRunBudget(_) => {
+                Some(self.turn.lock().await)
+            }
             _ => None,
         };
         let trust = match request.payload {
@@ -419,6 +427,7 @@ impl HubRequestHandler for HubRequests {
             | RequestPayload::CancelFeature(_)
             | RequestPayload::SetStepAssignment(_)
             | RequestPayload::RetryStep(_)
+            | RequestPayload::SetRunBudget(_)
             | RequestPayload::PasskeyEndorsement(_) => None,
         };
         let settled = self.judged(&request, now_ms, trust).await;

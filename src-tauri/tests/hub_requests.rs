@@ -277,6 +277,7 @@ mod decision {
         Gate,
         Revoke,
         Retry,
+        Budget,
         Refuse(RefusalReason),
         Drop(DropReason),
         Defer,
@@ -290,6 +291,7 @@ mod decision {
             Verdict::Execute(ExecuteKind::GateDecision(_)) => Kind::Gate,
             Verdict::Execute(ExecuteKind::PasskeyRevocation(_)) => Kind::Revoke,
             Verdict::Execute(ExecuteKind::RetryStep(_)) => Kind::Retry,
+            Verdict::Execute(ExecuteKind::SetRunBudget(_)) => Kind::Budget,
             Verdict::Refuse(reason) => Kind::Refuse(reason),
             Verdict::Drop(reason) => Kind::Drop(reason),
             Verdict::Defer => Kind::Defer,
@@ -1457,7 +1459,7 @@ mod handler {
     use demeteo_hub::ports::KeyService;
     use demeteo_hub::protocol::{
         AttachmentRef, CancelFeature, Effort, RefusalReason, RequestOutcome, RequestPayload,
-        RequestResult, RetryStep, SetStepAssignment, SignedRequest, StartFeature,
+        RequestResult, RetryStep, SetRunBudget, SetStepAssignment, SignedRequest, StartFeature,
         StepOverride as WireStepOverride,
     };
     use sha2::{Digest, Sha256};
@@ -3087,6 +3089,171 @@ mod handler {
 
         assert_eq!(desktop.spy.effects(), 0);
         assert_eq!(desktop.log_len(), 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn budget(request_id: &str, feature_id: &str, cents: u64) -> SignedRequest {
+        request(
+            request_id,
+            RequestPayload::SetRunBudget(SetRunBudget {
+                feature_id: feature_id.into(),
+                max_budget_cents: cents,
+            }),
+        )
+    }
+
+    /// A runner's run control as a budget sees it: one run, `f-1`, holding
+    /// `cap`, with `committed` counted in the last day. Each write is
+    /// recorded as `(feature, cents, raise)`. Anything else is a failure.
+    struct CappedRuns {
+        committed: u64,
+        cap: Option<u64>,
+        writes: Mutex<Vec<(String, u64, u64)>>,
+    }
+
+    impl CappedRuns {
+        fn new(committed: u64, cap: Option<u64>) -> Arc<Self> {
+            Arc::new(Self {
+                committed,
+                cap,
+                writes: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn writes(&self) -> Vec<(String, u64, u64)> {
+            self.writes.lock().expect("lock").clone()
+        }
+    }
+
+    #[async_trait]
+    impl HubRunControl for CappedRuns {
+        fn starts(&self) -> StartSupport {
+            StartSupport::Refused
+        }
+
+        fn committed_cents_since(&self, _: i64) -> Result<u64, String> {
+            Ok(self.committed)
+        }
+
+        fn resolve(&self, _: &StartFeature) -> Result<(), RefusalReason> {
+            panic!("nothing was asked to start")
+        }
+
+        async fn launch(&self, _: HubLaunch) -> Result<HubLaunched, AppError> {
+            panic!("nothing was asked to start")
+        }
+
+        async fn cancel(&self, _: &FeatureId) -> Result<(), AppError> {
+            panic!("nothing was asked to cancel")
+        }
+
+        async fn retry(&self, _: &FeatureId, _: &StepExecutionId) -> Result<(), AppError> {
+            panic!("nothing was asked to retry")
+        }
+
+        fn holds_run_caps(&self) -> bool {
+            true
+        }
+
+        fn run_cap_cents(&self, feature_id: &FeatureId) -> Result<Option<u64>, AppError> {
+            match feature_id.as_ref() {
+                "f-1" => Ok(self.cap),
+                other => Err(AppError::not_found(format!("no run of feature {other}"))),
+            }
+        }
+
+        fn set_run_cap(
+            &self,
+            feature_id: &FeatureId,
+            cents: u64,
+            raise_cents: u64,
+            now_ms: i64,
+        ) -> Result<(), AppError> {
+            assert_eq!(now_ms, i64::try_from(NOW * 1000).expect("now fits"));
+            self.writes.lock().expect("lock").push((
+                feature_id.as_ref().to_string(),
+                cents,
+                raise_cents,
+            ));
+            Ok(())
+        }
+    }
+
+    /// A desktop's run has no hard cap to replace: the id is spent, nothing
+    /// is read and the answer is `unknown_kind`, as a runner answers a start.
+    #[tokio::test]
+    async fn a_budget_to_an_instance_that_holds_no_run_caps_is_unknown_kind() {
+        let hub = Hub::new();
+        let dir = paired("budget-desktop", &hub).await;
+        let desktop = Desktop::open(&dir);
+        desktop.seed_run();
+        let text = hub.signed(budget("r-budget-desktop", "f-1", 500)).await;
+
+        let result = desktop.handle(&text).await.expect("an answer");
+
+        assert_eq!(result.outcome, refused(RefusalReason::UnknownKind));
+        assert_eq!(desktop.spy.effects(), 0);
+        assert_eq!(
+            desktop.last_log(),
+            (
+                LogKind::SetRunBudget,
+                LogOutcome::Refused,
+                Some("unknown_kind".into())
+            )
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The policy here is a 1 000-cent run ceiling and a 10 000-cent day. A
+    /// raise from 900 to 1 000 commits 100, so it fits beside 9 900 and not
+    /// beside 9 901; the new cap itself is held to the run ceiling.
+    #[tokio::test]
+    async fn a_budget_is_judged_on_its_raise_and_written_only_when_it_fits() {
+        let hub = Hub::new();
+        let dir = paired("budget-runner", &hub).await;
+        let cases = [
+            ("r-fits", 9_900, "f-1", 1_000, RequestOutcome::Accepted),
+            (
+                "r-over-day",
+                9_901,
+                "f-1",
+                1_000,
+                refused(RefusalReason::OverRollingCeiling),
+            ),
+            (
+                "r-over-run",
+                0,
+                "f-1",
+                1_001,
+                refused(RefusalReason::OverRunCeiling),
+            ),
+            (
+                "r-no-run",
+                0,
+                "f-gone",
+                1_000,
+                refused(RefusalReason::UnknownFeature),
+            ),
+        ];
+        for (request_id, committed, feature_id, cents, expected) in cases {
+            let runs = CappedRuns::new(committed, Some(900));
+            let runner = Desktop::open(&dir).with_runs(runs.clone());
+            let text = hub.signed(budget(request_id, feature_id, cents)).await;
+
+            let result = runner.handle(&text).await.expect("an answer");
+
+            assert_eq!(result.outcome, expected, "{request_id}");
+            let written = expected == RequestOutcome::Accepted;
+            assert_eq!(
+                runs.writes(),
+                if written {
+                    vec![("f-1".to_string(), 1_000, 100)]
+                } else {
+                    Vec::new()
+                },
+                "{request_id}"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

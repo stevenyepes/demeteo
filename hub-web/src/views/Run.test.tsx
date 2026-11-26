@@ -395,6 +395,41 @@ describe('Run', () => {
       expect(within(screen.getByRole('region', { name: 'Step' })).queryByRole('region', { name: 'Retry' })).toBeNull();
     });
 
+    it('offers a retry on the step a cancel interrupted, with a new cap when the cap cancelled it', async () => {
+      const interrupted = (endedBy: string | null) =>
+        detail({
+          workflow: null,
+          status: 'cancelled',
+          ended_by: endedBy,
+          pending_gates: [],
+          steps: [
+            { step_id: 'plan', state: 'completed', title: null, failure: null },
+            { step_id: 'implement', state: 'interrupted', title: null, failure: null },
+          ],
+        });
+      stubFetch(json(interrupted('budget_cap')));
+      const user = userEvent.setup();
+      const { unmount } = render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+      let steps = await screen.findByRole('list', { name: 'Reported steps' });
+
+      await user.click(within(steps).getByRole('button', { name: /^implement/ }));
+      let inspector = screen.getByRole('region', { name: 'Step' });
+      expect(field(inspector, 'State')).toHaveTextContent(runStatusMeta('interrupted').label);
+      expect(field(inspector, 'Reason')).toHaveTextContent(/^Spending cap reached$/);
+      expect(within(inspector).getByRole('region', { name: 'Retry' })).toBeInTheDocument();
+      expect(within(inspector).getByLabelText('New spending cap (USD)')).toBeInTheDocument();
+      unmount();
+
+      stubFetch(json(interrupted(null)));
+      render(<Run instanceId={INSTANCE} featureId={FEATURE} />);
+      steps = await screen.findByRole('list', { name: 'Reported steps' });
+      await user.click(within(steps).getByRole('button', { name: /^implement/ }));
+      inspector = screen.getByRole('region', { name: 'Step' });
+      expect(within(inspector).getByRole('region', { name: 'Retry' })).toBeInTheDocument();
+      expect(within(inspector).queryByLabelText('New spending cap (USD)')).toBeNull();
+      expect(within(inspector).queryByText('Reason')).toBeNull();
+    });
+
     it("shows a pending gate's step execution id", async () => {
       stubFetch(json(detail({ workflow: null })));
       const user = userEvent.setup();
