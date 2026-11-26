@@ -14,8 +14,8 @@ use tokio::task::JoinHandle;
 use crate::domain::hub_pairing::{socket_dial_url, socket_url, SecretString};
 use crate::domain::hub_socket::connection::ConnectionState;
 use crate::domain::hub_socket::{
-    after_close, after_refresh, backoff, replay_wait, resets_backoff, Reconnect, RefreshEnd,
-    SocketEnd, StopReason,
+    after_close, after_refresh, backoff, refusal_refresh, replay_wait, resets_backoff, Reconnect,
+    RefreshEnd, SocketEnd, StopReason,
 };
 use crate::ports::hub::{
     DialFailure, HarnessCatalogSource, HubRunKeys, HubSnapshotSource, HubSocketDialer,
@@ -190,6 +190,7 @@ pub async fn supervise(deps: SupervisorDeps, mut stop: watch::Receiver<bool>) ->
         deps,
         attempt: 0,
         unanswered: None,
+        refreshed_after_refusal: false,
     };
     let reason = match supervisor.run(&mut stop).await {
         Err(reason) => reason,
@@ -212,6 +213,9 @@ struct Supervisor {
     /// request presented, and a refresh that never left in between neither
     /// moves the grace nor earns a second replay.
     unanswered: Option<(Instant, bool)>,
+    /// Whether a [`Reconnect::RefreshAfterRefusal`] has refreshed since the
+    /// Hub last admitted a token; see [`refusal_refresh`].
+    refreshed_after_refusal: bool,
 }
 
 impl Supervisor {
@@ -257,10 +261,13 @@ impl Supervisor {
                     false,
                 ),
                 Err(DialFailure::Unreachable(_)) => (SocketEnd::Unreachable, false),
-                Ok(conn) => match run_session(conn, &self.deps.session, stop).await {
-                    (SessionEnd::Stopped, _) => return Err(StopReason::Stopped),
-                    (SessionEnd::Ended(end), acked) => (end, acked),
-                },
+                Ok(conn) => {
+                    self.refreshed_after_refusal = false;
+                    match run_session(conn, &self.deps.session, stop).await {
+                        (SessionEnd::Stopped, _) => return Err(StopReason::Stopped),
+                        (SessionEnd::Ended(end), acked) => (end, acked),
+                    }
+                }
             };
             let secs_left = expires_at.map(|at| at.saturating_sub(now_secs()));
             let verdict = after_close(end, fresh_token, secs_left);
@@ -287,6 +294,12 @@ impl Supervisor {
                     return Ok(None);
                 }
                 Reconnect::RefreshAfterBackoff => {
+                    self.back_off(stop).await?;
+                    verdict = Reconnect::RefreshNow;
+                }
+                Reconnect::RefreshAfterRefusal => {
+                    refusal_refresh(self.refreshed_after_refusal)?;
+                    self.refreshed_after_refusal = true;
                     self.back_off(stop).await?;
                     verdict = Reconnect::RefreshNow;
                 }

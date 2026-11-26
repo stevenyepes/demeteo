@@ -77,6 +77,10 @@ pub enum Reconnect {
     /// A refresh went unanswered: wait as [`replay_wait`] says, then send it
     /// again with the refresh token still stored, once (decision 76).
     ReplayRefresh,
+    /// The upgrade refused, `401`, an access token refreshed for that very
+    /// attempt: wait the backoff, then refresh once more, as
+    /// [`refusal_refresh`] allows.
+    RefreshAfterRefusal,
     Stop(StopReason),
 }
 
@@ -96,7 +100,9 @@ pub enum StopReason {
     Removed,
     /// Closed `1008`: the Hub would refuse the same frame again.
     ProtocolViolation,
-    /// A `401` to an access token issued for this very attempt.
+    /// A `401` to an access token issued for this very attempt, after the
+    /// one further refresh [`refusal_refresh`] allows was refused the same
+    /// way.
     Unauthorized,
     Refused,
     /// The refresh token was refused (`invalid_grant`): only pairing again
@@ -137,7 +143,7 @@ pub fn after(end: SocketEnd) -> Reconnect {
         SocketEnd::Refused {
             status: 401,
             fresh_token: true,
-        } => Reconnect::Stop(StopReason::Unauthorized),
+        } => Reconnect::RefreshAfterRefusal,
         SocketEnd::Refused {
             status: 429 | 500..=599,
             ..
@@ -279,6 +285,26 @@ pub fn replay_wait(
     match left {
         Some(left) if !replayed && !left.is_zero() => Ok(backoff.min(left)),
         _ => Err(StopReason::RefreshUncertain),
+    }
+}
+
+/// Whether a [`Reconnect::RefreshAfterRefusal`] may refresh, given whether
+/// one already has since the Hub last admitted a token.
+///
+/// A fresh token the Hub refuses is one of two things. The Hub may refuse
+/// every token it issues — clock disagreement, a Hub bug — and then a second
+/// refresh meets a second `401`, so it stops there rather than rotating the
+/// refresh token as fast as the Hub refuses. Or someone holding this
+/// instance's device key replayed the refresh before this instance used its
+/// pair, and the Hub replaced that pair (decision 76): then the refresh
+/// presents a retired token whose pair is no longer live, which is reuse, so
+/// the family ends and the answer is `invalid_grant`. Stopping at the first
+/// `401` would leave that copy alive until a re-pair or a restart.
+pub fn refusal_refresh(refreshed_since_admitted: bool) -> Result<(), StopReason> {
+    if refreshed_since_admitted {
+        Err(StopReason::Unauthorized)
+    } else {
+        Ok(())
     }
 }
 
