@@ -55,10 +55,10 @@ use crate::domain::hub_socket::connection::{
 };
 use crate::domain::hub_socket::{
     after, after_close, after_refresh, announced_scopes as narrowed_scopes, backoff, hello,
-    hub_event, refresh_refusal, replay_wait, resets_backoff, sends_events, snapshot, NoAnswer,
-    Reconnect, RefreshEnd, SnapshotInput, SocketEnd, StopReason, BACKOFF_CAP_SECS,
-    MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS, REFRESH_REPLAY_GRACE_SECS,
-    SNAPSHOT_DEBOUNCE_SECS,
+    hub_event, refresh_refusal, refusal_refresh, replay_wait, resets_backoff, sends_events,
+    snapshot, NoAnswer, Reconnect, RefreshEnd, SnapshotInput, SocketEnd, StopReason,
+    BACKOFF_CAP_SECS, MAX_FEATURE_ID_BYTES, PREMATURE_EXPIRY_MARGIN_SECS,
+    REFRESH_REPLAY_GRACE_SECS, SNAPSHOT_DEBOUNCE_SECS,
 };
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::{Feature, Project, Workflow, WorkflowVersion};
@@ -3013,7 +3013,7 @@ fn a_socket_end_decides_the_reconnect_by_the_ac4_table() {
         (SocketEnd::Closed(Some(4000)), AfterBackoff),
         (SocketEnd::Closed(Some(4004)), AfterBackoff),
         (refused(401, false), RefreshNow),
-        (refused(401, true), Stop(StopReason::Unauthorized)),
+        (refused(401, true), Reconnect::RefreshAfterRefusal),
         (refused(503, false), AfterBackoff),
         (refused(503, true), AfterBackoff),
         (refused(400, false), Stop(StopReason::Refused)),
@@ -4126,24 +4126,90 @@ async fn an_upgrade_401_to_a_held_token_refreshes_once_and_redials() {
     assert!(waits.is_empty(), "{waits:?}");
 }
 
-/// AC4: a `401` to a token issued for this very attempt would meet a `401`
-/// again, so it stops instead of refreshing.
-#[tokio::test]
-async fn an_upgrade_401_to_a_freshly_refreshed_token_stops_unauthorized() {
-    let rig = RefreshRig::new("hub_supervise_401_fresh", "dhr_r0");
-    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
-    let dialer = Arc::new(ScriptedSocketDialer::new());
-    dialer.refuse(DialFailure::Refused {
+#[test]
+fn a_refused_fresh_token_earns_one_refresh_until_a_token_is_admitted() {
+    assert_eq!(refusal_refresh(false), Ok(()));
+    assert_eq!(refusal_refresh(true), Err(StopReason::Unauthorized));
+}
+
+fn refused_401() -> DialFailure {
+    DialFailure::Refused {
         status: 401,
         error: Some("invalid_token".to_owned()),
-    });
+    }
+}
+
+/// A `401` to a token issued for this very attempt earns one more refresh,
+/// after the backoff; a Hub that refuses that token too would refuse every
+/// one, so the second `401` stops rather than rotating in a loop.
+#[tokio::test]
+async fn an_upgrade_401_to_a_freshly_refreshed_token_refreshes_once_then_stops_unauthorized() {
+    let rig = RefreshRig::new("hub_supervise_401_fresh", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.answer("dha_a2", "dhr_r2", 900);
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(refused_401());
+    dialer.refuse(refused_401());
 
     let (stopped, waits) = rig.supervise(&dialer).await;
 
     assert_eq!(stopped, StopReason::Unauthorized);
-    assert_eq!(rig.endpoint.calls().len(), 1);
+    let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+    assert_eq!(presented, ["dhr_r0", "dhr_r1"]);
+    assert_eq!(dialed_tokens(&dialer), ["dha_a1", "dha_a2"]);
+    assert_eq!(
+        waits.len(),
+        1,
+        "one backoff before the second refresh: {waits:?}"
+    );
+}
+
+/// Decision 76's accepted race: a replayer took the pair this instance was
+/// sent, so its fresh token is refused. The refresh after it presents a
+/// token the Hub retired with no live successor, which is reuse: the family
+/// ends, the answer is `invalid_grant`, and the replayer's copy ends with it.
+#[tokio::test]
+async fn a_401_to_a_fresh_token_whose_pair_a_replayer_took_ends_the_family() {
+    let rig = RefreshRig::new("hub_supervise_401_replayed", "dhr_r0");
+    rig.endpoint.answer("dha_a1", "dhr_r1", 900);
+    rig.endpoint.fail(refresh_refused("invalid_grant"));
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(refused_401());
+
+    let (stopped, _) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::NeedsRepair);
+    let presented: Vec<String> = rig.endpoint.calls().iter().map(presented_refresh).collect();
+    assert_eq!(
+        presented,
+        ["dhr_r0", "dhr_r1"],
+        "the refresh that reveals the reuse"
+    );
     assert_eq!(dialed_tokens(&dialer), ["dha_a1"]);
-    assert!(waits.is_empty(), "{waits:?}");
+}
+
+/// The one refresh is per admission, not per supervisor: once the Hub has
+/// admitted a token, a later refused fresh token earns its own.
+#[tokio::test]
+async fn an_admitted_token_restores_the_refresh_a_refused_fresh_token_earns() {
+    let rig = RefreshRig::new("hub_supervise_401_admitted", "dhr_r0");
+    for n in 1..=4 {
+        rig.endpoint
+            .answer(&format!("dha_a{n}"), &format!("dhr_r{n}"), 900);
+    }
+    let dialer = Arc::new(ScriptedSocketDialer::new());
+    dialer.refuse(refused_401());
+    dialer.connect(closing_with(4001));
+    dialer.refuse(refused_401());
+    dialer.refuse(refused_401());
+
+    let (stopped, _) = rig.supervise(&dialer).await;
+
+    assert_eq!(stopped, StopReason::Unauthorized);
+    assert_eq!(
+        dialed_tokens(&dialer),
+        ["dha_a1", "dha_a2", "dha_a3", "dha_a4"]
+    );
 }
 
 /// AC4: a busy Hub is waited out with the token already held.

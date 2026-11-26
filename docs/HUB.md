@@ -2939,7 +2939,7 @@ is decided; each is what the desktop does today.
 | `RefreshUncertain` | a refresh sent with no answer read, and its one replay ([decision 76](DECISIONS.md#76--lost-answer-grace-on-hub-refresh-detail)) unanswered too, or out of time: the Hub may have rotated the token, and presenting it past the grace would revoke the family. Each lost answer is logged with its cause (`NoAnswer` in `verdict.rs`) |
 | `ClockSkew` | a refresh whose proof the Hub refused for its time |
 | `ProtocolViolation` | a `1008` close |
-| `Unauthorized` | an upgrade `401` to an access token refreshed for that very attempt |
+| `Unauthorized` | an upgrade `401` to an access token refreshed for that very attempt, twice since the Hub last admitted one. The first earns one more refresh, after the backoff, which ends the family as reuse if a replayer took the pair ([decision 76](DECISIONS.md#76--lost-answer-grace-on-hub-refresh-detail)) |
 | `Refused` | any other refresh refusal, an upgrade refusal that is neither `401` nor `429` nor `5xx`, or an origin or proof the desktop cannot build |
 
 The numbers are constants in
